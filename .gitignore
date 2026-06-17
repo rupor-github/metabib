@@ -4,3 +4,4 @@ vendor/
 *.jsonl
 *.log
 data/
+misc/version.go
