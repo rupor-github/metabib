@@ -69,6 +69,13 @@ processing:
   # Number of archive entries processed by one worker batch.
   archive_batch_size: 256
 
+  # Buffer size in bytes for reading uncompressed archive entry content.
+  # 0 disables explicit buffering and uses reader defaults.
+  archive_read_buffer_size: 262144
+
+  # Periodically report per-batch processing progress at info level.
+  progress: false
+
   # If archive paths are not specified on command line, these paths are used.
   archives: []
 
@@ -77,6 +84,9 @@ processing:
 
 output:
   jsonl: "metabib.jsonl"
+  # Optional part size such as 500m, 2g, 1024k. Empty means one output file,
+  # still renamed with the included book id range.
+  part_size: ""
 
 logging:
   # controls terminal (stdout, stderr) output

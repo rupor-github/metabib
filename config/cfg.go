@@ -58,12 +58,15 @@ type ProcessingConfig struct {
 	DatabaseBatchSize    int      `yaml:"database_batch_size" validate:"min=1"`
 	ArchiveWorkers       int      `yaml:"archive_workers" validate:"min=0"`
 	ArchiveBatchSize     int      `yaml:"archive_batch_size" validate:"min=1"`
+	ArchiveReadBuffer    int      `yaml:"archive_read_buffer_size" validate:"min=0"`
+	Progress             bool     `yaml:"progress"`
 	Archives             []string `yaml:"archives" validate:"dive,required"`
 	OnlineWhenNoArchives bool     `yaml:"online_when_no_archives"`
 }
 
 type OutputConfig struct {
-	JSONL string `yaml:"jsonl" validate:"required"`
+	JSONL    string `yaml:"jsonl" validate:"required"`
+	PartSize string `yaml:"part_size"`
 }
 
 func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {

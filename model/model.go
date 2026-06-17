@@ -37,7 +37,6 @@ type DatabaseSource struct {
 	Genres          []DBGenre          `json:"genres,omitempty"`
 	Sequences       []DBSequence       `json:"sequences,omitempty"`
 	Rating          *DBRating          `json:"rating,omitempty"`
-	Ratings         []DBRatingVote     `json:"ratings,omitempty"`
 	Filenames       []string           `json:"filenames,omitempty"`
 	JoinedBooks     []DBJoinedBook     `json:"joined_books,omitempty"`
 	Recommendations []DBRecommendation `json:"recommendations,omitempty"`
@@ -48,24 +47,16 @@ type DBBook struct {
 	FileSize   int64  `json:"file_size"`
 	Time       string `json:"time,omitempty"`
 	Title      string `json:"title"`
-	Title1     string `json:"title1,omitempty"`
 	Lang       string `json:"lang,omitempty"`
-	LangEx     int64  `json:"lang_ex,omitempty"`
 	SrcLang    string `json:"src_lang,omitempty"`
 	FileType   string `json:"file_type,omitempty"`
-	Encoding   string `json:"encoding,omitempty"`
 	Year       int64  `json:"year,omitempty"`
 	Deleted    string `json:"deleted,omitempty"`
-	Version    string `json:"version,omitempty"`
 	FileAuthor string `json:"file_author,omitempty"`
-	N          int64  `json:"n,omitempty"`
 	Keywords   string `json:"keywords,omitempty"`
 	MD5        string `json:"md5,omitempty"`
 	Modified   string `json:"modified,omitempty"`
-	PMD5       string `json:"pmd5,omitempty"`
-	InfoCode   int64  `json:"info_code,omitempty"`
-	Pages      int64  `json:"pages,omitempty"`
-	Chars      int64  `json:"chars,omitempty"`
+	ReplacedBy int64  `json:"replaced_by,omitempty"`
 }
 
 type Contributor struct {
@@ -103,12 +94,6 @@ type DBRating struct {
 	Count   int64   `json:"count"`
 	Min     int64   `json:"min,omitempty"`
 	Max     int64   `json:"max,omitempty"`
-}
-
-type DBRatingVote struct {
-	ID     int64 `json:"id"`
-	UserID int64 `json:"user_id"`
-	Rate   int64 `json:"rate"`
 }
 
 type DBJoinedBook struct {

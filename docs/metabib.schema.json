@@ -54,7 +54,6 @@
         "genres": {"type": "array", "items": {"type": "object"}},
         "sequences": {"type": "array", "items": {"type": "object"}},
         "rating": {"type": "object"},
-        "ratings": {"type": "array", "items": {"type": "object"}},
         "filenames": {"type": "array", "items": {"type": "string"}},
         "joined_books": {"type": "array", "items": {"type": "object"}},
         "recommendations": {"type": "array", "items": {"type": "object"}}

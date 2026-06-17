@@ -2,6 +2,7 @@ package library
 
 import (
 	"archive/zip"
+	"bufio"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -35,8 +36,19 @@ type dbBatch struct {
 }
 
 type dbBatchResult struct {
-	Index   int
-	Records []model.Record
+	Index                 int
+	Records               []model.Record
+	ReadyAt               time.Time
+	DBLoadElapsed         time.Duration
+	FB2ParseElapsed       time.Duration
+	MD5Elapsed            time.Duration
+	FallbackLookupElapsed time.Duration
+}
+
+type entryTiming struct {
+	FB2ParseElapsed       time.Duration
+	MD5Elapsed            time.Duration
+	FallbackLookupElapsed time.Duration
 }
 
 type archiveEntry struct {
@@ -57,6 +69,9 @@ func ProcessArchives(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	}
 	var records int64
 	for _, archive := range archives {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		count, err := processArchive(ctx, repo, cfg, out, archive, log)
 		if err != nil {
 			return err
@@ -108,6 +123,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		go func() {
 			defer wg.Done()
 			for batch := range jobs {
+				batchStart := time.Now()
 				sources, err := repo.BookSourcesByIDs(ctx, batch.IDs)
 				if err != nil {
 					select {
@@ -117,16 +133,27 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 					cancel()
 					return
 				}
+				identities, err := repo.FileIdentitiesByIDs(ctx, batch.IDs)
+				if err != nil {
+					select {
+					case errs <- err:
+					default:
+					}
+					cancel()
+					return
+				}
+				dbLoadElapsed := time.Since(batchStart)
 				records := make([]model.Record, 0, len(batch.IDs))
 				for _, id := range batch.IDs {
+					identity := identities[id]
 					records = append(records, model.Record{
 						Schema: recordSchema,
-						ID:     model.RecordID{Library: cfg.Database.Name, BookID: id},
+						ID:     model.RecordID{Library: cfg.Database.Name, BookID: id, FileName: identity.FileName, Extension: identity.Extension},
 						Source: model.RecordSources{Database: sources[id], FB2: model.FB2Source{}},
 					})
 				}
 				select {
-				case results <- dbBatchResult{Index: batch.Index, Records: records}:
+				case results <- dbBatchResult{Index: batch.Index, Records: records, ReadyAt: time.Now(), DBLoadElapsed: dbLoadElapsed}:
 				case <-ctx.Done():
 					return
 				}
@@ -156,14 +183,22 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	var processed int64
 	nextBatch := 0
 	pending := make(map[int]dbBatchResult)
+	var dbLoadElapsed, outputWaitElapsed, writeElapsed time.Duration
 	progressStart := time.Now()
 	writeBatch := func(batch dbBatchResult) error {
+		outputWaitElapsed += time.Since(batch.ReadyAt)
+		dbLoadElapsed += batch.DBLoadElapsed
 		for _, rec := range batch.Records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			writeStart := time.Now()
 			if err := out.Write(rec); err != nil {
 				return err
 			}
+			writeElapsed += time.Since(writeStart)
 			processed++
-			if log != nil && processed%progressInterval == 0 {
+			if cfg.Processing.Progress && log != nil && processed%progressInterval == 0 {
 				log.Info("Database processing progress", zap.Int64("processed", processed), zap.Int("total", len(ids)), zap.Int64("book_id", rec.ID.BookID), zap.Duration("elapsed", time.Since(progressStart)), zap.Duration("total_elapsed", time.Since(start)))
 				progressStart = time.Now()
 			}
@@ -171,6 +206,10 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		return nil
 	}
 	for batch := range results {
+		if err := ctx.Err(); err != nil {
+			cancel()
+			return err
+		}
 		pending[batch.Index] = batch
 		for {
 			ready, ok := pending[nextBatch]
@@ -191,7 +230,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	default:
 	}
 	if log != nil {
-		log.Info("Database processed", zap.Int64("records", processed), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Database processed", zap.Int64("records", processed), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
 	}
 	return nil
 }
@@ -203,15 +242,21 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		return 0, fmt.Errorf("open archive %q: %w", path, err)
 	}
 	defer zr.Close()
+	openElapsed := time.Since(start)
 
+	entryListStart := time.Now()
 	entries := make([]archiveEntry, 0, len(zr.File))
 	for _, file := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if file.FileInfo().IsDir() || isBackup(file.Name) || !wantEntry(file.Name, cfg.Processing.Process) {
 			continue
 		}
 		bookID, ext := entryIdentity(file.Name)
 		entries = append(entries, archiveEntry{Index: len(entries), File: file, BookID: bookID, Ext: ext})
 	}
+	entryListElapsed := time.Since(entryListStart)
 	workers := cfg.Processing.ArchiveWorkers
 	if workers <= 0 {
 		workers = runtime.NumCPU()
@@ -227,7 +272,7 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		batchSize = 256
 	}
 	if log != nil {
-		log.Info("Archive processing started", zap.String("archive", path), zap.Int("entries", len(zr.File)), zap.Int("records", len(entries)), zap.Int("workers", workers), zap.Int("batch_size", batchSize), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Archive processing started", zap.String("archive", path), zap.Int("entries", len(zr.File)), zap.Int("records", len(entries)), zap.Int("workers", workers), zap.Int("batch_size", batchSize), zap.Duration("open_elapsed", openElapsed), zap.Duration("entry_list_elapsed", entryListElapsed), zap.Duration("elapsed", time.Since(entryListStart)))
 	}
 
 	jobs := make(chan []archiveEntry, workers*2)
@@ -242,7 +287,7 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		go func() {
 			defer wg.Done()
 			for batch := range jobs {
-				records, err := processArchiveBatch(ctx, repo, cfg, path, batch)
+				records, timing, err := processArchiveBatch(ctx, repo, cfg, path, batch)
 				if err != nil {
 					select {
 					case errs <- err:
@@ -251,8 +296,11 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 					cancel()
 					return
 				}
+				timing.Index = batch[0].Index / batchSize
+				timing.Records = records
+				timing.ReadyAt = time.Now()
 				select {
-				case results <- dbBatchResult{Index: batch[0].Index / batchSize, Records: records}:
+				case results <- timing:
 				case <-ctx.Done():
 					return
 				}
@@ -281,14 +329,25 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 	var records int64
 	nextBatch := 0
 	pending := make(map[int]dbBatchResult)
+	var dbLoadElapsed, fb2ParseElapsed, md5Elapsed, fallbackLookupElapsed, outputWaitElapsed, writeElapsed time.Duration
 	progressStart := time.Now()
 	writeBatch := func(batch dbBatchResult) error {
+		outputWaitElapsed += time.Since(batch.ReadyAt)
+		dbLoadElapsed += batch.DBLoadElapsed
+		fb2ParseElapsed += batch.FB2ParseElapsed
+		md5Elapsed += batch.MD5Elapsed
+		fallbackLookupElapsed += batch.FallbackLookupElapsed
 		for _, rec := range batch.Records {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			writeStart := time.Now()
 			if err := out.Write(rec); err != nil {
 				return err
 			}
+			writeElapsed += time.Since(writeStart)
 			records++
-			if log != nil && records%progressInterval == 0 {
+			if cfg.Processing.Progress && log != nil && records%progressInterval == 0 {
 				log.Info("Archive processing progress", zap.String("archive", path), zap.Int64("processed", records), zap.Int("records", len(entries)), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(progressStart)), zap.Duration("total_elapsed", time.Since(start)))
 				progressStart = time.Now()
 			}
@@ -296,6 +355,10 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		return nil
 	}
 	for batch := range results {
+		if err := ctx.Err(); err != nil {
+			cancel()
+			return records, err
+		}
 		pending[batch.Index] = batch
 		for {
 			ready, ok := pending[nextBatch]
@@ -316,12 +379,16 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 	default:
 	}
 	if log != nil {
-		log.Info("Archive processed", zap.String("archive", path), zap.Int64("records", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Archive processed", zap.String("archive", path), zap.Int64("records", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("fb2_parse_elapsed", fb2ParseElapsed), zap.Duration("md5_elapsed", md5Elapsed), zap.Duration("fallback_lookup_elapsed", fallbackLookupElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
 	}
 	return records, nil
 }
 
-func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, entries []archiveEntry) ([]model.Record, error) {
+func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, entries []archiveEntry) ([]model.Record, dbBatchResult, error) {
+	var timing dbBatchResult
+	if err := ctx.Err(); err != nil {
+		return nil, timing, err
+	}
 	ids := make([]int64, 0, len(entries))
 	for _, entry := range entries {
 		if entry.BookID > 0 {
@@ -331,24 +398,35 @@ func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.C
 	sources := map[int64]model.DatabaseSource{}
 	if len(ids) > 0 {
 		var err error
+		dbStart := time.Now()
 		sources, err = repo.BookSourcesByIDs(ctx, ids)
+		timing.DBLoadElapsed += time.Since(dbStart)
 		if err != nil {
-			return nil, err
+			return nil, timing, err
 		}
 	}
 	records := make([]model.Record, 0, len(entries))
 	for _, entry := range entries {
-		rec, err := processEntryWithSource(ctx, repo, cfg, archive, entry.File, entry.BookID, entry.Ext, sources[entry.BookID])
-		if err != nil {
-			return nil, err
+		if err := ctx.Err(); err != nil {
+			return nil, timing, err
 		}
+		rec, et, err := processEntryWithSource(ctx, repo, cfg, archive, entry.File, entry.BookID, entry.Ext, sources[entry.BookID])
+		if err != nil {
+			return nil, timing, err
+		}
+		timing.FB2ParseElapsed += et.FB2ParseElapsed
+		timing.MD5Elapsed += et.MD5Elapsed
+		timing.FallbackLookupElapsed += et.FallbackLookupElapsed
 		records = append(records, rec)
 	}
-	return records, nil
+	return records, timing, nil
 }
 
-func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, file *zip.File, bookID int64, ext string, dbSource model.DatabaseSource) (model.Record, error) {
-	rec := model.Record{
+func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, file *zip.File, bookID int64, ext string, dbSource model.DatabaseSource) (rec model.Record, timing entryTiming, err error) {
+	if err := ctx.Err(); err != nil {
+		return model.Record{}, timing, err
+	}
+	rec = model.Record{
 		Schema: recordSchema,
 		ID: model.RecordID{
 			Library:   cfg.Database.Name,
@@ -366,15 +444,19 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 	}
 	rec.Source.Database = dbSource
 	if !rec.Source.Database.Present && !strings.EqualFold(ext, "fb2") {
+		lookupStart := time.Now()
 		id, err := repo.BookIDByFilename(ctx, filepath.Base(file.Name))
+		timing.FallbackLookupElapsed += time.Since(lookupStart)
 		if err != nil {
-			return rec, err
+			return rec, timing, err
 		}
 		if id > 0 {
 			rec.ID.BookID = id
+			lookupStart = time.Now()
 			dbSource, err := repo.BookByID(ctx, id)
+			timing.FallbackLookupElapsed += time.Since(lookupStart)
 			if err != nil {
-				return rec, err
+				return rec, timing, err
 			}
 			rec.Source.Database = dbSource
 		}
@@ -384,19 +466,24 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 		if err != nil {
 			rec.Errors = append(rec.Errors, fmt.Sprintf("open FB2 entry: %v", err))
 		} else {
-			var parser io.Reader = r
+			reader := bufferedContextReader(ctx, r, cfg.Processing.ArchiveReadBuffer)
+			var parser io.Reader = reader
 			var hash hashWriter
 			if cfg.Processing.ArchiveContentMD5 {
 				hash = md5.New()
-				parser = io.TeeReader(r, hash)
+				parser = io.TeeReader(reader, hash)
 			}
+			parseStart := time.Now()
 			fb2Source, err := fb2.Parse(parser, cfg.Processing.FB2DescriptionTree)
+			timing.FB2ParseElapsed += time.Since(parseStart)
 			if cfg.Processing.ArchiveContentMD5 {
-				if _, copyErr := io.Copy(hash, r); copyErr != nil {
+				md5Start := time.Now()
+				if _, copyErr := copyWithBuffer(hash, reader, cfg.Processing.ArchiveReadBuffer); copyErr != nil {
 					rec.Errors = append(rec.Errors, fmt.Sprintf("hash FB2 entry: %v", copyErr))
 				} else {
 					rec.ID.Archive.ContentMD5 = hex.EncodeToString(hash.Sum(nil))
 				}
+				timing.MD5Elapsed += time.Since(md5Start)
 			}
 			if closeErr := r.Close(); closeErr != nil {
 				rec.Errors = append(rec.Errors, fmt.Sprintf("close FB2 entry: %v", closeErr))
@@ -408,14 +495,16 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 			}
 		}
 	} else if cfg.Processing.ArchiveContentMD5 {
-		md5sum, err := archiveEntryMD5(file)
+		md5Start := time.Now()
+		md5sum, err := archiveEntryMD5(ctx, file, cfg.Processing.ArchiveReadBuffer)
+		timing.MD5Elapsed += time.Since(md5Start)
 		if err != nil {
 			rec.Errors = append(rec.Errors, err.Error())
 		} else {
 			rec.ID.Archive.ContentMD5 = md5sum
 		}
 	}
-	return rec, nil
+	return rec, timing, nil
 }
 
 type hashWriter interface {
@@ -423,17 +512,51 @@ type hashWriter interface {
 	Sum([]byte) []byte
 }
 
-func archiveEntryMD5(file *zip.File) (string, error) {
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func bufferedContextReader(ctx context.Context, reader io.Reader, bufferSize int) io.Reader {
+	cr := &contextReader{ctx: ctx, reader: reader}
+	if bufferSize <= 0 {
+		return cr
+	}
+	return bufio.NewReaderSize(cr, bufferSize)
+}
+
+func (r *contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(p)
+	if err != nil {
+		return n, err
+	}
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		return n, ctxErr
+	}
+	return n, nil
+}
+
+func archiveEntryMD5(ctx context.Context, file *zip.File, bufferSize int) (string, error) {
 	r, err := file.Open()
 	if err != nil {
 		return "", fmt.Errorf("open archive entry for hashing: %w", err)
 	}
 	defer r.Close()
 	hash := md5.New()
-	if _, err := io.Copy(hash, r); err != nil {
+	if _, err := copyWithBuffer(hash, &contextReader{ctx: ctx, reader: r}, bufferSize); err != nil {
 		return "", fmt.Errorf("hash archive entry: %w", err)
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func copyWithBuffer(dst io.Writer, src io.Reader, bufferSize int) (int64, error) {
+	if bufferSize <= 0 {
+		return io.Copy(dst, src)
+	}
+	return io.CopyBuffer(dst, src, make([]byte, bufferSize))
 }
 
 func expandArchives(paths []string) ([]string, error) {

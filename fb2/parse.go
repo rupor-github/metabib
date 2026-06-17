@@ -84,6 +84,12 @@ func readNode(dec *xml.Decoder, start xml.StartElement) (model.XMLNode, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			if t.Name.Local == "coverpage" {
+				if err := dec.Skip(); err != nil {
+					return node, fmt.Errorf("skip FB2 coverpage: %w", err)
+				}
+				continue
+			}
 			child, err := readNode(dec, t)
 			if err != nil {
 				return node, err
@@ -94,6 +100,10 @@ func readNode(dec *xml.Decoder, start xml.StartElement) (model.XMLNode, error) {
 		case xml.EndElement:
 			if t.Name.Local == start.Name.Local {
 				node.Text = strings.TrimSpace(text.String())
+				if node.Name == "annotation" {
+					node.Text = collectText(node)
+					node.Children = nil
+				}
 				return node, nil
 			}
 		}

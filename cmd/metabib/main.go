@@ -7,9 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
+	mysql "github.com/go-sql-driver/mysql"
 	cli "github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 
@@ -31,8 +34,19 @@ func initializeAppContext(ctx context.Context, cmd *cli.Command) (context.Contex
 	if env.Log, env.LogIO, err = cfg.Logging.Prepare(misc.GetAppName()); err != nil {
 		return ctx, fmt.Errorf("unable to prepare logs: %w", err)
 	}
+	mysql.SetLogger(mysqlDebugLogger{log: env.Log.Named("mysql")})
 	env.Log.Debug("Program started", zap.Strings("args", os.Args), zap.String("version", misc.GetVersion()), zap.String("runtime", runtime.Version()), zap.String("git", misc.GetGitHash()))
 	return ctx, nil
+}
+
+type mysqlDebugLogger struct {
+	log *zap.Logger
+}
+
+func (l mysqlDebugLogger) Print(v ...any) {
+	if l.log != nil {
+		l.log.Debug(fmt.Sprint(v...))
+	}
 }
 
 func destroyAppContext(ctx context.Context, cmd *cli.Command) error {
@@ -71,13 +85,13 @@ func main() {
 
 	var err error
 	defer func() {
-		stop()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Program ended with error: %v\n", err)
 			os.Exit(1)
 		}
 	}()
 	err = app.Run(ctx, os.Args)
+	stop()
 }
 
 func buildCommand() *cli.Command {
@@ -89,6 +103,8 @@ func buildCommand() *cli.Command {
 			&cli.StringFlag{Name: "dump-dir", Usage: "directory containing SQL dumps"},
 			&cli.StringSliceFlag{Name: "archive", Aliases: []string{"a"}, Usage: "archive file or directory with archives; can be repeated"},
 			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write JSONL to `FILE`"},
+			&cli.StringFlag{Name: "output-part-size", Usage: "split JSONL into range-named parts of approximate `SIZE` (supports k, m, g)"},
+			&cli.BoolFlag{Name: "progress", Usage: "periodically log processing progress at info level"},
 			&cli.BoolFlag{Name: "no-import", Usage: "skip SQL dump import and use existing database"},
 			&cli.StringFlag{Name: "db-name", Usage: "database name"},
 			&cli.StringFlag{Name: "db-host", Usage: "database host or socket path"},
@@ -157,7 +173,11 @@ func runBuild(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer repo.Close()
 
-	out, err := jsonl.Create(cfg.Output.JSONL)
+	partSize, err := parseSize(cfg.Output.PartSize)
+	if err != nil {
+		return err
+	}
+	out, err := jsonl.Create(cfg.Output.JSONL, partSize)
 	if err != nil {
 		return err
 	}
@@ -176,8 +196,14 @@ func applyBuildOverrides(cfg *config.Config, cmd *cli.Command) {
 	if v := cmd.String("output"); v != "" {
 		cfg.Output.JSONL = v
 	}
+	if v := cmd.String("output-part-size"); v != "" {
+		cfg.Output.PartSize = v
+	}
 	if archives := cmd.StringSlice("archive"); len(archives) > 0 {
 		cfg.Processing.Archives = archives
+	}
+	if cmd.Bool("progress") {
+		cfg.Processing.Progress = true
 	}
 	if cmd.Bool("no-import") {
 		cfg.Database.Import = false
@@ -217,6 +243,34 @@ func applyBuildOverrides(cfg *config.Config, cmd *cli.Command) {
 		cfg.Database.OverwriteDataDir = true
 		cfg.Database.DropBeforeImport = true
 	}
+}
+
+func parseSize(value string) (int64, error) {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return 0, nil
+	}
+	multiplier := int64(1)
+	for _, suffix := range []struct {
+		suffix string
+		mul    int64
+	}{
+		{"kb", 1024}, {"k", 1024},
+		{"mb", 1024 * 1024}, {"m", 1024 * 1024},
+		{"gb", 1024 * 1024 * 1024}, {"g", 1024 * 1024 * 1024},
+		{"b", 1},
+	} {
+		if strings.HasSuffix(value, suffix.suffix) {
+			multiplier = suffix.mul
+			value = strings.TrimSpace(strings.TrimSuffix(value, suffix.suffix))
+			break
+		}
+	}
+	n, err := strconv.ParseFloat(value, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid output part size %q", value)
+	}
+	return int64(n * float64(multiplier)), nil
 }
 
 func outputConfiguration(ctx context.Context, cmd *cli.Command) (retErr error) {

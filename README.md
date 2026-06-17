@@ -51,6 +51,14 @@ metabib build /path/to/sql-dumps --archive /path/to/flibusta \
   --db-dsn 'user:password@tcp(127.0.0.1:3306)/flibusta'
 ```
 
+When `output.part_size` or `--output-part-size` is used, output files are named
+with zero-padded book-id ranges so they sort naturally, for example:
+
+```text
+metabib.0000000001-0000120345.jsonl
+metabib.0000120346-0000240872.jsonl
+```
+
 Dump the default configuration:
 
 ```sh

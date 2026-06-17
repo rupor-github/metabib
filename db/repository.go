@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +19,13 @@ import (
 type Repository struct {
 	db     *sql.DB
 	tables map[string]bool
+	cols   map[string]map[string]bool
 	tmu    sync.RWMutex
+}
+
+type FileIdentity struct {
+	FileName  string
+	Extension string
 }
 
 func Open(ctx context.Context, cfg config.DatabaseConfig) (*Repository, error) {
@@ -42,7 +50,7 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Repository, error) {
 	if cfg.ConnMaxLifetime > 0 {
 		db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	}
-	return &Repository{db: db, tables: make(map[string]bool)}, nil
+	return &Repository{db: db, tables: make(map[string]bool), cols: make(map[string]map[string]bool)}, nil
 }
 
 func (r *Repository) Close() error {
@@ -91,6 +99,44 @@ func (r *Repository) BookIDByFilename(ctx context.Context, filename string) (int
 	return id, nil
 }
 
+func (r *Repository) FileIdentitiesByIDs(ctx context.Context, ids []int64) (map[int64]FileIdentity, error) {
+	out := make(map[int64]FileIdentity, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	books, err := r.books(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for id, book := range books {
+		if strings.EqualFold(book.FileType, "fb2") {
+			out[id] = FileIdentity{FileName: strconv.FormatInt(id, 10), Extension: book.FileType}
+		} else {
+			out[id] = FileIdentity{FileName: strconv.FormatInt(id, 10), Extension: book.FileType}
+		}
+	}
+	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
+		return out, err
+	}
+	query, args := inQuery(`SELECT BookId, FileName FROM libfilename WHERE BookId IN (`, ids, `) ORDER BY BookId`)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query file identities: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("scan file identity: %w", err)
+		}
+		stem := strings.TrimSuffix(name, filepath.Ext(name))
+		ext := strings.TrimPrefix(filepath.Ext(name), ".")
+		out[id] = FileIdentity{FileName: stem, Extension: ext}
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) BookByID(ctx context.Context, id int64) (model.DatabaseSource, error) {
 	src := model.DatabaseSource{}
 	book, present, err := r.book(ctx, id)
@@ -112,9 +158,6 @@ func (r *Repository) BookByID(ctx context.Context, id int64) (model.DatabaseSour
 		return src, err
 	}
 	if src.Rating, err = r.rating(ctx, id); err != nil {
-		return src, err
-	}
-	if src.Ratings, err = r.ratingVotes(ctx, id); err != nil {
 		return src, err
 	}
 	if src.Filenames, err = r.filenames(ctx, id); err != nil {
@@ -162,9 +205,6 @@ func (r *Repository) BookSourcesByIDs(ctx context.Context, ids []int64) (map[int
 	if err := r.attachRatings(ctx, ids, out); err != nil {
 		return nil, err
 	}
-	if err := r.attachRatingVotes(ctx, ids, out); err != nil {
-		return nil, err
-	}
 	if err := r.attachFilenames(ctx, ids, out); err != nil {
 		return nil, err
 	}
@@ -181,10 +221,18 @@ func (r *Repository) books(ctx context.Context, ids []int64) (map[int64]*model.D
 	if ok, err := r.tableExists(ctx, "libbook"); err != nil || !ok {
 		return nil, err
 	}
+	replacedBy, err := r.columnExists(ctx, "libbook", "ReplacedBy")
+	if err != nil {
+		return nil, err
+	}
+	extra := ""
+	if replacedBy {
+		extra = ", ReplacedBy"
+	}
 	query, args := inQuery(`
-SELECT BookId, FileSize, Time, Title, Title1, Lang, LangEx, SrcLang, FileType,
-       Encoding, Year, Deleted, Ver, FileAuthor, N, keywords, CAST(md5 AS CHAR),
-       Modified, pmd5, InfoCode, Pages, Chars
+SELECT BookId, FileSize, Time, Title, Lang, SrcLang,
+       FileType, Year, Deleted, FileAuthor, keywords, CAST(md5 AS CHAR),
+       Modified`+extra+`
   FROM libbook WHERE BookId IN (`, ids, `)`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -195,9 +243,13 @@ SELECT BookId, FileSize, Time, Title, Title1, Lang, LangEx, SrcLang, FileType,
 	for rows.Next() {
 		var b model.DBBook
 		var tm, modified sql.NullTime
-		if err := rows.Scan(&b.BookID, &b.FileSize, &tm, &b.Title, &b.Title1, &b.Lang, &b.LangEx,
-			&b.SrcLang, &b.FileType, &b.Encoding, &b.Year, &b.Deleted, &b.Version, &b.FileAuthor,
-			&b.N, &b.Keywords, &b.MD5, &modified, &b.PMD5, &b.InfoCode, &b.Pages, &b.Chars); err != nil {
+		dest := []any{&b.BookID, &b.FileSize, &tm, &b.Title, &b.Lang,
+			&b.SrcLang, &b.FileType, &b.Year, &b.Deleted, &b.FileAuthor,
+			&b.Keywords, &b.MD5, &modified}
+		if replacedBy {
+			dest = append(dest, &b.ReplacedBy)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan book batch: %w", err)
 		}
 		b.Time = formatTime(tm)
@@ -341,29 +393,6 @@ SELECT BookId, AVG(CAST(Rate AS UNSIGNED)), COUNT(*), MIN(CAST(Rate AS UNSIGNED)
 	return rows.Err()
 }
 
-func (r *Repository) attachRatingVotes(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource) error {
-	if ok, err := r.tableExists(ctx, "librate"); err != nil || !ok {
-		return err
-	}
-	query, args := inQuery(`SELECT ID, BookId, UserId, CAST(Rate AS UNSIGNED) FROM librate WHERE BookId IN (`, ids, `) ORDER BY BookId, ID`)
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("query rating votes batch: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var bookID int64
-		var vote model.DBRatingVote
-		if err := rows.Scan(&vote.ID, &bookID, &vote.UserID, &vote.Rate); err != nil {
-			return fmt.Errorf("scan rating vote batch: %w", err)
-		}
-		src := out[bookID]
-		src.Ratings = append(src.Ratings, vote)
-		out[bookID] = src
-	}
-	return rows.Err()
-}
-
 func (r *Repository) attachFilenames(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource) error {
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return err
@@ -453,17 +482,29 @@ func (r *Repository) book(ctx context.Context, id int64) (*model.DBBook, bool, e
 	if ok, err := r.tableExists(ctx, "libbook"); err != nil || !ok {
 		return nil, false, err
 	}
+	replacedBy, err := r.columnExists(ctx, "libbook", "ReplacedBy")
+	if err != nil {
+		return nil, false, err
+	}
+	extra := ""
+	if replacedBy {
+		extra = ", ReplacedBy"
+	}
 	row := r.db.QueryRowContext(ctx, `
-SELECT BookId, FileSize, Time, Title, Title1, Lang, LangEx, SrcLang, FileType,
-       Encoding, Year, Deleted, Ver, FileAuthor, N, keywords, CAST(md5 AS CHAR),
-       Modified, pmd5, InfoCode, Pages, Chars
+SELECT BookId, FileSize, Time, Title, Lang, SrcLang,
+       FileType, Year, Deleted, FileAuthor, keywords, CAST(md5 AS CHAR),
+       Modified`+extra+`
   FROM libbook WHERE BookId = ?`, id)
 
 	var b model.DBBook
 	var tm, modified sql.NullTime
-	if err := row.Scan(&b.BookID, &b.FileSize, &tm, &b.Title, &b.Title1, &b.Lang, &b.LangEx,
-		&b.SrcLang, &b.FileType, &b.Encoding, &b.Year, &b.Deleted, &b.Version, &b.FileAuthor,
-		&b.N, &b.Keywords, &b.MD5, &modified, &b.PMD5, &b.InfoCode, &b.Pages, &b.Chars); err != nil {
+	dest := []any{&b.BookID, &b.FileSize, &tm, &b.Title, &b.Lang,
+		&b.SrcLang, &b.FileType, &b.Year, &b.Deleted, &b.FileAuthor,
+		&b.Keywords, &b.MD5, &modified}
+	if replacedBy {
+		dest = append(dest, &b.ReplacedBy)
+	}
+	if err := row.Scan(dest...); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, false, nil
 		}
@@ -585,28 +626,6 @@ SELECT AVG(CAST(Rate AS UNSIGNED)), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(C
 	return &model.DBRating{Average: avg.Float64, Count: count, Min: min.Int64, Max: max.Int64}, nil
 }
 
-func (r *Repository) ratingVotes(ctx context.Context, id int64) ([]model.DBRatingVote, error) {
-	if ok, err := r.tableExists(ctx, "librate"); err != nil || !ok {
-		return nil, err
-	}
-	rows, err := r.db.QueryContext(ctx, `
-SELECT ID, UserId, CAST(Rate AS UNSIGNED)
-  FROM librate WHERE BookId = ? ORDER BY ID`, id)
-	if err != nil {
-		return nil, fmt.Errorf("query rating votes for book %d: %w", id, err)
-	}
-	defer rows.Close()
-	var out []model.DBRatingVote
-	for rows.Next() {
-		var vote model.DBRatingVote
-		if err := rows.Scan(&vote.ID, &vote.UserID, &vote.Rate); err != nil {
-			return nil, fmt.Errorf("scan rating vote: %w", err)
-		}
-		out = append(out, vote)
-	}
-	return out, rows.Err()
-}
-
 func (r *Repository) filenames(ctx context.Context, id int64) ([]string, error) {
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return nil, err
@@ -694,6 +713,31 @@ SELECT COUNT(*) FROM information_schema.tables
 	defer r.tmu.Unlock()
 	r.tables[table] = count > 0
 	return r.tables[table], nil
+}
+
+func (r *Repository) columnExists(ctx context.Context, table string, column string) (bool, error) {
+	r.tmu.RLock()
+	if columns, ok := r.cols[table]; ok {
+		if exists, ok := columns[column]; ok {
+			r.tmu.RUnlock()
+			return exists, nil
+		}
+	}
+	r.tmu.RUnlock()
+
+	var count int
+	if err := r.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM information_schema.columns
+ WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`, table, column).Scan(&count); err != nil {
+		return false, fmt.Errorf("check column %q.%q: %w", table, column, err)
+	}
+	r.tmu.Lock()
+	defer r.tmu.Unlock()
+	if r.cols[table] == nil {
+		r.cols[table] = make(map[string]bool)
+	}
+	r.cols[table][column] = count > 0
+	return r.cols[table][column], nil
 }
 
 func formatTime(v sql.NullTime) string {
