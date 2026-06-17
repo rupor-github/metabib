@@ -11,7 +11,7 @@ import (
 	"metabib/model"
 )
 
-func Parse(r io.Reader) (model.FB2Source, error) {
+func Parse(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
 	dec := xml.NewDecoder(r)
 	dec.CharsetReader = charset.NewReaderLabel
 	dec.Strict = false
@@ -27,11 +27,44 @@ func Parse(r io.Reader) (model.FB2Source, error) {
 		if !ok || start.Name.Local != "description" {
 			continue
 		}
+		if !preserveDescription {
+			return parseTitleInfoOnly(dec)
+		}
 		node, err := readNode(dec, start)
 		if err != nil {
 			return model.FB2Source{}, err
 		}
 		return model.FB2Source{Present: true, Description: &node, TitleInfo: titleInfo(node)}, nil
+	}
+}
+
+func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if err == io.EOF {
+				return model.FB2Source{}, nil
+			}
+			return model.FB2Source{}, fmt.Errorf("parse FB2 description: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "title-info" {
+				node, err := readNode(dec, t)
+				if err != nil {
+					return model.FB2Source{}, err
+				}
+				info := parseTitleInfo(node)
+				return model.FB2Source{Present: true, TitleInfo: &info}, nil
+			}
+			if err := dec.Skip(); err != nil {
+				return model.FB2Source{}, fmt.Errorf("skip FB2 description node %q: %w", t.Name.Local, err)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "description" {
+				return model.FB2Source{Present: true}, nil
+			}
+		}
 	}
 }
 

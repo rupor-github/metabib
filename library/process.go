@@ -3,7 +3,10 @@ package library
 import (
 	"archive/zip"
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,6 +37,13 @@ type dbBatch struct {
 type dbBatchResult struct {
 	Index   int
 	Records []model.Record
+}
+
+type archiveEntry struct {
+	Index  int
+	File   *zip.File
+	BookID int64
+	Ext    string
 }
 
 func ProcessArchives(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger) error {
@@ -194,25 +204,116 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 	}
 	defer zr.Close()
 
-	var records int64
-	progressStart := time.Now()
+	entries := make([]archiveEntry, 0, len(zr.File))
 	for _, file := range zr.File {
 		if file.FileInfo().IsDir() || isBackup(file.Name) || !wantEntry(file.Name, cfg.Processing.Process) {
 			continue
 		}
-		select {
-		case <-ctx.Done():
-			return records, ctx.Err()
-		default:
+		bookID, ext := entryIdentity(file.Name)
+		entries = append(entries, archiveEntry{Index: len(entries), File: file, BookID: bookID, Ext: ext})
+	}
+	workers := cfg.Processing.ArchiveWorkers
+	if workers <= 0 {
+		workers = runtime.NumCPU()
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(entries) && len(entries) > 0 {
+		workers = len(entries)
+	}
+	batchSize := cfg.Processing.ArchiveBatchSize
+	if batchSize <= 0 {
+		batchSize = 256
+	}
+	if log != nil {
+		log.Info("Archive processing started", zap.String("archive", path), zap.Int("entries", len(zr.File)), zap.Int("records", len(entries)), zap.Int("workers", workers), zap.Int("batch_size", batchSize), zap.Duration("elapsed", time.Since(start)))
+	}
+
+	jobs := make(chan []archiveEntry, workers*2)
+	results := make(chan dbBatchResult, workers*2)
+	errs := make(chan error, 1)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for batch := range jobs {
+				records, err := processArchiveBatch(ctx, repo, cfg, path, batch)
+				if err != nil {
+					select {
+					case errs <- err:
+					default:
+					}
+					cancel()
+					return
+				}
+				select {
+				case results <- dbBatchResult{Index: batch[0].Index / batchSize, Records: records}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for start := 0; start < len(entries); start += batchSize {
+			end := start + batchSize
+			if end > len(entries) {
+				end = len(entries)
+			}
+			select {
+			case jobs <- entries[start:end]:
+			case <-ctx.Done():
+				return
+			}
 		}
-		if err := processEntry(ctx, repo, cfg, out, path, file); err != nil {
-			return records, err
+	}()
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var records int64
+	nextBatch := 0
+	pending := make(map[int]dbBatchResult)
+	progressStart := time.Now()
+	writeBatch := func(batch dbBatchResult) error {
+		for _, rec := range batch.Records {
+			if err := out.Write(rec); err != nil {
+				return err
+			}
+			records++
+			if log != nil && records%progressInterval == 0 {
+				log.Info("Archive processing progress", zap.String("archive", path), zap.Int64("processed", records), zap.Int("records", len(entries)), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(progressStart)), zap.Duration("total_elapsed", time.Since(start)))
+				progressStart = time.Now()
+			}
 		}
-		records++
-		if log != nil && records%progressInterval == 0 {
-			log.Info("Archive processing progress", zap.String("archive", path), zap.Int64("processed", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(progressStart)), zap.Duration("total_elapsed", time.Since(start)))
-			progressStart = time.Now()
+		return nil
+	}
+	for batch := range results {
+		pending[batch.Index] = batch
+		for {
+			ready, ok := pending[nextBatch]
+			if !ok {
+				break
+			}
+			if err := writeBatch(ready); err != nil {
+				cancel()
+				return records, err
+			}
+			delete(pending, nextBatch)
+			nextBatch++
 		}
+	}
+	select {
+	case err := <-errs:
+		return records, err
+	default:
 	}
 	if log != nil {
 		log.Info("Archive processed", zap.String("archive", path), zap.Int64("records", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(start)))
@@ -220,8 +321,33 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 	return records, nil
 }
 
-func processEntry(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, archive string, file *zip.File) error {
-	bookID, ext := entryIdentity(file.Name)
+func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, entries []archiveEntry) ([]model.Record, error) {
+	ids := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		if entry.BookID > 0 {
+			ids = append(ids, entry.BookID)
+		}
+	}
+	sources := map[int64]model.DatabaseSource{}
+	if len(ids) > 0 {
+		var err error
+		sources, err = repo.BookSourcesByIDs(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+	records := make([]model.Record, 0, len(entries))
+	for _, entry := range entries {
+		rec, err := processEntryWithSource(ctx, repo, cfg, archive, entry.File, entry.BookID, entry.Ext, sources[entry.BookID])
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, file *zip.File, bookID int64, ext string, dbSource model.DatabaseSource) (model.Record, error) {
 	rec := model.Record{
 		Schema: recordSchema,
 		ID: model.RecordID{
@@ -238,24 +364,17 @@ func processEntry(ctx context.Context, repo *db.Repository, cfg *config.Config, 
 			},
 		},
 	}
-
-	if bookID > 0 {
-		dbSource, err := repo.BookByID(ctx, bookID)
-		if err != nil {
-			return err
-		}
-		rec.Source.Database = dbSource
-	}
+	rec.Source.Database = dbSource
 	if !rec.Source.Database.Present && !strings.EqualFold(ext, "fb2") {
 		id, err := repo.BookIDByFilename(ctx, filepath.Base(file.Name))
 		if err != nil {
-			return err
+			return rec, err
 		}
 		if id > 0 {
 			rec.ID.BookID = id
 			dbSource, err := repo.BookByID(ctx, id)
 			if err != nil {
-				return err
+				return rec, err
 			}
 			rec.Source.Database = dbSource
 		}
@@ -265,7 +384,20 @@ func processEntry(ctx context.Context, repo *db.Repository, cfg *config.Config, 
 		if err != nil {
 			rec.Errors = append(rec.Errors, fmt.Sprintf("open FB2 entry: %v", err))
 		} else {
-			fb2Source, err := fb2.Parse(r)
+			var parser io.Reader = r
+			var hash hashWriter
+			if cfg.Processing.ArchiveContentMD5 {
+				hash = md5.New()
+				parser = io.TeeReader(r, hash)
+			}
+			fb2Source, err := fb2.Parse(parser, cfg.Processing.FB2DescriptionTree)
+			if cfg.Processing.ArchiveContentMD5 {
+				if _, copyErr := io.Copy(hash, r); copyErr != nil {
+					rec.Errors = append(rec.Errors, fmt.Sprintf("hash FB2 entry: %v", copyErr))
+				} else {
+					rec.ID.Archive.ContentMD5 = hex.EncodeToString(hash.Sum(nil))
+				}
+			}
 			if closeErr := r.Close(); closeErr != nil {
 				rec.Errors = append(rec.Errors, fmt.Sprintf("close FB2 entry: %v", closeErr))
 			}
@@ -275,8 +407,33 @@ func processEntry(ctx context.Context, repo *db.Repository, cfg *config.Config, 
 				rec.Source.FB2 = fb2Source
 			}
 		}
+	} else if cfg.Processing.ArchiveContentMD5 {
+		md5sum, err := archiveEntryMD5(file)
+		if err != nil {
+			rec.Errors = append(rec.Errors, err.Error())
+		} else {
+			rec.ID.Archive.ContentMD5 = md5sum
+		}
 	}
-	return out.Write(rec)
+	return rec, nil
+}
+
+type hashWriter interface {
+	io.Writer
+	Sum([]byte) []byte
+}
+
+func archiveEntryMD5(file *zip.File) (string, error) {
+	r, err := file.Open()
+	if err != nil {
+		return "", fmt.Errorf("open archive entry for hashing: %w", err)
+	}
+	defer r.Close()
+	hash := md5.New()
+	if _, err := io.Copy(hash, r); err != nil {
+		return "", fmt.Errorf("hash archive entry: %w", err)
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func expandArchives(paths []string) ([]string, error) {

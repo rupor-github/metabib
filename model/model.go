@@ -20,6 +20,7 @@ type ArchiveInfo struct {
 	Entry            string `json:"entry"`
 	CompressedSize   uint64 `json:"compressed_size,omitempty"`
 	UncompressedSize uint64 `json:"uncompressed_size,omitempty"`
+	ContentMD5       string `json:"content_md5,omitempty"`
 	Modified         string `json:"modified,omitempty"`
 }
 

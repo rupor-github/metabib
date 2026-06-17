@@ -22,6 +22,7 @@
             "entry": {"type": "string"},
             "compressed_size": {"type": "integer"},
             "uncompressed_size": {"type": "integer"},
+            "content_md5": {"type": "string"},
             "modified": {"type": "string"}
           },
           "additionalProperties": false

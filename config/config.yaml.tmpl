@@ -49,11 +49,25 @@ processing:
   # Parse FB2 description metadata from archive entries.
   parse_fb2: true
 
+  # Preserve full parsed FB2 <description> tree. Turning this off keeps only
+  # title-info and is faster, but loses document-info/publish-info/custom-info.
+  fb2_description_tree: true
+
+  # Calculate MD5 of the uncompressed archive entry content. For FB2 this reuses
+  # the parser stream, but still has to drain the whole entry after description.
+  archive_content_md5: true
+
   # Parallel workers for database-only JSONL export. 0 uses runtime CPU count.
   database_workers: 0
 
   # Number of books loaded by one worker query batch during database-only export.
   database_batch_size: 256
+
+  # Parallel workers for archive entry processing. 0 uses runtime CPU count.
+  archive_workers: 0
+
+  # Number of archive entries processed by one worker batch.
+  archive_batch_size: 256
 
   # If archive paths are not specified on command line, these paths are used.
   archives: []

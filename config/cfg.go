@@ -52,8 +52,12 @@ type DatabaseConfig struct {
 type ProcessingConfig struct {
 	Process              string   `yaml:"process" validate:"oneof=fb2 usr all"`
 	ParseFB2             bool     `yaml:"parse_fb2"`
+	FB2DescriptionTree   bool     `yaml:"fb2_description_tree"`
+	ArchiveContentMD5    bool     `yaml:"archive_content_md5"`
 	DatabaseWorkers      int      `yaml:"database_workers" validate:"min=0"`
 	DatabaseBatchSize    int      `yaml:"database_batch_size" validate:"min=1"`
+	ArchiveWorkers       int      `yaml:"archive_workers" validate:"min=0"`
+	ArchiveBatchSize     int      `yaml:"archive_batch_size" validate:"min=1"`
 	Archives             []string `yaml:"archives" validate:"dive,required"`
 	OnlineWhenNoArchives bool     `yaml:"online_when_no_archives"`
 }

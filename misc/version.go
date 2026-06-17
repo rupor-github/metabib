@@ -9,5 +9,5 @@ func GetVersion() string {
 }
 
 func GetGitHash() string {
-	return "*"
+	return "6c1bc71cce506e64d64cb465b7b5e55ac1aef309*"
 }
