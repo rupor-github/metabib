@@ -1,0 +1,6 @@
+build/
+release/
+vendor/
+*.jsonl
+*.log
+data/

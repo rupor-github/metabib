@@ -1,0 +1,77 @@
+# Content should be UTF-8.
+version: 1
+
+database:
+  # Optional DSN for an existing MariaDB/MySQL service. If empty, metabib
+  # discovers MariaDB binaries and starts a private local server automatically.
+  dsn: ""
+
+  # MariaDB connection defaults used when dsn is empty or when managed is false.
+  host: "127.0.0.1"
+  port: 3306
+  protocol: "tcp"
+  user: "root"
+  password: ""
+  name: "flibusta"
+
+  # Managed local MariaDB instance. When enabled, metabib uses a private datadir
+  # under the executable directory and does not require a system database service.
+  managed: true
+  data_dir: '{{ joinPath .ProjectDir "data" "mariadb" }}'
+  temporary: false
+  overwrite_data_dir: false
+  keep_running: false
+  socket: ""
+  pid_file: ""
+  log_file: ""
+
+  # Optional full paths to MariaDB binaries. If empty, metabib searches the
+  # current directory, ./bin, subdirectories, and PATH.
+  server_path: ""
+  install_db_path: ""
+  client_path: ""
+
+  # Connection pool used by metabib while reading metadata. 0 lets database/sql
+  # use its default for that particular setting.
+  max_open_connections: 32
+  max_idle_connections: 32
+  connection_max_lifetime_seconds: 0
+
+  # Import SQL dumps before producing JSONL.
+  import: true
+  create: true
+  drop_before_import: false
+
+processing:
+  # What archive entries to output: fb2, usr, all.
+  process: "fb2"
+
+  # Parse FB2 description metadata from archive entries.
+  parse_fb2: true
+
+  # Parallel workers for database-only JSONL export. 0 uses runtime CPU count.
+  database_workers: 0
+
+  # Number of books loaded by one worker query batch during database-only export.
+  database_batch_size: 256
+
+  # If archive paths are not specified on command line, these paths are used.
+  archives: []
+
+  # If no archive paths are provided, emit records from the database only.
+  online_when_no_archives: true
+
+output:
+  jsonl: "metabib.jsonl"
+
+logging:
+  # controls terminal (stdout, stderr) output
+  console:
+    # "none" suppresses regular progress and MariaDB output on console.
+    level: normal
+
+  # controls logging to a file. MariaDB server/client output goes here by default.
+  file:
+    destination: metabib.log
+    level: debug
+    mode: overwrite

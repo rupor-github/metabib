@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rupor-github/metabib/docs/metabib.schema.json",
+  "title": "metabib JSONL record",
+  "type": "object",
+  "required": ["schema", "id", "sources"],
+  "properties": {
+    "schema": {"const": "metabib.record/1"},
+    "id": {
+      "type": "object",
+      "required": ["library"],
+      "properties": {
+        "library": {"type": "string"},
+        "book_id": {"type": "integer"},
+        "file_name": {"type": "string"},
+        "extension": {"type": "string"},
+        "archive": {
+          "type": "object",
+          "required": ["path", "entry"],
+          "properties": {
+            "path": {"type": "string"},
+            "entry": {"type": "string"},
+            "compressed_size": {"type": "integer"},
+            "uncompressed_size": {"type": "integer"},
+            "modified": {"type": "string"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sources": {
+      "type": "object",
+      "required": ["database", "fb2"],
+      "properties": {
+        "database": {"$ref": "#/$defs/database_source"},
+        "fb2": {"$ref": "#/$defs/fb2_source"}
+      },
+      "additionalProperties": false
+    },
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "database_source": {
+      "type": "object",
+      "required": ["present"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "book": {"type": "object"},
+        "authors": {"type": "array", "items": {"type": "object"}},
+        "translators": {"type": "array", "items": {"type": "object"}},
+        "genres": {"type": "array", "items": {"type": "object"}},
+        "sequences": {"type": "array", "items": {"type": "object"}},
+        "rating": {"type": "object"},
+        "ratings": {"type": "array", "items": {"type": "object"}},
+        "filenames": {"type": "array", "items": {"type": "string"}},
+        "joined_books": {"type": "array", "items": {"type": "object"}},
+        "recommendations": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_source": {
+      "type": "object",
+      "required": ["present"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "title_info": {"type": "object"},
+        "description": {"$ref": "#/$defs/xml_node"}
+      },
+      "additionalProperties": false
+    },
+    "xml_node": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "attrs": {"type": "object", "additionalProperties": {"type": "string"}},
+        "text": {"type": "string"},
+        "children": {"type": "array", "items": {"$ref": "#/$defs/xml_node"}}
+      },
+      "additionalProperties": false
+    }
+  }
+}
