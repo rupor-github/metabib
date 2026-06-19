@@ -7,8 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/rupor-github/gencfg"
 	yaml "gopkg.in/yaml.v3"
+
+	"github.com/rupor-github/gencfg"
 )
 
 //go:embed config.yaml.tmpl
@@ -50,18 +51,26 @@ type DatabaseConfig struct {
 }
 
 type ProcessingConfig struct {
-	Process              string   `yaml:"process" validate:"oneof=fb2 usr all"`
-	ParseFB2             bool     `yaml:"parse_fb2"`
-	FB2DescriptionTree   bool     `yaml:"fb2_description_tree"`
-	ArchiveContentMD5    bool     `yaml:"archive_content_md5"`
-	DatabaseWorkers      int      `yaml:"database_workers" validate:"min=0"`
-	DatabaseBatchSize    int      `yaml:"database_batch_size" validate:"min=1"`
-	ArchiveWorkers       int      `yaml:"archive_workers" validate:"min=0"`
-	ArchiveBatchSize     int      `yaml:"archive_batch_size" validate:"min=1"`
-	ArchiveReadBuffer    int      `yaml:"archive_read_buffer_size" validate:"min=0"`
-	Progress             bool     `yaml:"progress"`
-	Archives             []string `yaml:"archives" validate:"dive,required"`
-	OnlineWhenNoArchives bool     `yaml:"online_when_no_archives"`
+	Process              string         `yaml:"process" validate:"oneof=fb2 usr all"`
+	ParseFB2             bool           `yaml:"parse_fb2"`
+	FB2DescriptionTree   bool           `yaml:"fb2_description_tree"`
+	ArchiveContentMD5    bool           `yaml:"archive_content_md5"`
+	Manifests            ManifestConfig `yaml:"manifests"`
+	DatabaseWorkers      int            `yaml:"database_workers" validate:"min=0"`
+	DatabaseBatchSize    int            `yaml:"database_batch_size" validate:"min=1"`
+	ArchiveWorkers       int            `yaml:"archive_workers" validate:"min=0"`
+	ArchiveBatchSize     int            `yaml:"archive_batch_size" validate:"min=1"`
+	ArchiveReadBuffer    int            `yaml:"archive_read_buffer_size" validate:"min=0"`
+	Progress             bool           `yaml:"progress"`
+	Archives             []string       `yaml:"archives" validate:"dive,required"`
+	OnlineWhenNoArchives bool           `yaml:"online_when_no_archives"`
+	Rebuild              bool           `yaml:"-"`
+}
+
+type ManifestConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	ArchiveDir  string `yaml:"archive_dir"`
+	DatabaseDir string `yaml:"database_dir"`
 }
 
 type OutputConfig struct {

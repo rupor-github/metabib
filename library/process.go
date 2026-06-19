@@ -58,34 +58,91 @@ type archiveEntry struct {
 	Ext    string
 }
 
-func ProcessArchives(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger) error {
+func ProcessArchives(
+	ctx context.Context,
+	repo *db.Repository,
+	cfg *config.Config,
+	out *jsonl.Writer,
+	log *zap.Logger,
+	plan []ArchiveManifestDecision,
+) error {
 	start := time.Now()
-	archives, err := expandArchives(cfg.Processing.Archives)
-	if err != nil {
-		return err
+	if len(plan) == 0 {
+		archives, err := expandArchives(cfg.Processing.Archives)
+		if err != nil {
+			return err
+		}
+		plan = make([]ArchiveManifestDecision, 0, len(archives))
+		for _, archive := range archives {
+			plan = append(plan, ArchiveManifestDecision{ArchivePath: archive})
+		}
 	}
 	if log != nil {
-		log.Info("Archive list prepared", zap.Int("archives", len(archives)), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Archive list prepared", zap.Int("archives", len(plan)), zap.Duration("elapsed", time.Since(start)))
 	}
 	var records int64
-	for _, archive := range archives {
+	for _, decision := range plan {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		count, err := processArchive(ctx, repo, cfg, out, archive, log)
+		if decision.Use {
+			count, err := CopyManifestRecords(ctx, decision.ManifestPath, out, log)
+			if err != nil {
+				return err
+			}
+			records += count
+			continue
+		}
+		count, err := processArchive(ctx, repo, cfg, out, decision, log)
 		if err != nil {
 			return err
 		}
 		records += count
 	}
 	if log != nil {
-		log.Info("Archives processed", zap.Int("archives", len(archives)), zap.Int64("records", records), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Archives processed", zap.Int("archives", len(plan)), zap.Int64("records", records), zap.Duration("elapsed", time.Since(start)))
 	}
 	return nil
 }
 
-func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger) error {
+func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Logger, plan []ArchiveManifestDecision) error {
 	start := time.Now()
+	var built int
+	var records int64
+	for _, decision := range plan {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !decision.Create {
+			continue
+		}
+		count, err := processArchive(ctx, nil, cfg, nil, decision, log)
+		if err != nil {
+			return err
+		}
+		built++
+		records += count
+	}
+	if log != nil {
+		log.Info("Archive manifests built", zap.Int("manifests", built), zap.Int64("records", records), zap.Duration("elapsed", time.Since(start)))
+	}
+	return nil
+}
+
+func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger, manifest DatabaseManifestDecision) error {
+	start := time.Now()
+	var manifestOut *manifestWriter
+	if manifest.Create {
+		var err error
+		manifestOut, err = newManifestWriter(manifest.ManifestPath)
+		if err != nil {
+			return err
+		}
+		defer manifestOut.Abort()
+		if log != nil {
+			log.Info("Database manifest creation started", zap.String("manifest", manifest.ManifestPath))
+		}
+	}
 	ids, err := repo.BookIDs(ctx, cfg.Processing.Process)
 	if err != nil {
 		return err
@@ -119,9 +176,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for batch := range jobs {
 				batchStart := time.Now()
 				sources, err := repo.BookSourcesByIDs(ctx, batch.IDs)
@@ -158,16 +213,13 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	go func() {
 		defer close(jobs)
 		for idx, start := 0, 0; start < len(ids); idx, start = idx+1, start+batchSize {
-			end := start + batchSize
-			if end > len(ids) {
-				end = len(ids)
-			}
+			end := min(start+batchSize, len(ids))
 			select {
 			case jobs <- dbBatch{Index: idx, IDs: ids[start:end]}:
 			case <-ctx.Done():
@@ -193,8 +245,15 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 				return err
 			}
 			writeStart := time.Now()
-			if err := out.Write(rec); err != nil {
-				return err
+			if out != nil {
+				if err := out.Write(rec); err != nil {
+					return err
+				}
+			}
+			if manifestOut != nil {
+				if err := manifestOut.Write(rec); err != nil {
+					return err
+				}
 			}
 			writeElapsed += time.Since(writeStart)
 			processed++
@@ -229,14 +288,48 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		return err
 	default:
 	}
+	if manifestOut != nil {
+		manifestStart := time.Now()
+		header := databaseManifestHeaderFor(cfg, manifest, processed)
+		if err := manifestOut.Close(header); err != nil {
+			return err
+		}
+		manifestOut = nil
+		if log != nil {
+			log.Info("Database manifest created", zap.String("manifest", manifest.ManifestPath), zap.Int64("records", processed), zap.Duration("elapsed", time.Since(manifestStart)))
+		}
+	}
 	if log != nil {
 		log.Info("Database processed", zap.Int64("records", processed), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
 	}
 	return nil
 }
 
-func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, path string, log *zap.Logger) (int64, error) {
+func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, decision ArchiveManifestDecision, log *zap.Logger) (int64, error) {
 	start := time.Now()
+	path := decision.ArchivePath
+	var manifestOut *manifestWriter
+	if decision.Create {
+		var err error
+		manifestOut, err = newManifestWriter(decision.ManifestPath)
+		if err != nil {
+			return 0, err
+		}
+		defer manifestOut.Abort()
+		if log != nil {
+			log.Info("Archive manifest creation started", zap.String("archive", path), zap.String("manifest", decision.ManifestPath))
+		}
+		if decision.ArchiveMD5 == "" {
+			md5Start := time.Now()
+			decision.ArchiveMD5, err = fileMD5(ctx, path)
+			if err != nil {
+				return 0, err
+			}
+			if log != nil {
+				log.Info("Archive checksum calculated", zap.String("archive", path), zap.Duration("elapsed", time.Since(md5Start)))
+			}
+		}
+	}
 	zr, err := zip.OpenReader(path)
 	if err != nil {
 		return 0, fmt.Errorf("open archive %q: %w", path, err)
@@ -283,9 +376,7 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for batch := range jobs {
 				records, timing, err := processArchiveBatch(ctx, repo, cfg, path, batch)
 				if err != nil {
@@ -305,15 +396,12 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 					return
 				}
 			}
-		}()
+		})
 	}
 	go func() {
 		defer close(jobs)
 		for start := 0; start < len(entries); start += batchSize {
-			end := start + batchSize
-			if end > len(entries) {
-				end = len(entries)
-			}
+			end := min(start+batchSize, len(entries))
 			select {
 			case jobs <- entries[start:end]:
 			case <-ctx.Done():
@@ -342,8 +430,15 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 				return err
 			}
 			writeStart := time.Now()
-			if err := out.Write(rec); err != nil {
-				return err
+			if out != nil {
+				if err := out.Write(rec); err != nil {
+					return err
+				}
+			}
+			if manifestOut != nil {
+				if err := manifestOut.Write(rec); err != nil {
+					return err
+				}
 			}
 			writeElapsed += time.Since(writeStart)
 			records++
@@ -378,6 +473,20 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		return records, err
 	default:
 	}
+	if manifestOut != nil {
+		manifestStart := time.Now()
+		header, err := archiveManifestHeaderFor(cfg, decision, records)
+		if err != nil {
+			return records, err
+		}
+		if err := manifestOut.Close(header); err != nil {
+			return records, err
+		}
+		manifestOut = nil
+		if log != nil {
+			log.Info("Archive manifest created", zap.String("archive", path), zap.String("manifest", decision.ManifestPath), zap.Int64("records", records), zap.Duration("elapsed", time.Since(manifestStart)))
+		}
+	}
 	if log != nil {
 		log.Info("Archive processed", zap.String("archive", path), zap.Int64("records", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("fb2_parse_elapsed", fb2ParseElapsed), zap.Duration("md5_elapsed", md5Elapsed), zap.Duration("fallback_lookup_elapsed", fallbackLookupElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
 	}
@@ -396,7 +505,7 @@ func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.C
 		}
 	}
 	sources := map[int64]model.DatabaseSource{}
-	if len(ids) > 0 {
+	if repo != nil && len(ids) > 0 {
 		var err error
 		dbStart := time.Now()
 		sources, err = repo.BookSourcesByIDs(ctx, ids)
@@ -443,7 +552,7 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 		},
 	}
 	rec.Source.Database = dbSource
-	if !rec.Source.Database.Present && !strings.EqualFold(ext, "fb2") {
+	if repo != nil && !rec.Source.Database.Present && !strings.EqualFold(ext, "fb2") {
 		lookupStart := time.Now()
 		id, err := repo.BookIDByFilename(ctx, filepath.Base(file.Name))
 		timing.FallbackLookupElapsed += time.Since(lookupStart)

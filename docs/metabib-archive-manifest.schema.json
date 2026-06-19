@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rupor-github/metabib/docs/metabib-archive-manifest.schema.json",
+  "title": "metabib archive manifest JSONL",
+  "oneOf": [
+    {"$ref": "#/$defs/header"},
+    {"$ref": "metabib.schema.json"}
+  ],
+  "$defs": {
+    "header": {
+      "type": "object",
+      "required": ["schema", "source", "processing", "created", "records"],
+      "properties": {
+        "schema": {"const": "metabib.archive_manifest/1"},
+        "source": {
+          "type": "object",
+          "required": ["path", "modified", "md5"],
+          "properties": {
+            "path": {"type": "string"},
+            "modified": {"type": "string"},
+            "md5": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        "processing": {"$ref": "#/$defs/processing"},
+        "created": {"type": "string"},
+        "records": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "processing": {
+      "type": "object",
+      "required": ["process", "parse_fb2", "fb2_description_tree", "archive_content_md5"],
+      "properties": {
+        "process": {"enum": ["fb2", "usr", "all"]},
+        "parse_fb2": {"type": "boolean"},
+        "fb2_description_tree": {"type": "boolean"},
+        "archive_content_md5": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -57,6 +57,20 @@ processing:
   # the parser stream, but still has to drain the whole entry after description.
   archive_content_md5: true
 
+  manifests:
+    # Use existing manifests when valid. Missing or stale manifests are created
+    # only when metabib cache --rebuild is specified.
+    enabled: true
+
+    # Empty keeps archive manifests next to archives and replaces the extension:
+    # /path/lib.zip -> /path/lib.manifest. When set, manifests are placed in this
+    # directory using the archive base name.
+    archive_dir: ""
+
+    # Empty keeps database manifest in the SQL dump directory as database.manifest.
+    # When set, database.manifest is placed in this directory.
+    database_dir: ""
+
   # Parallel workers for database-only JSONL export. 0 uses runtime CPU count.
   database_workers: 0
 

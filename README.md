@@ -1,9 +1,8 @@
 # metabib
 
 `metabib` extracts metadata from Flibusta-style SQL dumps and FB2 archives into
-JSON Lines. Each output record keeps database and FB2 metadata in separate
-source sections so later tools can decide how to merge or prefer fields when
-producing INPX or other formats.
+JSON Lines. It first builds cache manifests for database dumps and/or archives,
+then merges those cached artifacts into final JSONL.
 
 ## Current Scope
 
@@ -27,29 +26,53 @@ use an existing service instead, pass `--db-dsn` or `--db-use-service`.
 ## Usage
 
 ```sh
-metabib build /path/to/sql-dumps \
-  --archive /path/to/flibusta \
+metabib cache --rebuild \
+  --database-dumps /path/to/sql-dumps \
+  --archives /path/to/flibusta
+
+metabib merge \
+  --database-dumps /path/to/sql-dumps \
+  --archives /path/to/flibusta \
   --output metabib.jsonl
 ```
 
 To use an already imported database:
 
 ```sh
-metabib build --no-import --archive /path/to/flibusta --output metabib.jsonl
+metabib cache --rebuild --no-import --database-dumps /path/to/sql-dumps
 ```
 
 Force a clean managed database rebuild:
 
 ```sh
-metabib build /path/to/sql-dumps --archive /path/to/flibusta --db-overwrite
+metabib cache --rebuild --database-dumps /path/to/sql-dumps --db-overwrite
 ```
 
 Use an existing MariaDB service instead of a managed one:
 
 ```sh
-metabib build /path/to/sql-dumps --archive /path/to/flibusta \
+metabib cache --rebuild --database-dumps /path/to/sql-dumps \
   --db-dsn 'user:password@tcp(127.0.0.1:3306)/flibusta'
 ```
+
+Build only archive manifests without starting MariaDB:
+
+```sh
+metabib cache --rebuild --archives /path/to/flibusta
+```
+
+Merge from archives only, database only, or both:
+
+```sh
+metabib merge --archives /path/to/flibusta --output archive-only.jsonl
+metabib merge --database-dumps /path/to/sql-dumps --output database-only.jsonl
+metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/flibusta --output combined.jsonl
+```
+
+`merge` never starts MariaDB and never reads archives directly. It fails when a
+selected manifest is missing, invalid, or stale. Use `--check-md5` for full
+source checksum verification, or `--allow-stale` to warn and continue with stale
+manifests.
 
 When `output.part_size` or `--output-part-size` is used, output files are named
 with zero-padded book-id ranges so they sort naturally, for example:
