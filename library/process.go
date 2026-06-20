@@ -64,6 +64,7 @@ func ProcessArchives(
 	cfg *config.Config,
 	out *jsonl.Writer,
 	log *zap.Logger,
+	verbose bool,
 	plan []ArchiveManifestDecision,
 ) error {
 	start := time.Now()
@@ -93,7 +94,7 @@ func ProcessArchives(
 			records += count
 			continue
 		}
-		count, err := processArchive(ctx, repo, cfg, out, decision, log)
+		count, err := processArchive(ctx, repo, cfg, out, decision, log, verbose)
 		if err != nil {
 			return err
 		}
@@ -105,7 +106,7 @@ func ProcessArchives(
 	return nil
 }
 
-func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Logger, plan []ArchiveManifestDecision) error {
+func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Logger, verbose bool, plan []ArchiveManifestDecision) error {
 	start := time.Now()
 	var built int
 	var records int64
@@ -116,7 +117,7 @@ func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Log
 		if !decision.Create {
 			continue
 		}
-		count, err := processArchive(ctx, nil, cfg, nil, decision, log)
+		count, err := processArchive(ctx, nil, cfg, nil, decision, log, verbose)
 		if err != nil {
 			return err
 		}
@@ -129,7 +130,7 @@ func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Log
 	return nil
 }
 
-func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger, manifest DatabaseManifestDecision) error {
+func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger, verbose bool, manifest DatabaseManifestDecision) error {
 	start := time.Now()
 	var manifestOut *manifestWriter
 	if manifest.Create {
@@ -139,7 +140,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 			return err
 		}
 		defer manifestOut.Abort()
-		if log != nil {
+		if verbose && log != nil {
 			log.Info("Database manifest creation started", zap.String("manifest", manifest.ManifestPath))
 		}
 	}
@@ -160,7 +161,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	if workers > len(ids) && len(ids) > 0 {
 		workers = len(ids)
 	}
-	if log != nil {
+	if verbose && log != nil {
 		log.Info("Database processing started", zap.Int("workers", workers))
 	}
 
@@ -257,8 +258,15 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 			}
 			writeElapsed += time.Since(writeStart)
 			processed++
-			if cfg.Processing.Progress && log != nil && processed%progressInterval == 0 {
-				log.Info("Database processing progress", zap.Int64("processed", processed), zap.Int("total", len(ids)), zap.Int64("book_id", rec.ID.BookID), zap.Duration("elapsed", time.Since(progressStart)), zap.Duration("total_elapsed", time.Since(start)))
+			if verbose && log != nil && processed%progressInterval == 0 {
+				log.Info(
+					"Database processing progress",
+					zap.Int64("processed", processed),
+					zap.Int("total", len(ids)),
+					zap.Int64("book_id", rec.ID.BookID),
+					zap.Duration("elapsed", time.Since(start)),
+					zap.Duration("interval_elapsed", time.Since(progressStart)),
+				)
 				progressStart = time.Now()
 			}
 		}
@@ -294,9 +302,16 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		if err := manifestOut.Close(header); err != nil {
 			return err
 		}
+		manifestWriteElapsed := time.Since(manifestStart)
 		manifestOut = nil
 		if log != nil {
-			log.Info("Database manifest created", zap.String("manifest", manifest.ManifestPath), zap.Int64("records", processed), zap.Duration("elapsed", time.Since(manifestStart)))
+			log.Info(
+				"Database manifest created",
+				zap.String("manifest", manifest.ManifestPath),
+				zap.Int64("records", processed),
+				zap.Duration("elapsed", time.Since(start)),
+				zap.Duration("manifest_write_elapsed", manifestWriteElapsed),
+			)
 		}
 	}
 	if log != nil {
@@ -305,7 +320,15 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	return nil
 }
 
-func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, decision ArchiveManifestDecision, log *zap.Logger) (int64, error) {
+func processArchive(
+	ctx context.Context,
+	repo *db.Repository,
+	cfg *config.Config,
+	out *jsonl.Writer,
+	decision ArchiveManifestDecision,
+	log *zap.Logger,
+	verbose bool,
+) (int64, error) {
 	start := time.Now()
 	path := decision.ArchivePath
 	var manifestOut *manifestWriter
@@ -316,7 +339,7 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 			return 0, err
 		}
 		defer manifestOut.Abort()
-		if log != nil {
+		if verbose && log != nil {
 			log.Info("Archive manifest creation started", zap.String("archive", path), zap.String("manifest", decision.ManifestPath))
 		}
 		if decision.ArchiveMD5 == "" {
@@ -325,7 +348,7 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 			if err != nil {
 				return 0, err
 			}
-			if log != nil {
+			if verbose && log != nil {
 				log.Info("Archive checksum calculated", zap.String("archive", path), zap.Duration("elapsed", time.Since(md5Start)))
 			}
 		}
@@ -364,8 +387,18 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 	if batchSize <= 0 {
 		batchSize = 256
 	}
-	if log != nil {
-		log.Info("Archive processing started", zap.String("archive", path), zap.Int("entries", len(zr.File)), zap.Int("records", len(entries)), zap.Int("workers", workers), zap.Int("batch_size", batchSize), zap.Duration("open_elapsed", openElapsed), zap.Duration("entry_list_elapsed", entryListElapsed), zap.Duration("elapsed", time.Since(entryListStart)))
+	if verbose && log != nil {
+		log.Info(
+			"Archive processing started",
+			zap.String("archive", path),
+			zap.Int("entries", len(zr.File)),
+			zap.Int("records", len(entries)),
+			zap.Int("workers", workers),
+			zap.Int("batch_size", batchSize),
+			zap.Duration("elapsed", time.Since(start)),
+			zap.Duration("open_elapsed", openElapsed),
+			zap.Duration("entry_list_elapsed", entryListElapsed),
+		)
 	}
 
 	jobs := make(chan []archiveEntry, workers*2)
@@ -442,8 +475,16 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 			}
 			writeElapsed += time.Since(writeStart)
 			records++
-			if cfg.Processing.Progress && log != nil && records%progressInterval == 0 {
-				log.Info("Archive processing progress", zap.String("archive", path), zap.Int64("processed", records), zap.Int("records", len(entries)), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(progressStart)), zap.Duration("total_elapsed", time.Since(start)))
+			if verbose && log != nil && records%progressInterval == 0 {
+				log.Info(
+					"Archive processing progress",
+					zap.String("archive", path),
+					zap.Int64("processed", records),
+					zap.Int("records", len(entries)),
+					zap.Int("entries", len(zr.File)),
+					zap.Duration("elapsed", time.Since(start)),
+					zap.Duration("interval_elapsed", time.Since(progressStart)),
+				)
 				progressStart = time.Now()
 			}
 		}
@@ -482,12 +523,20 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		if err := manifestOut.Close(header); err != nil {
 			return records, err
 		}
+		manifestWriteElapsed := time.Since(manifestStart)
 		manifestOut = nil
 		if log != nil {
-			log.Info("Archive manifest created", zap.String("archive", path), zap.String("manifest", decision.ManifestPath), zap.Int64("records", records), zap.Duration("elapsed", time.Since(manifestStart)))
+			log.Info(
+				"Archive manifest created",
+				zap.String("archive", path),
+				zap.String("manifest", decision.ManifestPath),
+				zap.Int64("records", records),
+				zap.Duration("elapsed", time.Since(start)),
+				zap.Duration("manifest_write_elapsed", manifestWriteElapsed),
+			)
 		}
 	}
-	if log != nil {
+	if verbose && log != nil {
 		log.Info("Archive processed", zap.String("archive", path), zap.Int64("records", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("fb2_parse_elapsed", fb2ParseElapsed), zap.Duration("md5_elapsed", md5Elapsed), zap.Duration("fallback_lookup_elapsed", fallbackLookupElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
 	}
 	return records, nil

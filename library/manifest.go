@@ -128,7 +128,7 @@ func (r *manifestReadCloser) Close() error {
 	return r.file.Close()
 }
 
-func PlanArchives(ctx context.Context, cfg *config.Config, log *zap.Logger) ([]ArchiveManifestDecision, bool, error) {
+func PlanArchives(ctx context.Context, cfg *config.Config, checkMD5 bool, log *zap.Logger) ([]ArchiveManifestDecision, bool, error) {
 	archives, err := expandArchives(cfg.Processing.Archives)
 	if err != nil {
 		return nil, false, err
@@ -141,7 +141,7 @@ func PlanArchives(ctx context.Context, cfg *config.Config, log *zap.Logger) ([]A
 		}
 		decision := ArchiveManifestDecision{ArchivePath: archive}
 		if cfg.Processing.Manifests.Enabled {
-			decision, err = planArchiveManifest(ctx, cfg, archive, log)
+			decision, err = planArchiveManifest(ctx, cfg, archive, checkMD5, log)
 			if err != nil {
 				return nil, false, err
 			}
@@ -160,6 +160,7 @@ func PlanDatabaseManifest(
 	dumpDir string,
 	dumps []db.DumpFile,
 	dumpDate string,
+	checkMD5 bool,
 	log *zap.Logger,
 ) (DatabaseManifestDecision, error) {
 	decision := DatabaseManifestDecision{DumpDir: dumpDir, DumpDate: dumpDate}
@@ -179,17 +180,15 @@ func PlanDatabaseManifest(
 		if !os.IsNotExist(err) {
 			return decision, fmt.Errorf("stat database manifest %q: %w", manifestPath, err)
 		}
-		decision.Create = cfg.Processing.Rebuild
+		decision.Create = true
+		decision.Dumps, err = dumpSourcesWithMD5(ctx, dumps)
 		if log != nil {
 			log.Info(
 				"Database manifest missing",
 				zap.String("manifest", manifestPath),
-				zap.Bool("create", decision.Create),
+				zap.Bool("create", true),
 				zap.Duration("elapsed", time.Since(start)),
 			)
-		}
-		if decision.Create {
-			decision.Dumps, err = dumpSourcesWithMD5(ctx, dumps)
 		}
 		return decision, err
 	}
@@ -203,65 +202,80 @@ func PlanDatabaseManifest(
 			zap.Time("latest_dump_modified", latest),
 		)
 	}
-	if fresh && !cfg.Processing.Rebuild {
-		header, err := readDatabaseManifestHeader(manifestPath)
-		if err != nil {
-			return decision, err
+	header, err := readDatabaseManifestHeader(manifestPath)
+	if err == nil && databaseManifestLightMatches(header, cfg, dumpDir, dumpDate, dumpSources, true) {
+		if checkMD5 {
+			dumpSources, err = dumpSourcesWithMD5(ctx, dumps)
+			if err != nil {
+				return decision, err
+			}
+			decision.Dumps = dumpSources
+			if !databaseManifestMatches(header, cfg, dumpDir, dumpDate, dumpSources) {
+				if !cfg.Processing.Rebuild {
+					if log != nil {
+						log.Warn("Database manifest checksum does not match current dumps; run cache --rebuild to recreate it", zap.String("manifest", manifestPath))
+					}
+					return decision, nil
+				}
+				if log != nil {
+					log.Warn("Database manifest checksum does not match current dumps; rebuilding", zap.String("manifest", manifestPath))
+				}
+				decision.Create = true
+				return decision, nil
+			}
 		}
-		if !databaseManifestLightMatches(header, cfg, dumpDir, dumpDate, dumpSources, true) {
+		if fresh {
+			decision.Use = true
+			decision.Records = header.Records
 			if log != nil {
-				log.Warn("Database manifest does not match current processing inputs", zap.String("manifest", manifestPath))
+				message := "Database manifest selected"
+				if checkMD5 {
+					message = "Database manifest checksum verified"
+				}
+				log.Info(message, zap.String("manifest", manifestPath), zap.Int64("records", decision.Records), zap.Duration("elapsed", time.Since(start)))
 			}
 			return decision, nil
 		}
-		decision.Use = true
-		decision.Records = header.Records
-		if log != nil {
-			log.Info(
-				"Database manifest selected",
-				zap.String("manifest", manifestPath),
-				zap.Int64("records", decision.Records),
-				zap.Duration("elapsed", time.Since(start)),
-			)
+		if !cfg.Processing.Rebuild {
+			if log != nil {
+				log.Warn("Database manifest is stale; run cache --rebuild to recreate it", zap.String("manifest", manifestPath))
+			}
+			return decision, nil
 		}
+		if log != nil {
+			log.Warn("Database manifest is stale; rebuilding", zap.String("manifest", manifestPath))
+		}
+		dumpSources, err = dumpSourcesWithMD5(ctx, dumps)
+		if err != nil {
+			return decision, err
+		}
+		decision.Dumps = dumpSources
+		decision.Create = true
 		return decision, nil
 	}
-
-	if !cfg.Processing.Rebuild {
+	if err != nil {
+		if !cfg.Processing.Rebuild {
+			if log != nil {
+				log.Warn("Database manifest header could not be read; run cache --rebuild to recreate it", zap.String("manifest", manifestPath), zap.Error(err))
+			}
+			return decision, nil
+		}
 		if log != nil {
-			log.Info("Database manifest not used", zap.String("manifest", manifestPath), zap.Duration("elapsed", time.Since(start)))
+			log.Warn("Database manifest header could not be read; rebuilding", zap.String("manifest", manifestPath), zap.Error(err))
+		}
+	} else if !cfg.Processing.Rebuild {
+		if log != nil {
+			log.Warn("Database manifest does not match current inputs; run cache --rebuild to recreate it", zap.String("manifest", manifestPath))
 		}
 		return decision, nil
+	} else if log != nil {
+		log.Warn("Database manifest does not match current inputs; rebuilding", zap.String("manifest", manifestPath))
 	}
-
 	dumpSources, err = dumpSourcesWithMD5(ctx, dumps)
 	if err != nil {
 		return decision, err
 	}
 	decision.Dumps = dumpSources
-	header, err := readDatabaseManifestHeader(manifestPath)
-	if err == nil && databaseManifestMatches(header, cfg, dumpDir, dumpDate, dumpSources) {
-		if !fresh {
-			header.Source.Dumps = dumpSources
-			if err := rewriteManifestHeader(manifestPath, header); err != nil {
-				return decision, err
-			}
-		}
-		decision.Use = true
-		decision.Records = header.Records
-		if log != nil {
-			log.Info(
-				"Database manifest checksum verified",
-				zap.String("manifest", manifestPath),
-				zap.Int64("records", decision.Records),
-				zap.Duration("elapsed", time.Since(start)),
-			)
-		}
-		return decision, nil
-	}
-	if err != nil && log != nil {
-		log.Warn("Database manifest header could not be read; rebuilding", zap.String("manifest", manifestPath), zap.Error(err))
-	}
 	decision.Create = true
 	if log != nil {
 		log.Info("Database manifest will be rebuilt", zap.String("manifest", manifestPath), zap.Duration("elapsed", time.Since(start)))
@@ -520,7 +534,7 @@ func (w *manifestWriter) Abort() error {
 	return nil
 }
 
-func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string, log *zap.Logger) (ArchiveManifestDecision, error) {
+func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string, checkMD5 bool, log *zap.Logger) (ArchiveManifestDecision, error) {
 	start := time.Now()
 	manifestPath := archiveManifestPath(cfg, archive)
 	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
@@ -533,13 +547,13 @@ func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string
 		if !os.IsNotExist(err) {
 			return decision, fmt.Errorf("stat archive manifest %q: %w", manifestPath, err)
 		}
-		decision.Create = cfg.Processing.Rebuild
+		decision.Create = true
 		if log != nil {
-			log.Info(
+			log.Debug(
 				"Archive manifest missing",
 				zap.String("archive", archive),
 				zap.String("manifest", manifestPath),
-				zap.Bool("create", decision.Create),
+				zap.Bool("create", true),
 				zap.Duration("elapsed", time.Since(start)),
 			)
 		}
@@ -548,7 +562,7 @@ func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string
 
 	fresh := manifestInfo.ModTime().After(archiveInfo.ModTime())
 	if !fresh && log != nil {
-		log.Warn(
+		log.Debug(
 			"Archive manifest is older than source archive",
 			zap.String("archive", archive),
 			zap.String("manifest", manifestPath),
@@ -556,75 +570,96 @@ func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string
 			zap.Time("manifest_modified", manifestInfo.ModTime()),
 		)
 	}
-	if fresh && !cfg.Processing.Rebuild {
-		header, err := readArchiveManifestHeader(manifestPath)
-		if err != nil {
-			return decision, err
+	header, err := readArchiveManifestHeader(manifestPath)
+	if err == nil && archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), true) {
+		if checkMD5 {
+			archiveMD5, err := fileMD5(ctx, archive)
+			if err != nil {
+				return decision, err
+			}
+			decision.ArchiveMD5 = archiveMD5
+			if !archiveManifestMatches(header, cfg, archive, archiveMD5) {
+				if !cfg.Processing.Rebuild {
+					if log != nil {
+						log.Warn(
+							"Archive manifest checksum does not match source archive; run cache --rebuild to recreate it",
+							zap.String("archive", archive),
+							zap.String("manifest", manifestPath),
+						)
+					}
+					return decision, nil
+				}
+				if log != nil {
+					log.Warn("Archive manifest checksum does not match source archive; rebuilding", zap.String("archive", archive), zap.String("manifest", manifestPath))
+				}
+				decision.Create = true
+				return decision, nil
+			}
 		}
-		if !archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), true) {
+		if fresh {
+			decision.Use = true
+			decision.Records = header.Records
 			if log != nil {
-				log.Warn("Archive manifest does not match current processing inputs", zap.String("archive", archive), zap.String("manifest", manifestPath))
+				message := "Archive manifest selected"
+				if checkMD5 {
+					message = "Archive manifest checksum verified"
+				}
+				log.Debug(
+					message,
+					zap.String("archive", archive),
+					zap.String("manifest", manifestPath),
+					zap.Int64("records", decision.Records),
+					zap.Duration("elapsed", time.Since(start)),
+				)
 			}
 			return decision, nil
 		}
-		decision.Use = true
-		decision.Records = header.Records
-		if log != nil {
-			log.Info(
-				"Archive manifest selected",
-				zap.String("archive", archive),
-				zap.String("manifest", manifestPath),
-				zap.Int64("records", decision.Records),
-				zap.Duration("elapsed", time.Since(start)),
-			)
-		}
-		return decision, nil
-	}
-
-	if !cfg.Processing.Rebuild {
-		if log != nil {
-			log.Info(
-				"Archive manifest not used",
-				zap.String("archive", archive),
-				zap.String("manifest", manifestPath),
-				zap.Duration("elapsed", time.Since(start)),
-			)
-		}
-		return decision, nil
-	}
-
-	archiveMD5, err := fileMD5(ctx, archive)
-	if err != nil {
-		return decision, err
-	}
-	decision.ArchiveMD5 = archiveMD5
-	header, err := readArchiveManifestHeader(manifestPath)
-	if err == nil && archiveManifestMatches(header, cfg, archive, archiveMD5) {
-		if !fresh {
-			header.Source.Modified = archiveInfo.ModTime().Format(time.RFC3339Nano)
-			if err := rewriteManifestHeader(manifestPath, header); err != nil {
-				return decision, err
+		if !cfg.Processing.Rebuild {
+			if log != nil {
+				log.Warn(
+					"Archive manifest is stale; run cache --rebuild to recreate it",
+					zap.String("archive", archive),
+					zap.String("manifest", manifestPath),
+				)
 			}
+			return decision, nil
 		}
-		decision.Use = true
-		decision.Records = header.Records
 		if log != nil {
-			log.Info(
-				"Archive manifest checksum verified",
+			log.Warn("Archive manifest is stale; rebuilding", zap.String("archive", archive), zap.String("manifest", manifestPath))
+		}
+		decision.Create = true
+		return decision, nil
+	}
+	if err != nil {
+		if !cfg.Processing.Rebuild {
+			if log != nil {
+				log.Warn(
+					"Archive manifest header could not be read; run cache --rebuild to recreate it",
+					zap.String("archive", archive),
+					zap.String("manifest", manifestPath),
+					zap.Error(err),
+				)
+			}
+			return decision, nil
+		}
+		if log != nil {
+			log.Warn("Archive manifest header could not be read; rebuilding", zap.String("archive", archive), zap.String("manifest", manifestPath), zap.Error(err))
+		}
+	} else if !cfg.Processing.Rebuild {
+		if log != nil {
+			log.Warn(
+				"Archive manifest does not match current inputs; run cache --rebuild to recreate it",
 				zap.String("archive", archive),
 				zap.String("manifest", manifestPath),
-				zap.Int64("records", decision.Records),
-				zap.Duration("elapsed", time.Since(start)),
 			)
 		}
 		return decision, nil
-	}
-	if err != nil && log != nil {
-		log.Warn("Archive manifest header could not be read; rebuilding", zap.String("manifest", manifestPath), zap.Error(err))
+	} else if log != nil {
+		log.Warn("Archive manifest does not match current inputs; rebuilding", zap.String("archive", archive), zap.String("manifest", manifestPath))
 	}
 	decision.Create = true
 	if log != nil {
-		log.Info(
+		log.Debug(
 			"Archive manifest will be rebuilt",
 			zap.String("archive", archive),
 			zap.String("manifest", manifestPath),
@@ -718,6 +753,10 @@ func logManifestReport(log *zap.Logger, report ManifestReport) {
 	}
 	if report.Reason != "" {
 		fields = append(fields, zap.String("reason", report.Reason))
+	}
+	if report.Ready(false) && report.Kind == "archive" {
+		log.Debug("Manifest ready", fields...)
+		return
 	}
 	if report.Ready(false) {
 		log.Info("Manifest ready", fields...)
@@ -813,56 +852,6 @@ func readManifestHeader(path string, header any) error {
 	}
 	if err := jsonv2.Unmarshal(s.Bytes(), header); err != nil {
 		return fmt.Errorf("decode manifest header %q: %w", path, err)
-	}
-	return nil
-}
-
-func rewriteManifestHeader(path string, header any) error {
-	r, err := openManifestReader(path)
-	if err != nil {
-		return err
-	}
-	reader := bufio.NewReader(r)
-	if _, err := reader.ReadBytes('\n'); err != nil {
-		r.Close()
-		if err == io.EOF {
-			return fmt.Errorf("manifest %q has no header line", path)
-		}
-		return fmt.Errorf("read manifest header %q: %w", path, err)
-	}
-
-	tmpPath := path + ".tmp"
-	out, enc, err := createCompressedManifest(tmpPath)
-	if err != nil {
-		r.Close()
-		return err
-	}
-	if err := writeJSONLValue(enc, header); err != nil {
-		r.Close()
-		enc.Close()
-		out.Close()
-		return fmt.Errorf("write manifest header %q: %w", tmpPath, err)
-	}
-	if _, err := io.Copy(enc, reader); err != nil {
-		r.Close()
-		enc.Close()
-		out.Close()
-		return fmt.Errorf("copy manifest records %q: %w", path, err)
-	}
-	if err := r.Close(); err != nil {
-		enc.Close()
-		out.Close()
-		return fmt.Errorf("close manifest %q: %w", path, err)
-	}
-	if err := enc.Close(); err != nil {
-		out.Close()
-		return fmt.Errorf("close manifest compressor %q: %w", tmpPath, err)
-	}
-	if err := out.Close(); err != nil {
-		return fmt.Errorf("close manifest %q: %w", tmpPath, err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return fmt.Errorf("rename manifest %q to %q: %w", tmpPath, path, err)
 	}
 	return nil
 }

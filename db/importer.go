@@ -29,17 +29,18 @@ type DumpFile struct {
 }
 
 type Importer struct {
-	cfg    config.DatabaseConfig
-	client string
-	log    *zap.Logger
-	logOut io.Writer
+	cfg     config.DatabaseConfig
+	client  string
+	log     *zap.Logger
+	logOut  io.Writer
+	verbose bool
 }
 
-func NewImporter(cfg config.DatabaseConfig, client string, log *zap.Logger, logOut io.Writer) *Importer {
+func NewImporter(cfg config.DatabaseConfig, client string, log *zap.Logger, logOut io.Writer, verbose bool) *Importer {
 	if logOut == nil {
 		logOut = io.Discard
 	}
-	return &Importer{cfg: cfg, client: client, log: log, logOut: logOut}
+	return &Importer{cfg: cfg, client: client, log: log, logOut: logOut, verbose: verbose}
 }
 
 func DiscoverDumps(dir string) ([]DumpFile, string, error) {
@@ -118,13 +119,24 @@ func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
 			return err
 		}
 	}
-	for _, dump := range dumps {
+	for idx, dump := range dumps {
 		dumpStart := time.Now()
 		if err := i.importDump(ctx, client, dump); err != nil {
 			return err
 		}
 		if i.log != nil {
-			i.log.Info("SQL dump imported", zap.String("file", dump.Path), zap.Duration("elapsed", time.Since(dumpStart)))
+			if i.verbose {
+				i.log.Info(
+					"SQL dump import progress",
+					zap.String("file", dump.Path),
+					zap.Int("file_index", idx+1),
+					zap.Int("files", len(dumps)),
+					zap.Duration("elapsed", time.Since(start)),
+					zap.Duration("dump_elapsed", time.Since(dumpStart)),
+				)
+			} else {
+				i.log.Debug("SQL dump imported", zap.String("file", dump.Path), zap.Duration("dump_elapsed", time.Since(dumpStart)))
+			}
 		}
 	}
 	if i.log != nil {
@@ -226,10 +238,7 @@ func readDumpDate(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("stat dump %q: %w", path, err)
 	}
-	start := st.Size() - 4096
-	if start < 0 {
-		start = 0
-	}
+	start := max(st.Size()-4096, 0)
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
 		return "", fmt.Errorf("seek dump %q: %w", path, err)
 	}

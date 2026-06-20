@@ -24,4 +24,4 @@
 - Archive processing is parallel within one archive; archives themselves are processed sequentially.
 - `archive_content_md5: true` is expensive because it forces reading/decompressing the whole archive entry after FB2 description parsing; turn it off for fast archive runs.
 - `fb2_description_tree: false` keeps only `title_info` and is faster/smaller than preserving the full FB2 `<description>` tree.
-- Periodic progress logs are disabled by default; enable with `--progress` or `processing.progress: true`.
+- Detailed progress logs are disabled by default; enable with global `--verbose`.

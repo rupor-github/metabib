@@ -86,9 +86,6 @@ processing:
   # 0 disables explicit buffering and uses reader defaults.
   archive_read_buffer_size: 262144
 
-  # Periodically report per-batch processing progress at info level.
-  progress: false
-
   # If archive paths are not specified on command line, these paths are used.
   archives: []
 
@@ -104,7 +101,7 @@ output:
 logging:
   # controls terminal (stdout, stderr) output
   console:
-    # "none" suppresses regular progress and MariaDB output on console.
+    # "none" suppresses regular application and MariaDB output on console.
     level: normal
 
   # controls logging to a file. MariaDB server/client output goes here by default.

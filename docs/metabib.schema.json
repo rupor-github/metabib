@@ -55,8 +55,7 @@
         "sequences": {"type": "array", "items": {"type": "object"}},
         "rating": {"type": "object"},
         "filenames": {"type": "array", "items": {"type": "string"}},
-        "joined_books": {"type": "array", "items": {"type": "object"}},
-        "recommendations": {"type": "array", "items": {"type": "object"}}
+        "joined_books": {"type": "array", "items": {"type": "object"}}
       },
       "additionalProperties": false
     },

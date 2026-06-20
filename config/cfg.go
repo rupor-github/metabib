@@ -60,7 +60,6 @@ type ProcessingConfig struct {
 	ArchiveWorkers       int            `yaml:"archive_workers" validate:"min=0"`
 	ArchiveBatchSize     int            `yaml:"archive_batch_size" validate:"min=1"`
 	ArchiveReadBuffer    int            `yaml:"archive_read_buffer_size" validate:"min=0"`
-	Progress             bool           `yaml:"progress"`
 	Archives             []string       `yaml:"archives" validate:"dive,required"`
 	OnlineWhenNoArchives bool           `yaml:"online_when_no_archives"`
 	Rebuild              bool           `yaml:"-"`

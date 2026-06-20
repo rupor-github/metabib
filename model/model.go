@@ -30,16 +30,15 @@ type RecordSources struct {
 }
 
 type DatabaseSource struct {
-	Present         bool               `json:"present"`
-	Book            *DBBook            `json:"book,omitempty"`
-	Authors         []Contributor      `json:"authors,omitempty"`
-	Translators     []Contributor      `json:"translators,omitempty"`
-	Genres          []DBGenre          `json:"genres,omitempty"`
-	Sequences       []DBSequence       `json:"sequences,omitempty"`
-	Rating          *DBRating          `json:"rating,omitempty"`
-	Filenames       []string           `json:"filenames,omitempty"`
-	JoinedBooks     []DBJoinedBook     `json:"joined_books,omitempty"`
-	Recommendations []DBRecommendation `json:"recommendations,omitempty"`
+	Present     bool           `json:"present"`
+	Book        *DBBook        `json:"book,omitempty"`
+	Authors     []Contributor  `json:"authors,omitempty"`
+	Translators []Contributor  `json:"translators,omitempty"`
+	Genres      []DBGenre      `json:"genres,omitempty"`
+	Sequences   []DBSequence   `json:"sequences,omitempty"`
+	Rating      *DBRating      `json:"rating,omitempty"`
+	Filenames   []string       `json:"filenames,omitempty"`
+	JoinedBooks []DBJoinedBook `json:"joined_books,omitempty"`
 }
 
 type DBBook struct {
@@ -102,13 +101,6 @@ type DBJoinedBook struct {
 	BadID  int64  `json:"bad_id,omitempty"`
 	GoodID int64  `json:"good_id,omitempty"`
 	RealID int64  `json:"real_id,omitempty"`
-}
-
-type DBRecommendation struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id,omitempty"`
-	BookID    int64  `json:"book_id,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
 }
 
 type FB2Source struct {

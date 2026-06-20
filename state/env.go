@@ -13,10 +13,11 @@ import (
 type envKey struct{}
 
 type LocalEnv struct {
-	Cfg   *config.Config
-	Log   *zap.Logger
-	LogIO io.WriteCloser
-	start time.Time
+	Cfg     *config.Config
+	Log     *zap.Logger
+	LogIO   io.WriteCloser
+	Verbose bool
+	start   time.Time
 }
 
 func EnvFromContext(ctx context.Context) *LocalEnv {

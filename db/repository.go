@@ -159,9 +159,6 @@ func (r *Repository) BookByID(ctx context.Context, id int64) (model.DatabaseSour
 	if src.JoinedBooks, err = r.joinedBooks(ctx, id); err != nil {
 		return src, err
 	}
-	if src.Recommendations, err = r.recommendations(ctx, id); err != nil {
-		return src, err
-	}
 	return src, nil
 }
 
@@ -202,9 +199,6 @@ func (r *Repository) BookSourcesByIDs(ctx context.Context, ids []int64) (map[int
 		return nil, err
 	}
 	if err := r.attachJoinedBooks(ctx, ids, out); err != nil {
-		return nil, err
-	}
-	if err := r.attachRecommendations(ctx, ids, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -444,33 +438,6 @@ func (r *Repository) attachJoinedBooks(ctx context.Context, ids []int64, out map
 	return rows.Err()
 }
 
-func (r *Repository) attachRecommendations(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource) error {
-	if ok, err := r.tableExists(ctx, "librecs"); err != nil || !ok {
-		return err
-	}
-	query, args := inQuery(`SELECT id, uid, bid, timestamp FROM librecs WHERE bid IN (`, ids, `) ORDER BY bid, id`)
-	rows, err := r.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("query recommendations batch: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var rec model.DBRecommendation
-		var uid, bid sql.NullInt64
-		var timestamp sql.NullTime
-		if err := rows.Scan(&rec.ID, &uid, &bid, &timestamp); err != nil {
-			return fmt.Errorf("scan recommendation batch: %w", err)
-		}
-		rec.UserID = uid.Int64
-		rec.BookID = bid.Int64
-		rec.Timestamp = formatTime(timestamp)
-		src := out[rec.BookID]
-		src.Recommendations = append(src.Recommendations, rec)
-		out[rec.BookID] = src
-	}
-	return rows.Err()
-}
-
 func (r *Repository) book(ctx context.Context, id int64) (*model.DBBook, bool, error) {
 	if ok, err := r.tableExists(ctx, "libbook"); err != nil || !ok {
 		return nil, false, err
@@ -659,31 +626,6 @@ SELECT Id, Time, BadId, GoodId, COALESCE(realId, 0)
 		}
 		jb.Time = formatTime(tm)
 		out = append(out, jb)
-	}
-	return out, rows.Err()
-}
-
-func (r *Repository) recommendations(ctx context.Context, id int64) ([]model.DBRecommendation, error) {
-	if ok, err := r.tableExists(ctx, "librecs"); err != nil || !ok {
-		return nil, err
-	}
-	rows, err := r.db.QueryContext(ctx, "SELECT id, uid, bid, timestamp FROM librecs WHERE bid = ? ORDER BY id", id)
-	if err != nil {
-		return nil, fmt.Errorf("query recommendations for book %d: %w", id, err)
-	}
-	defer rows.Close()
-	var out []model.DBRecommendation
-	for rows.Next() {
-		var rec model.DBRecommendation
-		var uid, bid sql.NullInt64
-		var timestamp sql.NullTime
-		if err := rows.Scan(&rec.ID, &uid, &bid, &timestamp); err != nil {
-			return nil, fmt.Errorf("scan recommendation: %w", err)
-		}
-		rec.UserID = uid.Int64
-		rec.BookID = bid.Int64
-		rec.Timestamp = formatTime(timestamp)
-		out = append(out, rec)
 	}
 	return out, rows.Err()
 }

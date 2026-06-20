@@ -42,6 +42,7 @@ func initializeAppContext(ctx context.Context, cmd *cli.Command) (context.Contex
 	}
 	env := state.EnvFromContext(ctx)
 	env.Cfg = cfg
+	env.Verbose = cmd.Bool("verbose")
 	if env.Log, env.LogIO, err = cfg.Logging.Prepare(misc.GetAppName()); err != nil {
 		return ctx, fmt.Errorf("unable to prepare logs: %w", err)
 	}
@@ -80,6 +81,7 @@ func main() {
 		After:           destroyAppContext,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Aliases: []string{"c"}, DefaultText: "", Usage: "load configuration from `FILE` (YAML)"},
+			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "enable detailed progress reporting"},
 		},
 		Commands: []*cli.Command{
 			cacheCommand(),
@@ -117,8 +119,8 @@ func cacheCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "database-dumps", Usage: "directory containing SQL dumps for database manifest"},
 			&cli.StringSliceFlag{Name: "archives", Aliases: []string{"a"}, Usage: "archive file or directory with archives; can be repeated"},
-			&cli.BoolFlag{Name: "progress", Usage: "periodically log processing progress at info level"},
-			&cli.BoolFlag{Name: "rebuild", Usage: "rebuild stale, missing, or invalid manifests and verify manifest checksums"},
+			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in existing manifests"},
+			&cli.BoolFlag{Name: "rebuild", Usage: "rebuild stale or invalid existing manifests after checksum verification"},
 			&cli.BoolFlag{Name: "no-import", Usage: "skip SQL dump import and use existing database"},
 			&cli.StringFlag{Name: "db-name", Usage: "database name"},
 			&cli.StringFlag{Name: "db-host", Usage: "database host or socket path"},
@@ -182,17 +184,16 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	var reports []library.ManifestReport
+	checkMD5 := cmd.Bool("check-md5")
 	if selectedArchives {
-		if cfg.Processing.Rebuild {
-			archivePlan, _, err := library.PlanArchives(ctx, cfg, env.Log)
-			if err != nil {
-				return err
-			}
-			if err := library.BuildArchiveManifests(ctx, cfg, env.Log, archivePlan); err != nil {
-				return err
-			}
+		archivePlan, _, err := library.PlanArchives(ctx, cfg, checkMD5, env.Log)
+		if err != nil {
+			return err
 		}
-		_, archiveReports, err := library.ValidateArchiveManifests(ctx, cfg, false, env.Log)
+		if err := library.BuildArchiveManifests(ctx, cfg, env.Log, env.Verbose, archivePlan); err != nil {
+			return err
+		}
+		_, archiveReports, err := library.ValidateArchiveManifests(ctx, cfg, checkMD5, env.Log)
 		if err != nil {
 			return err
 		}
@@ -200,44 +201,42 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if selectedDatabase {
-		if cfg.Processing.Rebuild {
-			databaseManifest, err := library.PlanDatabaseManifest(ctx, cfg, dumpDir, dumps, dumpDate, env.Log)
+		databaseManifest, err := library.PlanDatabaseManifest(ctx, cfg, dumpDir, dumps, dumpDate, checkMD5, env.Log)
+		if err != nil {
+			return err
+		}
+		if !databaseManifest.Use && databaseManifest.Create {
+			var logOut io.Writer = os.Stderr
+			if env.LogIO != nil {
+				logOut = env.LogIO
+			}
+			runtime, err := db.PrepareRuntime(ctx, cfg.Database, env.Log, logOut)
 			if err != nil {
 				return err
 			}
-			if !databaseManifest.Use && databaseManifest.Create {
-				var logOut io.Writer = os.Stderr
-				if env.LogIO != nil {
-					logOut = env.LogIO
-				}
-				runtime, err := db.PrepareRuntime(ctx, cfg.Database, env.Log, logOut)
-				if err != nil {
+			defer runtime.Close()
+			cfg.Database = runtime.Config
+
+			if cfg.Database.Import {
+				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose)
+				if err := importer.PrepareDatabase(ctx); err != nil {
 					return err
 				}
-				defer runtime.Close()
-				cfg.Database = runtime.Config
-
-				if cfg.Database.Import {
-					importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut)
-					if err := importer.PrepareDatabase(ctx); err != nil {
-						return err
-					}
-					if err := importer.ImportDumps(ctx, dumps); err != nil {
-						return err
-					}
-				}
-
-				repo, err := db.Open(ctx, cfg.Database)
-				if err != nil {
-					return err
-				}
-				defer repo.Close()
-				if err := library.ProcessDatabase(ctx, repo, cfg, nil, env.Log, databaseManifest); err != nil {
+				if err := importer.ImportDumps(ctx, dumps); err != nil {
 					return err
 				}
 			}
+
+			repo, err := db.Open(ctx, cfg.Database)
+			if err != nil {
+				return err
+			}
+			defer repo.Close()
+			if err := library.ProcessDatabase(ctx, repo, cfg, nil, env.Log, env.Verbose, databaseManifest); err != nil {
+				return err
+			}
 		}
-		_, report, err := library.ValidateDatabaseManifest(ctx, cfg, dumpDir, dumps, dumpDate, false, env.Log)
+		_, report, err := library.ValidateDatabaseManifest(ctx, cfg, dumpDir, dumps, dumpDate, checkMD5, env.Log)
 		if err != nil {
 			return err
 		}
@@ -428,9 +427,6 @@ func failIfReportsNotReady(reports []library.ManifestReport, allowStale bool) er
 func applyCacheOverrides(cfg *config.Config, cmd *cli.Command) {
 	if archives := cmd.StringSlice("archives"); len(archives) > 0 {
 		cfg.Processing.Archives = archives
-	}
-	if cmd.Bool("progress") {
-		cfg.Processing.Progress = true
 	}
 	if cmd.Bool("rebuild") {
 		cfg.Processing.Rebuild = true

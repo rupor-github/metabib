@@ -11,7 +11,7 @@ then merges those cached artifacts into final JSONL.
   datadir automatically when needed;
 - imports `*.sql` dumps with the discovered `mariadb` or `mysql` client;
 - queries the imported MariaDB database for book, author, translator, genre,
-  sequence, rating, filename, joined-book, and recommendation metadata;
+  sequence, rating, filename, and joined-book metadata;
 - walks FB2 entries in provided `.zip` archives or archive directories;
 - parses FB2 `<description>/<title-info>` metadata while preserving the full
   parsed `<description>` tree;
@@ -25,7 +25,7 @@ use an existing service instead, pass `--db-dsn` or `--db-use-service`.
 ## Usage
 
 ```sh
-metabib cache --rebuild \
+metabib cache \
   --database-dumps /path/to/sql-dumps \
   --archives /path/to/flibusta
 
@@ -57,8 +57,13 @@ metabib cache --rebuild --database-dumps /path/to/sql-dumps \
 Build only archive manifests without starting MariaDB:
 
 ```sh
-metabib cache --rebuild --archives /path/to/flibusta
+metabib cache --archives /path/to/flibusta
 ```
+
+`cache` builds missing selected manifests by default. Existing manifests are
+checked using source modification times; stale or invalid manifests fail unless
+`--rebuild` is used. Use `cache --check-md5` to additionally verify MD5 checksums
+recorded in existing manifests.
 
 Merge from archives only, database only, or both:
 
@@ -75,6 +80,8 @@ manifests.
 
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
 for example `lib.manifest.zst` or `database.manifest.zst`.
+
+Use global `--verbose` to enable detailed progress reporting.
 
 When `output.part_size` or `--output-part-size` is used, output files are named
 with zero-padded book-id ranges so they sort naturally, for example:
