@@ -1,0 +1,117 @@
+package db
+
+import (
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"metabib/config"
+)
+
+func TestDiscoverDumps(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeDump(t, dir, "b.sql", "-- Dump completed on 2026-06-20  2:19:33\n")
+	writeDump(t, dir, "a.sql", "-- Dump completed on 2026-06-20  12:00:01\n")
+	if err := os.WriteFile(filepath.Join(dir, "ignored.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write ignored file: %v", err)
+	}
+
+	dumps, dumpDate, err := DiscoverDumps(dir, false)
+	if err != nil {
+		t.Fatalf("DiscoverDumps() error = %v", err)
+	}
+	if dumpDate != "2026-06-20" {
+		t.Fatalf("dumpDate = %q", dumpDate)
+	}
+	if len(dumps) != 2 || dumps[0].Name != "a.sql" || dumps[1].Name != "b.sql" {
+		t.Fatalf("dumps not sorted or wrong length: %#v", dumps)
+	}
+	if dumps[1].DumpCompleted != "2026-06-20T02:19:33" {
+		t.Fatalf("DumpCompleted = %q", dumps[1].DumpCompleted)
+	}
+}
+
+func TestDiscoverDumpsDateMismatch(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeDump(t, dir, "a.sql", "-- Dump completed on 2026-06-20  2:19:33\n")
+	writeDump(t, dir, "b.sql", "-- Dump completed on 2026-06-21  2:19:33\n")
+
+	if _, _, err := DiscoverDumps(dir, false); err == nil {
+		t.Fatal("DiscoverDumps() error = nil, want date mismatch")
+	}
+	dumps, dumpDate, err := DiscoverDumps(dir, true)
+	if err != nil {
+		t.Fatalf("DiscoverDumps(allow mismatch) error = %v", err)
+	}
+	if dumpDate != "" {
+		t.Fatalf("dumpDate = %q, want empty", dumpDate)
+	}
+	if dumps[0].DumpDate == "" || dumps[1].DumpDate == "" {
+		t.Fatalf("per-file dates were not preserved: %#v", dumps)
+	}
+}
+
+func TestClientArgs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  config.DatabaseConfig
+		want []string
+	}{
+		{
+			name: "tcp passwordless disables ssl",
+			cfg:  config.DatabaseConfig{Protocol: "tcp", Host: "127.0.0.1", Port: 3306, User: "root", Name: "lib"},
+			want: []string{"--protocol", "tcp", "--host", "127.0.0.1", "--port", "3306", "--skip-ssl", "lib"},
+		},
+		{
+			name: "unix socket",
+			cfg:  config.DatabaseConfig{Protocol: "unix", Host: "/tmp/metabib.sock", User: "root", Password: "pw", Name: "lib"},
+			want: []string{"--socket", "/tmp/metabib.sock", "--password=pw", "lib"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args, err := NewImporter(tt.cfg, "", nil, nil, false, true, false).clientArgs()
+			if err != nil {
+				t.Fatalf("clientArgs() error = %v", err)
+			}
+			for _, want := range tt.want {
+				if !contains(args, want) {
+					t.Fatalf("clientArgs() = %#v, missing %q", args, want)
+				}
+			}
+		})
+	}
+}
+
+func TestHelpers(t *testing.T) {
+	t.Parallel()
+
+	if host, port := splitHostPortDefault(":3307", "127.0.0.1", "3306"); host != "127.0.0.1" || port != "3307" {
+		t.Fatalf("splitHostPortDefault() = %q, %q", host, port)
+	}
+	if got := quoteIdentifier("a`b"); got != "`a``b`" {
+		t.Fatalf("quoteIdentifier() = %q", got)
+	}
+	if got := zeroPadHour("2:19:33"); got != "02:19:33" {
+		t.Fatalf("zeroPadHour() = %q", got)
+	}
+}
+
+func writeDump(t *testing.T, dir string, name string, footer string) {
+	t.Helper()
+	data := []byte("CREATE TABLE x (id int);\n" + footer)
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0o644); err != nil {
+		t.Fatalf("write dump %q: %v", name, err)
+	}
+}
+
+func contains(values []string, want string) bool {
+	return slices.Contains(values, want)
+}
