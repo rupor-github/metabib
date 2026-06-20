@@ -38,6 +38,7 @@
         "path": {"type": "string"},
         "name": {"type": "string"},
         "dump_date": {"type": "string"},
+        "dump_completed": {"type": "string"},
         "modified": {"type": "string"},
         "md5": {"type": "string"}
       },

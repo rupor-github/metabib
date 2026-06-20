@@ -23,9 +23,10 @@ import (
 )
 
 type DumpFile struct {
-	Path     string
-	Name     string
-	DumpDate string
+	Path          string
+	Name          string
+	DumpDate      string
+	DumpCompleted string
 }
 
 type Importer struct {
@@ -43,29 +44,42 @@ func NewImporter(cfg config.DatabaseConfig, client string, log *zap.Logger, logO
 	return &Importer{cfg: cfg, client: client, log: log, logOut: logOut, verbose: verbose}
 }
 
-func DiscoverDumps(dir string) ([]DumpFile, string, error) {
+func DiscoverDumps(dir string, allowDateMismatch bool) ([]DumpFile, string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, "", fmt.Errorf("read dump directory %q: %w", dir, err)
 	}
 	dumps := make([]DumpFile, 0, len(entries))
 	dumpDate := ""
+	firstDumpDate := ""
+	dateMismatch := false
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".sql") {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		date, err := readDumpDate(path)
+		date, completed, err := readDumpCompleted(path)
 		if err != nil {
 			return nil, "", err
 		}
 		if date != "" {
+			if firstDumpDate == "" {
+				firstDumpDate = date
+			}
 			if dumpDate != "" && dumpDate != date {
-				return nil, "", fmt.Errorf("dump files have different dates: %s and %s", dumpDate, date)
+				if !allowDateMismatch {
+					return nil, "", fmt.Errorf("dump files have different dates: %s and %s", dumpDate, date)
+				}
+				dateMismatch = true
 			}
 			dumpDate = date
 		}
-		dumps = append(dumps, DumpFile{Path: path, Name: entry.Name(), DumpDate: date})
+		dumps = append(dumps, DumpFile{Path: path, Name: entry.Name(), DumpDate: date, DumpCompleted: completed})
+	}
+	if dateMismatch {
+		dumpDate = ""
+	} else {
+		dumpDate = firstDumpDate
 	}
 	sort.Slice(dumps, func(i, j int) bool { return dumps[i].Name < dumps[j].Name })
 	return dumps, dumpDate, nil
@@ -227,33 +241,44 @@ func splitHostPortDefault(addr string, defaultHost string, defaultPort string) (
 	return addr, defaultPort
 }
 
-func readDumpDate(path string) (string, error) {
+func readDumpCompleted(path string) (string, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("open dump %q: %w", path, err)
+		return "", "", fmt.Errorf("open dump %q: %w", path, err)
 	}
 	defer f.Close()
 
 	st, err := f.Stat()
 	if err != nil {
-		return "", fmt.Errorf("stat dump %q: %w", path, err)
+		return "", "", fmt.Errorf("stat dump %q: %w", path, err)
 	}
 	start := max(st.Size()-4096, 0)
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return "", fmt.Errorf("seek dump %q: %w", path, err)
+		return "", "", fmt.Errorf("seek dump %q: %w", path, err)
 	}
 
-	re := regexp.MustCompile(`--\s*Dump\s+completed\s+on\s+(\d{4}-\d{2}-\d{2})`)
+	re := regexp.MustCompile(`--\s*Dump\s+completed\s+on\s+(\d{4}-\d{2}-\d{2})(?:\s+(\d{1,2}:\d{2}:\d{2}))?`)
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		if m := re.FindStringSubmatch(s.Text()); m != nil {
-			return m[1], nil
+			completed := m[1]
+			if m[2] != "" {
+				completed += "T" + zeroPadHour(m[2])
+			}
+			return m[1], completed, nil
 		}
 	}
 	if err := s.Err(); err != nil {
-		return "", fmt.Errorf("read dump %q: %w", path, err)
+		return "", "", fmt.Errorf("read dump %q: %w", path, err)
 	}
-	return "", nil
+	return "", "", nil
+}
+
+func zeroPadHour(value string) string {
+	if len(value) == len("1:00:00") {
+		return "0" + value
+	}
+	return value
 }
 
 func quoteIdentifier(name string) string {

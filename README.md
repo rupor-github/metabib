@@ -65,6 +65,11 @@ checked using source modification times; stale or invalid manifests fail unless
 `--rebuild` is used. Use `cache --check-md5` to additionally verify MD5 checksums
 recorded in existing manifests.
 
+By default, `cache` requires all SQL dump files to report the same dump date
+before import. Use `cache --allow-dump-date-mismatch` to accept mixed dump dates;
+per-file dump dates are still recorded, while the top-level manifest `dump_date`
+is omitted.
+
 Merge from archives only, database only, or both:
 
 ```sh

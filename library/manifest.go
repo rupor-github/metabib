@@ -99,11 +99,12 @@ type DatabaseManifestSource struct {
 }
 
 type DumpManifestSource struct {
-	Path     string `json:"path"`
-	Name     string `json:"name"`
-	DumpDate string `json:"dump_date,omitempty"`
-	Modified string `json:"modified"`
-	MD5      string `json:"md5"`
+	Path          string `json:"path"`
+	Name          string `json:"name"`
+	DumpDate      string `json:"dump_date,omitempty"`
+	DumpCompleted string `json:"dump_completed,omitempty"`
+	Modified      string `json:"modified"`
+	MD5           string `json:"md5"`
 }
 
 type manifestWriter struct {
@@ -978,10 +979,11 @@ func collectDumpSources(ctx context.Context, dumps []db.DumpFile, includeMD5 boo
 			latest = info.ModTime()
 		}
 		source := DumpManifestSource{
-			Path:     dump.Path,
-			Name:     dump.Name,
-			DumpDate: dump.DumpDate,
-			Modified: info.ModTime().Format(time.RFC3339Nano),
+			Path:          dump.Path,
+			Name:          dump.Name,
+			DumpDate:      dump.DumpDate,
+			DumpCompleted: dump.DumpCompleted,
+			Modified:      info.ModTime().Format(time.RFC3339Nano),
 		}
 		if includeMD5 {
 			sum, err := fileMD5(ctx, dump.Path)

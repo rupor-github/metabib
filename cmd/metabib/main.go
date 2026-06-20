@@ -119,6 +119,7 @@ func cacheCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "database-dumps", Usage: "directory containing SQL dumps for database manifest"},
 			&cli.StringSliceFlag{Name: "archives", Aliases: []string{"a"}, Usage: "archive file or directory with archives; can be repeated"},
+			&cli.BoolFlag{Name: "allow-dump-date-mismatch", Usage: "allow SQL dump files to report different dump dates"},
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in existing manifests"},
 			&cli.BoolFlag{Name: "rebuild", Usage: "rebuild stale or invalid existing manifests after checksum verification"},
 			&cli.BoolFlag{Name: "no-import", Usage: "skip SQL dump import and use existing database"},
@@ -174,9 +175,12 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 	if selectedDatabase {
 		discoverStart := time.Now()
 		var err error
-		dumps, dumpDate, err = db.DiscoverDumps(dumpDir)
+		dumps, dumpDate, err = db.DiscoverDumps(dumpDir, cmd.Bool("allow-dump-date-mismatch"))
 		if err != nil {
 			return err
+		}
+		if dumpDirDatesDiffer(dumps) && env.Log != nil {
+			env.Log.Warn("SQL dump dates differ; top-level dump_date will be omitted", zap.String("directory", dumpDir))
 		}
 		if env.Log != nil {
 			env.Log.Info("SQL dump date detected", zap.String("dump_date", dumpDate), zap.String("directory", dumpDir), zap.Duration("elapsed", time.Since(discoverStart)))
@@ -265,9 +269,12 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	var reports []library.ManifestReport
 	var databaseManifest library.DatabaseManifestDecision
 	if selectedDatabase {
-		dumps, dumpDate, err := db.DiscoverDumps(dumpDir)
+		dumps, dumpDate, err := db.DiscoverDumps(dumpDir, true)
 		if err != nil {
 			return err
+		}
+		if dumpDirDatesDiffer(dumps) && env.Log != nil {
+			env.Log.Warn("SQL dump dates differ; top-level dump_date is omitted", zap.String("directory", dumpDir))
 		}
 		var report library.ManifestReport
 		databaseManifest, report, err = library.ValidateDatabaseManifest(ctx, cfg, dumpDir, dumps, dumpDate, checkMD5, env.Log)
@@ -302,6 +309,23 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		_, err := library.CopyManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
 		return err
 	})
+}
+
+func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
+	date := ""
+	for _, dump := range dumps {
+		if dump.DumpDate == "" {
+			continue
+		}
+		if date == "" {
+			date = dump.DumpDate
+			continue
+		}
+		if date != dump.DumpDate {
+			return true
+		}
+	}
+	return false
 }
 
 func writeOutput(ctx context.Context, cfg *config.Config, write func(*jsonl.Writer) error) error {
