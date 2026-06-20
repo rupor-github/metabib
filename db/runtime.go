@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -299,9 +300,10 @@ func dataDirInitialized(path string) (bool, error) {
 
 func findBinary(explicit string, names ...string) (string, error) {
 	if explicit != "" {
-		if st, err := os.Stat(explicit); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+		if usableBinary(explicit) {
 			return explicit, nil
-		} else if err != nil {
+		}
+		if _, err := os.Stat(explicit); err != nil {
 			return "", fmt.Errorf("binary %q is not usable: %w", explicit, err)
 		}
 		return "", fmt.Errorf("binary %q is not executable", explicit)
@@ -310,41 +312,102 @@ func findBinary(explicit string, names ...string) (string, error) {
 	seen := make(map[string]bool)
 	var candidates []string
 	cwd, _ := os.Getwd()
-	for _, base := range []string{cwd, filepath.Join(cwd, "bin")} {
-		for _, name := range names {
-			candidates = append(candidates, filepath.Join(base, name))
-		}
+	fileNames := binaryFileNames(names)
+	if cwd != "" {
+		candidates = append(candidates, walkBinaryCandidates(filepath.Join(cwd, "mariadb"), fileNames)...)
 	}
-	_ = filepath.WalkDir(cwd, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			if d != nil && (d.Name() == ".git" || d.Name() == ".jj" || d.Name() == "vendor") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		for _, name := range names {
-			if d.Name() == name {
-				candidates = append(candidates, path)
-			}
-		}
-		return nil
-	})
 	for _, name := range names {
 		if path, err := exec.LookPath(name); err == nil {
 			candidates = append(candidates, path)
 		}
 	}
-	sort.Strings(candidates)
 	for _, candidate := range candidates {
 		if seen[candidate] {
 			continue
 		}
 		seen[candidate] = true
-		if st, err := os.Stat(candidate); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+		if usableBinary(candidate) {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf("unable to find executable %s in current directory, subdirectories, ./bin, or PATH", strings.Join(names, "/"))
+	return "", fmt.Errorf("unable to find executable %s in ./mariadb or PATH", strings.Join(names, "/"))
+}
+
+func walkBinaryCandidates(root string, names []string) []string {
+	if root == "" {
+		return nil
+	}
+	if st, err := os.Stat(root); err != nil || !st.IsDir() {
+		return nil
+	}
+	var candidates []string
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d == nil {
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == ".jj" || d.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if binaryNameMatches(d.Name(), names) {
+			candidates = append(candidates, path)
+		}
+		return nil
+	})
+	sort.Strings(candidates)
+	return candidates
+}
+
+func binaryFileNames(names []string) []string {
+	out := make([]string, 0, len(names)*2)
+	seen := make(map[string]bool)
+	for _, name := range names {
+		if !seen[name] {
+			out = append(out, name)
+			seen[name] = true
+		}
+		if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+			exe := name + ".exe"
+			if !seen[exe] {
+				out = append(out, exe)
+				seen[exe] = true
+			}
+		}
+	}
+	return out
+}
+
+func binaryNameMatches(name string, candidates []string) bool {
+	for _, candidate := range candidates {
+		if runtime.GOOS == "windows" {
+			if strings.EqualFold(name, candidate) {
+				return true
+			}
+			continue
+		}
+		if name == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func usableBinary(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".exe", ".com", ".bat", ".cmd":
+			return true
+		default:
+			return false
+		}
+	}
+	return st.Mode()&0o111 != 0
 }
 
 func defaultString(value string, fallback string) string {

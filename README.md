@@ -6,8 +6,7 @@ then merges those cached artifacts into final JSONL.
 
 ## Current Scope
 
-- discovers MariaDB binaries in the current directory, `./bin`, subdirectories,
-  or `PATH`;
+- discovers MariaDB binaries recursively in `./mariadb`, then `PATH`;
 - starts a private socket-only MariaDB server by default, creating a local
   datadir automatically when needed;
 - imports `*.sql` dumps with the discovered `mariadb` or `mysql` client;

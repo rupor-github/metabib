@@ -1,3 +1,4 @@
+# vim: set filetype=yaml:
 # Content should be UTF-8.
 version: 1
 
@@ -25,8 +26,8 @@ database:
   pid_file: ""
   log_file: ""
 
-  # Optional full paths to MariaDB binaries. If empty, metabib searches the
-  # current directory, ./bin, subdirectories, and PATH.
+  # Optional full paths to MariaDB binaries. If empty, metabib first searches
+  # ./mariadb recursively under the startup directory, then PATH.
   server_path: ""
   install_db_path: ""
   client_path: ""
