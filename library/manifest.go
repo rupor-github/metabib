@@ -64,10 +64,9 @@ func (r ManifestReport) Ready(allowStale bool) bool {
 }
 
 type manifestProcessing struct {
-	Process            string `json:"process"`
-	ParseFB2           bool   `json:"parse_fb2"`
-	FB2DescriptionTree bool   `json:"fb2_description_tree"`
-	ArchiveContentMD5  bool   `json:"archive_content_md5"`
+	ParseFB2           bool `json:"parse_fb2"`
+	FB2DescriptionTree bool `json:"fb2_description_tree"`
+	ArchiveContentMD5  bool `json:"archive_content_md5"`
 }
 
 type archiveManifestHeader struct {
@@ -863,7 +862,6 @@ func rewriteManifestHeader(path string, header any) error {
 
 func processingManifest(cfg *config.Config) manifestProcessing {
 	return manifestProcessing{
-		Process:            cfg.Processing.Process,
 		ParseFB2:           cfg.Processing.ParseFB2,
 		FB2DescriptionTree: cfg.Processing.FB2DescriptionTree,
 		ArchiveContentMD5:  cfg.Processing.ArchiveContentMD5,

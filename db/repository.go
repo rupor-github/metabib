@@ -60,15 +60,8 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
-func (r *Repository) BookIDs(ctx context.Context, process string) ([]int64, error) {
-	query := "SELECT BookId FROM libbook"
-	switch process {
-	case "fb2":
-		query += " WHERE FileType = 'fb2'"
-	case "usr":
-		query += " WHERE FileType <> 'fb2'"
-	}
-	query += " ORDER BY BookId"
+func (r *Repository) BookIDs(ctx context.Context) ([]int64, error) {
+	query := "SELECT BookId FROM libbook WHERE FileType = 'fb2' ORDER BY BookId"
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query book ids: %w", err)

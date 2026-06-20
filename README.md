@@ -12,7 +12,7 @@ then merges those cached artifacts into final JSONL.
 - imports `*.sql` dumps with the discovered `mariadb` or `mysql` client;
 - queries the imported MariaDB database for book, author, translator, genre,
   sequence, rating, filename, joined-book, and recommendation metadata;
-- walks provided `.zip` archives or archive directories;
+- walks FB2 entries in provided `.zip` archives or archive directories;
 - parses FB2 `<description>/<title-info>` metadata while preserving the full
   parsed `<description>` tree;
 - writes `metabib.record/1` JSONL records described by

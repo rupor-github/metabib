@@ -143,12 +143,12 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 			log.Info("Database manifest creation started", zap.String("manifest", manifest.ManifestPath))
 		}
 	}
-	ids, err := repo.BookIDs(ctx, cfg.Processing.Process)
+	ids, err := repo.BookIDs(ctx)
 	if err != nil {
 		return err
 	}
 	if log != nil {
-		log.Info("Database book list prepared", zap.Int("books", len(ids)), zap.String("process", cfg.Processing.Process), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Database FB2 book list prepared", zap.Int("books", len(ids)), zap.Duration("elapsed", time.Since(start)))
 	}
 	workers := cfg.Processing.DatabaseWorkers
 	if workers <= 0 {
@@ -343,7 +343,7 @@ func processArchive(ctx context.Context, repo *db.Repository, cfg *config.Config
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		if file.FileInfo().IsDir() || isBackup(file.Name) || !wantEntry(file.Name, cfg.Processing.Process) {
+		if file.FileInfo().IsDir() || isBackup(file.Name) || !isFB2Entry(file.Name) {
 			continue
 		}
 		bookID, ext := entryIdentity(file.Name)
@@ -698,19 +698,8 @@ func expandArchives(paths []string) ([]string, error) {
 	return archives, nil
 }
 
-func wantEntry(name string, process string) bool {
-	ext := strings.TrimPrefix(filepath.Ext(name), ".")
-	isFB2 := strings.EqualFold(ext, "fb2")
-	switch process {
-	case "fb2":
-		return isFB2
-	case "usr":
-		return !isFB2
-	case "all":
-		return true
-	default:
-		return isFB2
-	}
+func isFB2Entry(name string) bool {
+	return strings.EqualFold(filepath.Ext(name), ".fb2")
 }
 
 func isBackup(name string) bool {

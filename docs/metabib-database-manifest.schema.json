@@ -45,9 +45,8 @@
     },
     "processing": {
       "type": "object",
-      "required": ["process", "parse_fb2", "fb2_description_tree", "archive_content_md5"],
+      "required": ["parse_fb2", "fb2_description_tree", "archive_content_md5"],
       "properties": {
-        "process": {"enum": ["fb2", "usr", "all"]},
         "parse_fb2": {"type": "boolean"},
         "fb2_description_tree": {"type": "boolean"},
         "archive_content_md5": {"type": "boolean"}
