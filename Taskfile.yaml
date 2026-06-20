@@ -30,6 +30,16 @@ tasks:
         vars: {GOOS: 'linux', GOARCH: 'amd64', CGO_ENABLED: '0', FLAGS: 'debug', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.DEV_BUILD_DIR}}/{{.PRJ_NAME}}'}
       - task: lint
 
+  debug-win:
+    desc: Builds development version for Windows
+    aliases: [dw]
+    platforms: [linux]
+    deps: [generate-project-version]
+    cmds:
+      - task: go-build
+        vars: {GOOS: 'windows', GOARCH: 'amd64', CGO_ENABLED: '0', FLAGS: 'debug', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.DEV_BUILD_DIR}}/{{.PRJ_NAME}}.exe'}
+      - task: lint
+
   test:
     desc: |
       Runs available tests.
