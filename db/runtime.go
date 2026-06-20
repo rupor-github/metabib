@@ -109,6 +109,8 @@ func (r *Runtime) Close() error {
 			}
 			if r.Config.Password != "" {
 				args = append(args, "--password="+r.Config.Password)
+			} else {
+				args = append(args, "--skip-ssl-verify-server-cert")
 			}
 			args = append(args, "shutdown")
 			cmd := exec.CommandContext(ctx, admin, args...)
@@ -215,16 +217,12 @@ func (r *Runtime) initializeDataDir(ctx context.Context, installDB string, overw
 	if err := os.MkdirAll(r.Config.DataDir, 0o755); err != nil {
 		return fmt.Errorf("create MariaDB data directory %q: %w", r.Config.DataDir, err)
 	}
-	args := []string{
-		"--datadir=" + r.Config.DataDir,
-		"--auth-root-authentication-method=normal",
-		"--skip-test-db",
-	}
+	args := installDBArgs(r.Config.DataDir)
 	cmd := exec.CommandContext(ctx, installDB, args...)
 	cmd.Stdout = r.LogOut
 	cmd.Stderr = r.LogOut
 	if err := cmd.Run(); err != nil {
-		fallbackArgs := []string{"--datadir=" + r.Config.DataDir, "--skip-test-db"}
+		fallbackArgs := []string{"--datadir=" + r.Config.DataDir}
 		cmd = exec.CommandContext(ctx, installDB, fallbackArgs...)
 		cmd.Stdout = r.LogOut
 		cmd.Stderr = r.LogOut
@@ -236,6 +234,14 @@ func (r *Runtime) initializeDataDir(ctx context.Context, installDB string, overw
 		r.Log.Info("MariaDB data directory initialized", zap.String("dir", r.Config.DataDir), zap.Duration("elapsed", time.Since(start)))
 	}
 	return nil
+}
+
+func installDBArgs(dataDir string) []string {
+	args := []string{"--datadir=" + dataDir}
+	if runtime.GOOS != "windows" {
+		args = append(args, "--auth-root-authentication-method=normal", "--skip-test-db")
+	}
+	return args
 }
 
 func (r *Runtime) startServer(ctx context.Context, server string) error {

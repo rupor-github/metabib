@@ -30,6 +30,8 @@ const staleManifestExitCode = 3
 
 var errManifestNotReady = errors.New("one or more cache manifests are missing, stale, or invalid")
 
+var errWasHandled bool
+
 type databaseIndex struct {
 	byID   map[int64]model.DatabaseSource
 	byFile map[string]model.DatabaseSource
@@ -69,6 +71,17 @@ func destroyAppContext(ctx context.Context, cmd *cli.Command) error {
 	return env.Close()
 }
 
+func exitErrHandler(ctx context.Context, _ *cli.Command, err error) {
+	if err == nil {
+		return
+	}
+	env := state.EnvFromContext(ctx)
+	if env.Log != nil {
+		env.Log.Error("Program ended with error", zap.Error(err))
+		errWasHandled = true
+	}
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(state.ContextWithEnv(context.Background()), os.Interrupt, syscall.SIGTERM)
 	app := &cli.Command{
@@ -76,7 +89,7 @@ func main() {
 		Usage:           "extract Flibusta/FB2 metadata into JSONL",
 		Version:         misc.GetVersion() + " (" + runtime.Version() + ") : " + misc.GetGitHash(),
 		HideHelpCommand: true,
-		ExitErrHandler:  func(context.Context, *cli.Command, error) {},
+		ExitErrHandler:  exitErrHandler,
 		Before:          initializeAppContext,
 		After:           destroyAppContext,
 		Flags: []cli.Flag{
@@ -100,8 +113,11 @@ func main() {
 
 	var err error
 	defer func() {
+		stop()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Program ended with error: %v\n", err)
+			if !errWasHandled {
+				fmt.Fprintf(os.Stderr, "Program ended with error: %v\n", err)
+			}
 			if exitErr, ok := err.(interface{ ExitCode() int }); ok {
 				os.Exit(exitErr.ExitCode())
 			}
@@ -109,7 +125,6 @@ func main() {
 		}
 	}()
 	err = app.Run(ctx, os.Args)
-	stop()
 }
 
 func cacheCommand() *cli.Command {

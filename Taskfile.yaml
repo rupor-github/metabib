@@ -40,6 +40,12 @@ tasks:
         vars: {GOOS: 'windows', GOARCH: 'amd64', CGO_ENABLED: '0', FLAGS: 'debug', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.DEV_BUILD_DIR}}/{{.PRJ_NAME}}.exe'}
       - task: lint
 
+  clean:
+    desc: Removes generated build artifacts
+    platforms: [linux]
+    cmds:
+      - rm -rf '{{.DEV_BUILD_DIR}}' '{{.REL_BUILD_DIR}}' '{{.REL_BUILD_DIR}}_'* misc/version.go
+
   test:
     desc: |
       Runs available tests.
@@ -71,6 +77,11 @@ tasks:
     cmds:
       - echo "{{.TATN}}Linting project{{.TOFF}}"
       - go tool staticcheck -f stylish -tests=true ./...
+    sources:
+      - ./Taskfile.yaml
+      - ./**/*.go
+      - ./**/*.mod
+      - ./**/*.sum
 
   release:
     desc: Cross-builds release for all supported platforms
@@ -97,7 +108,7 @@ tasks:
       - defer: rm -rf {{.BUILD_DIR}}
       - task: go-build
         vars: {GOOS: '{{.GOOS}}', GOARCH: '{{.GOARCH}}', CGO_ENABLED: '0', FLAGS: 'release', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.BUILD_DIR}}/{{.PRJ_NAME}}{{.SUFFIX}}'}
-      - cp docs/metabib.schema.json {{.BUILD_DIR}}/
+      - cp docs/*.json {{.BUILD_DIR}}/
       - echo "{{.TATN}}Archiving release \"{{.REL_NAME}}.zip\"{{.TOFF}}"
       - 7z a -r -bd -bso0 -tzip {{.REL_NAME}} ./{{.BUILD_DIR}}/*
     status:
@@ -108,6 +119,7 @@ tasks:
     run: when_changed
     requires:
       vars: [PACKAGE, TARGET, FLAGS]
+    label: go-build-{{.PACKAGE}}-{{.TARGET}}-{{.FLAGS}}-{{.GOOS}}-{{.GOARCH}}-{{.CGO_ENABLED}}
     env: {GOOS: '{{default "linux" .GOOS}}', GOARCH: '{{default "amd64" .GOARCH}}', CGO_ENABLED: '{{default (env "CGO_ENABLED") .CGO_ENABLED}}'}
     vars:
       GOARGS: |
@@ -126,7 +138,7 @@ tasks:
       - ./**/*.mod
       - ./**/*.sum
       - ./config/config.yaml.tmpl
-      - ./docs/metabib.schema.json
+      - ./docs/*.json
     generates:
       - '{{.TARGET}}'
 
@@ -174,7 +186,11 @@ tasks:
     requires:
       vars: [GO_VERSION]
     cmds:
-      - go mod tidy -go={{.GO_VERSION}} {{.CLI_ARGS}}
+      - for:
+          var: TARGET_RELEASES
+        cmd: |
+          echo "Tidying with {{with $arch := split "-" .ITEM}}{{$arch._0}}{{end}} GOARCH={{with $arch := split "-" .ITEM}}{{$arch._1}}{{end}}"
+          GOOS={{with $arch := split "-" .ITEM}}{{$arch._0}}{{end}} GOARCH={{with $arch := split "-" .ITEM}}{{$arch._1}}{{end}} go mod tidy -go={{.GO_VERSION}} {{.CLI_ARGS}}
 
   go-modinit:
     desc: Using current toolchain (re)initializes go.mod with project module name, gets latest versions and runs tidy
@@ -199,4 +215,8 @@ tasks:
     platforms: [linux]
     aliases: [vendor]
     cmds:
-      - go mod vendor {{.CLI_ARGS}}
+      - for:
+          var: TARGET_RELEASES
+        cmd: |
+          echo "Vendoring with {{with $arch := split "-" .ITEM}}{{$arch._0}}{{end}} GOARCH={{with $arch := split "-" .ITEM}}{{$arch._1}}{{end}}"
+          GOOS={{with $arch := split "-" .ITEM}}{{$arch._0}}{{end}} GOARCH={{with $arch := split "-" .ITEM}}{{$arch._1}}{{end}} go mod vendor {{.CLI_ARGS}}
