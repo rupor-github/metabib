@@ -9,6 +9,7 @@ tool (
 
 require (
 	github.com/go-sql-driver/mysql v1.9.3
+	github.com/klauspost/compress v1.18.5
 	github.com/rupor-github/gencfg v1.0.14
 	github.com/urfave/cli/v3 v3.9.1
 	go.uber.org/zap v1.28.0
@@ -98,7 +99,6 @@ require (
 	github.com/hashicorp/go-getter v1.8.6 // indirect
 	github.com/hashicorp/go-version v1.8.0 // indirect
 	github.com/joho/godotenv v1.5.1 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect

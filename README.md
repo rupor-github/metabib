@@ -74,6 +74,9 @@ selected manifest is missing, invalid, or stale. Use `--check-md5` for full
 source checksum verification, or `--allow-stale` to warn and continue with stale
 manifests.
 
+Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
+for example `lib.manifest.zst` or `database.manifest.zst`.
+
 When `output.part_size` or `--output-part-size` is used, output files are named
 with zero-padded book-id ranges so they sort naturally, for example:
 

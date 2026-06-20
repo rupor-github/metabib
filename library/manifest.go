@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
 
 	"metabib/config"
@@ -24,6 +25,7 @@ import (
 const (
 	archiveManifestSchema  = "metabib.archive_manifest/1"
 	databaseManifestSchema = "metabib.database_manifest/1"
+	manifestExt            = ".manifest.zst"
 )
 
 type ArchiveManifestDecision struct {
@@ -110,6 +112,20 @@ type manifestWriter struct {
 	recordsFile *os.File
 	recordsBuf  *bufio.Writer
 	count       int64
+}
+
+type manifestReadCloser struct {
+	file    *os.File
+	decoder *zstd.Decoder
+}
+
+func (r *manifestReadCloser) Read(p []byte) (int, error) {
+	return r.decoder.Read(p)
+}
+
+func (r *manifestReadCloser) Close() error {
+	r.decoder.Close()
+	return r.file.Close()
 }
 
 func PlanArchives(ctx context.Context, cfg *config.Config, log *zap.Logger) ([]ArchiveManifestDecision, bool, error) {
@@ -271,13 +287,13 @@ func CopyManifestRecords(ctx context.Context, manifestPath string, out *jsonl.Wr
 }
 
 func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func(model.Record) error) (int64, error) {
-	f, err := os.Open(manifestPath)
+	r, err := openManifestReader(manifestPath)
 	if err != nil {
-		return 0, fmt.Errorf("open manifest %q: %w", manifestPath, err)
+		return 0, err
 	}
-	defer f.Close()
+	defer r.Close()
 
-	dec := json.NewDecoder(f)
+	dec := json.NewDecoder(r)
 	var header json.RawMessage
 	if err := dec.Decode(&header); err != nil {
 		if err == io.EOF {
@@ -450,12 +466,13 @@ func (w *manifestWriter) Close(header any) error {
 	}
 
 	tmpManifest := w.path + ".tmp"
-	out, err := os.Create(tmpManifest)
+	out, enc, err := createCompressedManifest(tmpManifest)
 	if err != nil {
-		return fmt.Errorf("create manifest %q: %w", tmpManifest, err)
+		return err
 	}
-	enc := json.NewEncoder(out)
-	if err := enc.Encode(header); err != nil {
+	jsonEnc := json.NewEncoder(enc)
+	if err := jsonEnc.Encode(header); err != nil {
+		enc.Close()
 		out.Close()
 		return fmt.Errorf("write manifest header %q: %w", tmpManifest, err)
 	}
@@ -464,14 +481,20 @@ func (w *manifestWriter) Close(header any) error {
 		out.Close()
 		return fmt.Errorf("open manifest records %q: %w", w.tmpRecords, err)
 	}
-	if _, err := io.Copy(out, records); err != nil {
+	if _, err := io.Copy(enc, records); err != nil {
 		records.Close()
+		enc.Close()
 		out.Close()
 		return fmt.Errorf("write manifest records %q: %w", tmpManifest, err)
 	}
 	if err := records.Close(); err != nil {
+		enc.Close()
 		out.Close()
 		return fmt.Errorf("close manifest records %q: %w", w.tmpRecords, err)
+	}
+	if err := enc.Close(); err != nil {
+		out.Close()
+		return fmt.Errorf("close manifest compressor %q: %w", tmpManifest, err)
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close manifest %q: %w", tmpManifest, err)
@@ -705,7 +728,7 @@ func logManifestReport(log *zap.Logger, report ManifestReport) {
 }
 
 func archiveManifestPath(cfg *config.Config, archive string) string {
-	base := strings.TrimSuffix(filepath.Base(archive), filepath.Ext(archive)) + ".manifest"
+	base := strings.TrimSuffix(filepath.Base(archive), filepath.Ext(archive)) + manifestExt
 	if cfg.Processing.Manifests.ArchiveDir != "" {
 		return filepath.Join(cfg.Processing.Manifests.ArchiveDir, base)
 	}
@@ -714,9 +737,9 @@ func archiveManifestPath(cfg *config.Config, archive string) string {
 
 func databaseManifestPath(cfg *config.Config, dumpDir string) string {
 	if cfg.Processing.Manifests.DatabaseDir != "" {
-		return filepath.Join(cfg.Processing.Manifests.DatabaseDir, "database.manifest")
+		return filepath.Join(cfg.Processing.Manifests.DatabaseDir, "database"+manifestExt)
 	}
-	return filepath.Join(dumpDir, "database.manifest")
+	return filepath.Join(dumpDir, "database"+manifestExt)
 }
 
 func readArchiveManifestHeader(path string) (archiveManifestHeader, error) {
@@ -741,13 +764,39 @@ func readDatabaseManifestHeader(path string) (databaseManifestHeader, error) {
 	return header, nil
 }
 
-func readManifestHeader(path string, header any) error {
+func openManifestReader(path string) (io.ReadCloser, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open manifest %q: %w", path, err)
+		return nil, fmt.Errorf("open manifest %q: %w", path, err)
 	}
-	defer f.Close()
-	s := bufio.NewScanner(f)
+	dec, err := zstd.NewReader(f)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("open manifest compressor %q: %w", path, err)
+	}
+	return &manifestReadCloser{file: f, decoder: dec}, nil
+}
+
+func createCompressedManifest(path string) (*os.File, *zstd.Encoder, error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create manifest %q: %w", path, err)
+	}
+	enc, err := zstd.NewWriter(f)
+	if err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("create manifest compressor %q: %w", path, err)
+	}
+	return f, enc, nil
+}
+
+func readManifestHeader(path string, header any) error {
+	r, err := openManifestReader(path)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	s := bufio.NewScanner(r)
 	s.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	if !s.Scan() {
 		if err := s.Err(); err != nil {
@@ -762,13 +811,13 @@ func readManifestHeader(path string, header any) error {
 }
 
 func rewriteManifestHeader(path string, header any) error {
-	f, err := os.Open(path)
+	r, err := openManifestReader(path)
 	if err != nil {
-		return fmt.Errorf("open manifest %q: %w", path, err)
+		return err
 	}
-	reader := bufio.NewReader(f)
+	reader := bufio.NewReader(r)
 	if _, err := reader.ReadBytes('\n'); err != nil {
-		f.Close()
+		r.Close()
 		if err == io.EOF {
 			return fmt.Errorf("manifest %q has no header line", path)
 		}
@@ -776,25 +825,32 @@ func rewriteManifestHeader(path string, header any) error {
 	}
 
 	tmpPath := path + ".tmp"
-	out, err := os.Create(tmpPath)
+	out, enc, err := createCompressedManifest(tmpPath)
 	if err != nil {
-		f.Close()
-		return fmt.Errorf("create manifest %q: %w", tmpPath, err)
+		r.Close()
+		return err
 	}
-	enc := json.NewEncoder(out)
-	if err := enc.Encode(header); err != nil {
-		f.Close()
+	jsonEnc := json.NewEncoder(enc)
+	if err := jsonEnc.Encode(header); err != nil {
+		r.Close()
+		enc.Close()
 		out.Close()
 		return fmt.Errorf("write manifest header %q: %w", tmpPath, err)
 	}
-	if _, err := io.Copy(out, reader); err != nil {
-		f.Close()
+	if _, err := io.Copy(enc, reader); err != nil {
+		r.Close()
+		enc.Close()
 		out.Close()
 		return fmt.Errorf("copy manifest records %q: %w", path, err)
 	}
-	if err := f.Close(); err != nil {
+	if err := r.Close(); err != nil {
+		enc.Close()
 		out.Close()
 		return fmt.Errorf("close manifest %q: %w", path, err)
+	}
+	if err := enc.Close(); err != nil {
+		out.Close()
+		return fmt.Errorf("close manifest compressor %q: %w", tmpPath, err)
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close manifest %q: %w", tmpPath, err)
