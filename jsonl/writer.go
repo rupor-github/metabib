@@ -2,11 +2,12 @@ package jsonl
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	jsonv2 "encoding/json/v2"
 
 	"metabib/model"
 )
@@ -30,7 +31,7 @@ func Create(path string, maxBytes int64) (*Writer, error) {
 }
 
 func (w *Writer) Write(rec model.Record) error {
-	data, err := json.Marshal(rec)
+	data, err := jsonv2.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal JSONL record: %w", err)
 	}

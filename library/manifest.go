@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
 
@@ -292,9 +293,9 @@ func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func
 	}
 	defer r.Close()
 
-	dec := json.NewDecoder(r)
-	var header json.RawMessage
-	if err := dec.Decode(&header); err != nil {
+	dec := jsontext.NewDecoder(r)
+	var header jsontext.Value
+	if err := jsonv2.UnmarshalDecode(dec, &header); err != nil {
 		if err == io.EOF {
 			return 0, fmt.Errorf("manifest %q is empty", manifestPath)
 		}
@@ -306,7 +307,7 @@ func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func
 			return records, err
 		}
 		var rec model.Record
-		if err := dec.Decode(&rec); err != nil {
+		if err := jsonv2.UnmarshalDecode(dec, &rec); err != nil {
 			if err == io.EOF {
 				break
 			}
@@ -437,7 +438,7 @@ func newManifestWriter(path string) (*manifestWriter, error) {
 }
 
 func (w *manifestWriter) Write(rec model.Record) error {
-	data, err := json.Marshal(rec)
+	data, err := jsonv2.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal manifest record: %w", err)
 	}
@@ -469,8 +470,7 @@ func (w *manifestWriter) Close(header any) error {
 	if err != nil {
 		return err
 	}
-	jsonEnc := json.NewEncoder(enc)
-	if err := jsonEnc.Encode(header); err != nil {
+	if err := writeJSONLValue(enc, header); err != nil {
 		enc.Close()
 		out.Close()
 		return fmt.Errorf("write manifest header %q: %w", tmpManifest, err)
@@ -781,12 +781,20 @@ func createCompressedManifest(path string) (*os.File, *zstd.Encoder, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("create manifest %q: %w", path, err)
 	}
-	enc, err := zstd.NewWriter(f)
+	enc, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
 	if err != nil {
 		f.Close()
 		return nil, nil, fmt.Errorf("create manifest compressor %q: %w", path, err)
 	}
 	return f, enc, nil
+}
+
+func writeJSONLValue(w io.Writer, value any) error {
+	if err := jsonv2.MarshalWrite(w, value); err != nil {
+		return err
+	}
+	_, err := w.Write([]byte{'\n'})
+	return err
 }
 
 func readManifestHeader(path string, header any) error {
@@ -803,7 +811,7 @@ func readManifestHeader(path string, header any) error {
 		}
 		return fmt.Errorf("manifest %q is empty", path)
 	}
-	if err := json.Unmarshal(s.Bytes(), header); err != nil {
+	if err := jsonv2.Unmarshal(s.Bytes(), header); err != nil {
 		return fmt.Errorf("decode manifest header %q: %w", path, err)
 	}
 	return nil
@@ -829,8 +837,7 @@ func rewriteManifestHeader(path string, header any) error {
 		r.Close()
 		return err
 	}
-	jsonEnc := json.NewEncoder(enc)
-	if err := jsonEnc.Encode(header); err != nil {
+	if err := writeJSONLValue(enc, header); err != nil {
 		r.Close()
 		enc.Close()
 		out.Close()
