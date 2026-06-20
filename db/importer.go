@@ -229,7 +229,7 @@ func (i *Importer) clientArgs() ([]string, error) {
 		if mc.Passwd != "" {
 			args = append(args, "--password="+mc.Passwd)
 		} else {
-			args = append(args, "--skip-ssl-verify-server-cert")
+			args = append(args, "--skip-ssl")
 		}
 		return append(args, dbName), nil
 	}
@@ -243,7 +243,7 @@ func (i *Importer) clientArgs() ([]string, error) {
 	if i.cfg.Password != "" {
 		args = append(args, "--password="+i.cfg.Password)
 	} else {
-		args = append(args, "--skip-ssl-verify-server-cert")
+		args = append(args, "--skip-ssl")
 	}
 	return append(args, dbName), nil
 }

@@ -110,7 +110,7 @@ func (r *Runtime) Close() error {
 			if r.Config.Password != "" {
 				args = append(args, "--password="+r.Config.Password)
 			} else {
-				args = append(args, "--skip-ssl-verify-server-cert")
+				args = append(args, "--skip-ssl")
 			}
 			args = append(args, "shutdown")
 			cmd := exec.CommandContext(ctx, admin, args...)
