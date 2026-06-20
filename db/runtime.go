@@ -30,7 +30,14 @@ type Runtime struct {
 	tmpDir  string
 }
 
-func PrepareRuntime(ctx context.Context, cfg config.DatabaseConfig, log *zap.Logger, logOut io.Writer) (*Runtime, error) {
+func PrepareRuntime(
+	ctx context.Context,
+	cfg config.DatabaseConfig,
+	needClient bool,
+	overwriteDataDir bool,
+	log *zap.Logger,
+	logOut io.Writer,
+) (*Runtime, error) {
 	start := time.Now()
 	if logOut == nil {
 		logOut = io.Discard
@@ -47,7 +54,7 @@ func PrepareRuntime(ctx context.Context, cfg config.DatabaseConfig, log *zap.Log
 			cfg.Name = name
 		}
 		client, err := findBinary(cfg.ClientPath, "mariadb", "mysql")
-		if err != nil && cfg.Import {
+		if err != nil && needClient {
 			return nil, err
 		}
 		return &Runtime{Config: cfg, Client: client, LogOut: logOut, Log: log}, nil
@@ -70,7 +77,7 @@ func PrepareRuntime(ctx context.Context, cfg config.DatabaseConfig, log *zap.Log
 	if err := rt.prepareManagedPaths(); err != nil {
 		return nil, err
 	}
-	if err := rt.initializeDataDir(ctx, installDB); err != nil {
+	if err := rt.initializeDataDir(ctx, installDB, overwriteDataDir); err != nil {
 		rt.Close()
 		return nil, err
 	}
@@ -94,7 +101,12 @@ func (r *Runtime) Close() error {
 		defer cancel()
 		admin, err := findBinary("", "mariadb-admin", "mysqladmin")
 		if err == nil {
-			args := []string{"--protocol", "socket", "--socket", r.Config.Socket, "--user", r.Config.User}
+			args := []string{"--user", r.Config.User}
+			if r.Config.Protocol == "unix" {
+				args = append(args, "--protocol", "socket", "--socket", r.Config.Socket)
+			} else {
+				args = append(args, "--protocol", "tcp", "--host", r.Config.Host, "--port", fmt.Sprintf("%d", r.Config.Port))
+			}
 			if r.Config.Password != "" {
 				args = append(args, "--password="+r.Config.Password)
 			}
@@ -160,25 +172,32 @@ func (r *Runtime) prepareManagedPaths() error {
 	if err := os.MkdirAll(base, 0o755); err != nil {
 		return fmt.Errorf("create MariaDB base directory %q: %w", base, err)
 	}
-	if r.Config.Socket == "" {
-		r.Config.Socket = filepath.Join(base, "metabib.sock")
-	}
 	if r.Config.PIDFile == "" {
 		r.Config.PIDFile = filepath.Join(base, "metabib.pid")
 	}
 	if r.Config.LogFile == "" {
 		r.Config.LogFile = filepath.Join(base, "metabib-mariadb.log")
 	}
-	r.Config.Protocol = "unix"
-	r.Config.Host = r.Config.Socket
-	r.Config.Port = 0
+	if r.Config.Protocol == "unix" {
+		if r.Config.Socket == "" {
+			r.Config.Socket = filepath.Join(base, "metabib.sock")
+		}
+		r.Config.Host = r.Config.Socket
+		r.Config.Port = 0
+	} else {
+		r.Config.Protocol = "tcp"
+		r.Config.Host = defaultString(r.Config.Host, "127.0.0.1")
+		if r.Config.Port == 0 {
+			return errors.New("managed TCP MariaDB requires database.port to be set")
+		}
+	}
 	r.Config.User = defaultString(r.Config.User, "root")
 	return nil
 }
 
-func (r *Runtime) initializeDataDir(ctx context.Context, installDB string) error {
+func (r *Runtime) initializeDataDir(ctx context.Context, installDB string, overwrite bool) error {
 	start := time.Now()
-	if r.Config.OverwriteDataDir {
+	if overwrite {
 		if err := os.RemoveAll(r.Config.DataDir); err != nil {
 			return fmt.Errorf("remove MariaDB data directory %q: %w", r.Config.DataDir, err)
 		}
@@ -221,18 +240,21 @@ func (r *Runtime) initializeDataDir(ctx context.Context, installDB string) error
 
 func (r *Runtime) startServer(ctx context.Context, server string) error {
 	start := time.Now()
-	if err := os.Remove(r.Config.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("remove stale MariaDB socket: %w", err)
-	}
 	args := []string{
 		"--datadir=" + r.Config.DataDir,
-		"--socket=" + r.Config.Socket,
 		"--pid-file=" + r.Config.PIDFile,
 		"--log-error=" + r.Config.LogFile,
-		"--skip-networking",
 		"--skip-grant-tables",
 		"--character-set-server=utf8mb4",
 		"--collation-server=utf8mb4_unicode_ci",
+	}
+	if r.Config.Protocol == "unix" {
+		if err := os.Remove(r.Config.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove stale MariaDB socket: %w", err)
+		}
+		args = append(args, "--socket="+r.Config.Socket, "--skip-networking")
+	} else {
+		args = append(args, "--bind-address="+r.Config.Host, fmt.Sprintf("--port=%d", r.Config.Port))
 	}
 	r.cmd = exec.CommandContext(ctx, server, args...)
 	r.cmd.Stdout = r.LogOut
@@ -244,7 +266,13 @@ func (r *Runtime) startServer(ctx context.Context, server string) error {
 		return err
 	}
 	if r.Log != nil {
-		r.Log.Info("Managed MariaDB started", zap.String("socket", r.Config.Socket), zap.Duration("elapsed", time.Since(start)))
+		fields := []zap.Field{zap.String("protocol", r.Config.Protocol), zap.Duration("elapsed", time.Since(start))}
+		if r.Config.Protocol == "unix" {
+			fields = append(fields, zap.String("socket", r.Config.Socket))
+		} else {
+			fields = append(fields, zap.String("host", r.Config.Host), zap.Int("port", r.Config.Port))
+		}
+		r.Log.Info("Managed MariaDB started", fields...)
 	}
 	return nil
 }
@@ -258,21 +286,26 @@ func (r *Runtime) waitReady(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
-		if _, err := os.Stat(r.Config.Socket); err == nil {
-			dsn, err := DSN(r.Config, false)
-			if err != nil {
-				return err
-			}
-			db, err := sql.Open("mysql", dsn)
-			if err == nil {
-				lastErr = db.PingContext(ctx)
-				db.Close()
-				if lastErr == nil {
-					return nil
-				}
-			} else {
+		if r.Config.Protocol == "unix" {
+			if _, err := os.Stat(r.Config.Socket); err != nil {
 				lastErr = err
+				time.Sleep(500 * time.Millisecond)
+				continue
 			}
+		}
+		dsn, err := DSN(r.Config, false)
+		if err != nil {
+			return err
+		}
+		db, err := sql.Open("mysql", dsn)
+		if err == nil {
+			lastErr = db.PingContext(ctx)
+			db.Close()
+			if lastErr == nil {
+				return nil
+			}
+		} else {
+			lastErr = err
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

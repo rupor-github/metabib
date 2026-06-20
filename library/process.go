@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -62,6 +61,7 @@ func ProcessArchives(
 	ctx context.Context,
 	repo *db.Repository,
 	cfg *config.Config,
+	archivePaths []string,
 	out *jsonl.Writer,
 	log *zap.Logger,
 	verbose bool,
@@ -69,7 +69,7 @@ func ProcessArchives(
 ) error {
 	start := time.Now()
 	if len(plan) == 0 {
-		archives, err := expandArchives(cfg.Processing.Archives)
+		archives, err := expandArchives(archivePaths)
 		if err != nil {
 			return err
 		}
@@ -151,13 +151,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	if log != nil {
 		log.Info("Database FB2 book list prepared", zap.Int("books", len(ids)), zap.Duration("elapsed", time.Since(start)))
 	}
-	workers := cfg.Processing.DatabaseWorkers
-	if workers <= 0 {
-		workers = runtime.NumCPU()
-	}
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(cfg.Processing.DatabaseWorkers, 1)
 	if workers > len(ids) && len(ids) > 0 {
 		workers = len(ids)
 	}
@@ -373,13 +367,7 @@ func processArchive(
 		entries = append(entries, archiveEntry{Index: len(entries), File: file, BookID: bookID, Ext: ext})
 	}
 	entryListElapsed := time.Since(entryListStart)
-	workers := cfg.Processing.ArchiveWorkers
-	if workers <= 0 {
-		workers = runtime.NumCPU()
-	}
-	if workers < 1 {
-		workers = 1
-	}
+	workers := max(cfg.Processing.ArchiveWorkers, 1)
 	if workers > len(entries) && len(entries) > 0 {
 		workers = len(entries)
 	}

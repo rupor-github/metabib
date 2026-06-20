@@ -15,12 +15,12 @@
 
 ## Runtime Behavior
 - Default DB mode is managed MariaDB: the app discovers `mariadbd`/`mysqld`, `mariadb-install-db`/`mysql_install_db`, and `mariadb`/`mysql`, starts a private socket-only server, and stores data under the executable directory (`build/data/mariadb` when running `build/metabib`).
-- Use `--db-dsn` or `--db-use-service` to target an existing MariaDB service instead of managed mode.
+- Use database config (`database.dsn` or `database.managed: false`) to target an existing MariaDB service instead of managed mode.
 - `--db-overwrite` removes/recreates the managed datadir and drops the DB; without it, dump import still recreates tables present in the dumps, but unrelated stale tables can remain.
 
 ## Output And Performance
 - JSONL files are range-renamed on close as `<base>.<bookid_start>-<bookid_end>.jsonl` with 10-digit zero padding, even when not split.
-- `--output-part-size 512mb` (or `output.part_size`) splits output into approximate byte-sized parts before range rename.
+- `--output-part-size 512mb` splits output into approximate byte-sized parts before range rename.
 - Archive processing is parallel within one archive; archives themselves are processed sequentially.
 - `archive_content_md5: true` is expensive because it forces reading/decompressing the whole archive entry after FB2 description parsing; turn it off for fast archive runs.
 - `fb2_description_tree: false` keeps only `title_info` and is faster/smaller than preserving the full FB2 `<description>` tree.

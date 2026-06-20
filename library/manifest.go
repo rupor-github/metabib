@@ -129,8 +129,8 @@ func (r *manifestReadCloser) Close() error {
 	return r.file.Close()
 }
 
-func PlanArchives(ctx context.Context, cfg *config.Config, checkMD5 bool, log *zap.Logger) ([]ArchiveManifestDecision, bool, error) {
-	archives, err := expandArchives(cfg.Processing.Archives)
+func PlanArchives(ctx context.Context, cfg *config.Config, archivePaths []string, checkMD5 bool, log *zap.Logger) ([]ArchiveManifestDecision, bool, error) {
+	archives, err := expandArchives(archivePaths)
 	if err != nil {
 		return nil, false, err
 	}
@@ -140,12 +140,9 @@ func PlanArchives(ctx context.Context, cfg *config.Config, checkMD5 bool, log *z
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		decision := ArchiveManifestDecision{ArchivePath: archive}
-		if cfg.Processing.Manifests.Enabled {
-			decision, err = planArchiveManifest(ctx, cfg, archive, checkMD5, log)
-			if err != nil {
-				return nil, false, err
-			}
+		decision, err := planArchiveManifest(ctx, cfg, archive, checkMD5, log)
+		if err != nil {
+			return nil, false, err
 		}
 		if !decision.Use {
 			allReady = false
@@ -165,7 +162,7 @@ func PlanDatabaseManifest(
 	log *zap.Logger,
 ) (DatabaseManifestDecision, error) {
 	decision := DatabaseManifestDecision{DumpDir: dumpDir, DumpDate: dumpDate}
-	if !cfg.Processing.Manifests.Enabled || dumpDir == "" {
+	if dumpDir == "" {
 		return decision, nil
 	}
 	start := time.Now()
@@ -341,10 +338,11 @@ func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func
 func ValidateArchiveManifests(
 	ctx context.Context,
 	cfg *config.Config,
+	archivePaths []string,
 	checkMD5 bool,
 	log *zap.Logger,
 ) ([]ArchiveManifestDecision, []ManifestReport, error) {
-	archives, err := expandArchives(cfg.Processing.Archives)
+	archives, err := expandArchives(archivePaths)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -372,11 +370,6 @@ func ValidateDatabaseManifest(
 ) (DatabaseManifestDecision, ManifestReport, error) {
 	decision := DatabaseManifestDecision{DumpDir: dumpDir, DumpDate: dumpDate}
 	report := ManifestReport{Kind: "database", SourcePath: dumpDir}
-	if !cfg.Processing.Manifests.Enabled {
-		report.Reason = "manifests are disabled"
-		logManifestReport(log, report)
-		return decision, report, nil
-	}
 	if dumpDir == "" {
 		report.Reason = "dump directory not specified"
 		logManifestReport(log, report)
@@ -680,11 +673,6 @@ func validateArchiveManifest(
 	manifestPath := archiveManifestPath(cfg, archive)
 	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
 	report := ManifestReport{Kind: "archive", SourcePath: archive, ManifestPath: manifestPath}
-	if !cfg.Processing.Manifests.Enabled {
-		report.Reason = "manifests are disabled"
-		logManifestReport(log, report)
-		return decision, report, nil
-	}
 	archiveInfo, err := os.Stat(archive)
 	if err != nil {
 		return decision, report, fmt.Errorf("stat archive %q: %w", archive, err)

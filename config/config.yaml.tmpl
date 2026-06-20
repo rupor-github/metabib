@@ -7,24 +7,34 @@ database:
   # discovers MariaDB binaries and starts a private local server automatically.
   dsn: ""
 
-  # MariaDB connection defaults used when dsn is empty or when managed is false.
-  host: "127.0.0.1"
-  port: 3306
-  protocol: "tcp"
+  # MariaDB connection defaults. Managed mode uses a private Unix socket on Unix
+  # and localhost TCP with a generated free port on Windows. External services
+  # use these values as configured.
+  host: '{{ if eq .OS "windows" }}127.0.0.1{{ else }}{{ joinPath .ProjectDir "data" "metabib.sock" }}{{ end }}'
+  port: '{{ if eq .OS "windows" }}{{ freeLocalPort }}{{ else }}0{{ end }}'
+  protocol: '{{ if eq .OS "windows" }}tcp{{ else }}unix{{ end }}'
   user: "root"
   password: ""
   name: "flibusta"
 
   # Managed local MariaDB instance. When enabled, metabib uses a private datadir
-  # under the executable directory and does not require a system database service.
+  # and does not require a system database service.
   managed: true
   data_dir: '{{ joinPath .ProjectDir "data" "mariadb" }}'
+
+  # Use a temporary managed datadir under the OS temp directory and remove it on
+  # shutdown. When false, data_dir is reused across runs. If keep_running is
+  # true, the temporary directory is kept because MariaDB is still running.
   temporary: false
-  overwrite_data_dir: false
+
+  # Leave managed MariaDB running after metabib exits. When false, metabib stops
+  # the managed server. This has no effect for external database services.
   keep_running: false
-  socket: ""
-  pid_file: ""
-  log_file: ""
+  # Managed-server support files. socket is used only with Unix managed mode.
+  # pid_file and log_file are used by the managed MariaDB server on all OSes.
+  socket: '{{ if eq .OS "windows" }}{{ else }}{{ joinPath .ProjectDir "data" "metabib.sock" }}{{ end }}'
+  pid_file: '{{ joinPath .ProjectDir "data" "metabib.pid" }}'
+  log_file: '{{ joinPath .ProjectDir "data" "metabib-mariadb.log" }}'
 
   # Optional full paths to MariaDB binaries. If empty, metabib first searches
   # ./mariadb recursively under the startup directory, then PATH.
@@ -37,11 +47,6 @@ database:
   max_open_connections: 32
   max_idle_connections: 32
   connection_max_lifetime_seconds: 0
-
-  # Import SQL dumps before producing JSONL.
-  import: true
-  create: true
-  drop_before_import: false
 
 processing:
   # Parse FB2 description metadata from archive entries.
@@ -56,10 +61,6 @@ processing:
   archive_content_md5: true
 
   manifests:
-    # Use existing manifests when valid. Missing or stale manifests are created
-    # only when metabib cache --rebuild is specified.
-    enabled: true
-
     # Empty keeps compressed archive manifests next to archives and replaces the
     # extension: /path/lib.zip -> /path/lib.manifest.zst. When set, manifests are
     # placed in this directory using the archive base name.
@@ -70,33 +71,20 @@ processing:
     # directory.
     database_dir: ""
 
-  # Parallel workers for database-only JSONL export. 0 uses runtime CPU count.
-  database_workers: 0
+  # Parallel workers for database manifest creation.
+  database_workers: '{{ .CPUs }}'
 
   # Number of books loaded by one worker query batch during database-only export.
   database_batch_size: 256
 
-  # Parallel workers for archive entry processing. 0 uses runtime CPU count.
-  archive_workers: 0
+  # Parallel workers for archive entry processing.
+  archive_workers: '{{ .CPUs }}'
 
   # Number of archive entries processed by one worker batch.
   archive_batch_size: 256
 
   # Buffer size in bytes for reading uncompressed archive entry content.
-  # 0 disables explicit buffering and uses reader defaults.
   archive_read_buffer_size: 262144
-
-  # If archive paths are not specified on command line, these paths are used.
-  archives: []
-
-  # If no archive paths are provided, emit records from the database only.
-  online_when_no_archives: true
-
-output:
-  jsonl: "metabib.jsonl"
-  # Optional part size such as 500m, 2g, 1024k. Empty means one output file,
-  # still renamed with the included book id range.
-  part_size: ""
 
 logging:
   # controls terminal (stdout, stderr) output

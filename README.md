@@ -20,7 +20,8 @@ then merges those cached artifacts into final JSONL.
 
 By default, `metabib` starts and stops a private local MariaDB instance using
 discovered MariaDB binaries. It does not require a system database service. To
-use an existing service instead, pass `--db-dsn` or `--db-use-service`.
+use an existing service instead, set `database.dsn` or `database.managed: false`
+in the configuration file.
 
 ## Usage
 
@@ -50,8 +51,7 @@ metabib cache --rebuild --database-dumps /path/to/sql-dumps --db-overwrite
 Use an existing MariaDB service instead of a managed one:
 
 ```sh
-metabib cache --rebuild --database-dumps /path/to/sql-dumps \
-  --db-dsn 'user:password@tcp(127.0.0.1:3306)/flibusta'
+metabib cache --rebuild --database-dumps /path/to/sql-dumps --config metabib.yaml
 ```
 
 Build only archive manifests without starting MariaDB:
@@ -88,7 +88,7 @@ for example `lib.manifest.zst` or `database.manifest.zst`.
 
 Use global `--verbose` to enable detailed progress reporting.
 
-When `output.part_size` or `--output-part-size` is used, output files are named
+When `--output-part-size` is used, output files are named
 with zero-padded book-id ranges so they sort naturally, for example:
 
 ```text

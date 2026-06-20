@@ -123,17 +123,7 @@ func cacheCommand() *cli.Command {
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in existing manifests"},
 			&cli.BoolFlag{Name: "rebuild", Usage: "rebuild stale or invalid existing manifests after checksum verification"},
 			&cli.BoolFlag{Name: "no-import", Usage: "skip SQL dump import and use existing database"},
-			&cli.StringFlag{Name: "db-name", Usage: "database name"},
-			&cli.StringFlag{Name: "db-host", Usage: "database host or socket path"},
-			&cli.IntFlag{Name: "db-port", Usage: "database TCP port"},
-			&cli.StringFlag{Name: "db-user", Usage: "database user"},
-			&cli.StringFlag{Name: "db-password", Usage: "database password"},
-			&cli.StringFlag{Name: "db-dsn", Usage: "use existing database service DSN"},
-			&cli.BoolFlag{Name: "db-use-service", Usage: "do not start managed MariaDB, use configured host/port/socket"},
 			&cli.BoolFlag{Name: "db-overwrite", Usage: "overwrite managed data directory and drop database before import"},
-			&cli.StringFlag{Name: "db-server", Usage: "mariadbd/mysqld server path"},
-			&cli.StringFlag{Name: "db-install-db", Usage: "mariadb-install-db/mysql_install_db path"},
-			&cli.StringFlag{Name: "db-client", Usage: "mariadb/mysql client path"},
 		},
 		Action: runCache,
 	}
@@ -146,7 +136,7 @@ func mergeCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "database-dumps", Usage: "directory containing SQL dumps for database manifest validation"},
 			&cli.StringSliceFlag{Name: "archives", Aliases: []string{"a"}, Usage: "archive file or directory with archives; can be repeated"},
-			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write JSONL to `FILE`"},
+			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write JSONL to `FILE`", Required: true},
 			&cli.StringFlag{Name: "output-part-size", Usage: "split JSONL into range-named parts of approximate `SIZE` (supports k, m, g)"},
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in manifests"},
 			&cli.BoolFlag{Name: "allow-stale", Usage: "warn but continue when manifests are stale"},
@@ -162,14 +152,13 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 
 	dumpDir := cmd.String("database-dumps")
 	selectedDatabase := dumpDir != ""
-	selectedArchives := len(cfg.Processing.Archives) > 0
+	archives := cmd.StringSlice("archives")
+	selectedArchives := len(archives) > 0
+	importDumps := !cmd.Bool("no-import")
+	overwriteDB := cmd.Bool("db-overwrite")
 	if !selectedDatabase && !selectedArchives {
 		return errors.New("nothing to cache: specify --database-dumps, --archives, or both")
 	}
-	if !cfg.Processing.Manifests.Enabled {
-		return errors.New("manifest caching requires processing.manifests.enabled=true")
-	}
-
 	var dumps []db.DumpFile
 	var dumpDate string
 	if selectedDatabase {
@@ -190,14 +179,14 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 	var reports []library.ManifestReport
 	checkMD5 := cmd.Bool("check-md5")
 	if selectedArchives {
-		archivePlan, _, err := library.PlanArchives(ctx, cfg, checkMD5, env.Log)
+		archivePlan, _, err := library.PlanArchives(ctx, cfg, archives, checkMD5, env.Log)
 		if err != nil {
 			return err
 		}
 		if err := library.BuildArchiveManifests(ctx, cfg, env.Log, env.Verbose, archivePlan); err != nil {
 			return err
 		}
-		_, archiveReports, err := library.ValidateArchiveManifests(ctx, cfg, checkMD5, env.Log)
+		_, archiveReports, err := library.ValidateArchiveManifests(ctx, cfg, archives, checkMD5, env.Log)
 		if err != nil {
 			return err
 		}
@@ -214,15 +203,15 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 			if env.LogIO != nil {
 				logOut = env.LogIO
 			}
-			runtime, err := db.PrepareRuntime(ctx, cfg.Database, env.Log, logOut)
+			runtime, err := db.PrepareRuntime(ctx, cfg.Database, importDumps, overwriteDB, env.Log, logOut)
 			if err != nil {
 				return err
 			}
 			defer runtime.Close()
 			cfg.Database = runtime.Config
 
-			if cfg.Database.Import {
-				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose)
+			if importDumps {
+				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose, true, overwriteDB)
 				if err := importer.PrepareDatabase(ctx); err != nil {
 					return err
 				}
@@ -251,19 +240,15 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 
 func runMerge(ctx context.Context, cmd *cli.Command) error {
 	cfg := state.EnvFromContext(ctx).Cfg
-	applyMergeOverrides(cfg, cmd)
 	env := state.EnvFromContext(ctx)
 
 	dumpDir := cmd.String("database-dumps")
 	selectedDatabase := dumpDir != ""
-	selectedArchives := len(cfg.Processing.Archives) > 0
+	archives := cmd.StringSlice("archives")
+	selectedArchives := len(archives) > 0
 	if !selectedDatabase && !selectedArchives {
 		return errors.New("nothing to merge: specify --database-dumps, --archives, or both")
 	}
-	if !cfg.Processing.Manifests.Enabled {
-		return errors.New("merge requires processing.manifests.enabled=true")
-	}
-
 	allowStale := cmd.Bool("allow-stale")
 	checkMD5 := cmd.Bool("check-md5")
 	var reports []library.ManifestReport
@@ -288,7 +273,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	if selectedArchives {
 		var archiveReports []library.ManifestReport
 		var err error
-		archivePlan, archiveReports, err = library.ValidateArchiveManifests(ctx, cfg, checkMD5, env.Log)
+		archivePlan, archiveReports, err = library.ValidateArchiveManifests(ctx, cfg, archives, checkMD5, env.Log)
 		if err != nil {
 			return err
 		}
@@ -298,7 +283,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	return writeOutput(ctx, cfg, func(out *jsonl.Writer) error {
+	return writeOutput(ctx, cmd.String("output"), cmd.String("output-part-size"), func(out *jsonl.Writer) error {
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
 			if err != nil {
@@ -328,15 +313,15 @@ func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
 	return false
 }
 
-func writeOutput(ctx context.Context, cfg *config.Config, write func(*jsonl.Writer) error) error {
+func writeOutput(ctx context.Context, path string, partSizeValue string, write func(*jsonl.Writer) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	partSize, err := parseSize(cfg.Output.PartSize)
+	partSize, err := parseSize(partSizeValue)
 	if err != nil {
 		return err
 	}
-	out, err := jsonl.Create(cfg.Output.JSONL, partSize)
+	out, err := jsonl.Create(path, partSize)
 	if err != nil {
 		return err
 	}
@@ -449,65 +434,8 @@ func failIfReportsNotReady(reports []library.ManifestReport, allowStale bool) er
 }
 
 func applyCacheOverrides(cfg *config.Config, cmd *cli.Command) {
-	if archives := cmd.StringSlice("archives"); len(archives) > 0 {
-		cfg.Processing.Archives = archives
-	}
 	if cmd.Bool("rebuild") {
 		cfg.Processing.Rebuild = true
-	}
-	if cmd.Bool("no-import") {
-		cfg.Database.Import = false
-	}
-	applyDatabaseOverrides(cfg, cmd)
-}
-
-func applyMergeOverrides(cfg *config.Config, cmd *cli.Command) {
-	if v := cmd.String("output"); v != "" {
-		cfg.Output.JSONL = v
-	}
-	if v := cmd.String("output-part-size"); v != "" {
-		cfg.Output.PartSize = v
-	}
-	if archives := cmd.StringSlice("archives"); len(archives) > 0 {
-		cfg.Processing.Archives = archives
-	}
-}
-
-func applyDatabaseOverrides(cfg *config.Config, cmd *cli.Command) {
-	if v := cmd.String("db-name"); v != "" {
-		cfg.Database.Name = v
-	}
-	if v := cmd.String("db-host"); v != "" {
-		cfg.Database.Host = v
-	}
-	if v := cmd.Int("db-port"); v > 0 {
-		cfg.Database.Port = v
-	}
-	if v := cmd.String("db-user"); v != "" {
-		cfg.Database.User = v
-	}
-	if v := cmd.String("db-password"); v != "" {
-		cfg.Database.Password = v
-	}
-	if v := cmd.String("db-client"); v != "" {
-		cfg.Database.ClientPath = v
-	}
-	if v := cmd.String("db-dsn"); v != "" {
-		cfg.Database.DSN = v
-		cfg.Database.Managed = false
-	}
-	if v := cmd.String("db-server"); v != "" {
-		cfg.Database.ServerPath = v
-	}
-	if v := cmd.String("db-install-db"); v != "" {
-		cfg.Database.InstallDBPath = v
-	}
-	if cmd.Bool("db-use-service") {
-		cfg.Database.Managed = false
-	}
-	if cmd.Bool("db-overwrite") {
-		cfg.Database.OverwriteDataDir = true
-		cfg.Database.DropBeforeImport = true
 	}
 }
 

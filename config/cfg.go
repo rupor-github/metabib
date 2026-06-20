@@ -19,61 +19,48 @@ type Config struct {
 	Version    int              `yaml:"version" validate:"eq=1"`
 	Database   DatabaseConfig   `yaml:"database"`
 	Processing ProcessingConfig `yaml:"processing"`
-	Output     OutputConfig     `yaml:"output"`
 	Logging    LoggingConfig    `yaml:"logging"`
 }
 
 type DatabaseConfig struct {
-	DSN              string `yaml:"dsn"`
-	Host             string `yaml:"host" validate:"required"`
-	Port             int    `yaml:"port" validate:"min=0,max=65535"`
-	Protocol         string `yaml:"protocol" validate:"oneof=tcp unix"`
-	User             string `yaml:"user" validate:"required"`
-	Password         string `yaml:"password"`
-	Name             string `yaml:"name" validate:"required"`
-	Managed          bool   `yaml:"managed"`
-	DataDir          string `yaml:"data_dir" validate:"required"`
-	Temporary        bool   `yaml:"temporary"`
-	OverwriteDataDir bool   `yaml:"overwrite_data_dir"`
-	KeepRunning      bool   `yaml:"keep_running"`
-	Socket           string `yaml:"socket"`
-	PIDFile          string `yaml:"pid_file"`
-	LogFile          string `yaml:"log_file"`
-	ServerPath       string `yaml:"server_path,omitempty"`
-	InstallDBPath    string `yaml:"install_db_path,omitempty"`
-	ClientPath       string `yaml:"client_path,omitempty"`
-	MaxOpenConns     int    `yaml:"max_open_connections" validate:"min=0"`
-	MaxIdleConns     int    `yaml:"max_idle_connections" validate:"min=0"`
-	ConnMaxLifetime  int    `yaml:"connection_max_lifetime_seconds" validate:"min=0"`
-	Import           bool   `yaml:"import"`
-	Create           bool   `yaml:"create"`
-	DropBeforeImport bool   `yaml:"drop_before_import"`
+	DSN             string `yaml:"dsn"`
+	Host            string `yaml:"host" validate:"required"`
+	Port            int    `yaml:"port" validate:"min=0,max=65535"`
+	Protocol        string `yaml:"protocol" validate:"oneof=tcp unix"`
+	User            string `yaml:"user" validate:"required"`
+	Password        string `yaml:"password"`
+	Name            string `yaml:"name" validate:"required"`
+	Managed         bool   `yaml:"managed"`
+	DataDir         string `yaml:"data_dir" validate:"required"`
+	Temporary       bool   `yaml:"temporary"`
+	KeepRunning     bool   `yaml:"keep_running"`
+	Socket          string `yaml:"socket"`
+	PIDFile         string `yaml:"pid_file"`
+	LogFile         string `yaml:"log_file"`
+	ServerPath      string `yaml:"server_path,omitempty"`
+	InstallDBPath   string `yaml:"install_db_path,omitempty"`
+	ClientPath      string `yaml:"client_path,omitempty"`
+	MaxOpenConns    int    `yaml:"max_open_connections" validate:"min=0"`
+	MaxIdleConns    int    `yaml:"max_idle_connections" validate:"min=0"`
+	ConnMaxLifetime int    `yaml:"connection_max_lifetime_seconds" validate:"min=0"`
 }
 
 type ProcessingConfig struct {
-	ParseFB2             bool           `yaml:"parse_fb2"`
-	FB2DescriptionTree   bool           `yaml:"fb2_description_tree"`
-	ArchiveContentMD5    bool           `yaml:"archive_content_md5"`
-	Manifests            ManifestConfig `yaml:"manifests"`
-	DatabaseWorkers      int            `yaml:"database_workers" validate:"min=0"`
-	DatabaseBatchSize    int            `yaml:"database_batch_size" validate:"min=1"`
-	ArchiveWorkers       int            `yaml:"archive_workers" validate:"min=0"`
-	ArchiveBatchSize     int            `yaml:"archive_batch_size" validate:"min=1"`
-	ArchiveReadBuffer    int            `yaml:"archive_read_buffer_size" validate:"min=0"`
-	Archives             []string       `yaml:"archives" validate:"dive,required"`
-	OnlineWhenNoArchives bool           `yaml:"online_when_no_archives"`
-	Rebuild              bool           `yaml:"-"`
+	ParseFB2           bool           `yaml:"parse_fb2"`
+	FB2DescriptionTree bool           `yaml:"fb2_description_tree"`
+	ArchiveContentMD5  bool           `yaml:"archive_content_md5"`
+	Manifests          ManifestConfig `yaml:"manifests"`
+	DatabaseWorkers    int            `yaml:"database_workers" validate:"min=0"`
+	DatabaseBatchSize  int            `yaml:"database_batch_size" validate:"min=1"`
+	ArchiveWorkers     int            `yaml:"archive_workers" validate:"min=0"`
+	ArchiveBatchSize   int            `yaml:"archive_batch_size" validate:"min=1"`
+	ArchiveReadBuffer  int            `yaml:"archive_read_buffer_size" validate:"min=0"`
+	Rebuild            bool           `yaml:"-"`
 }
 
 type ManifestConfig struct {
-	Enabled     bool   `yaml:"enabled"`
 	ArchiveDir  string `yaml:"archive_dir"`
 	DatabaseDir string `yaml:"database_dir"`
-}
-
-type OutputConfig struct {
-	JSONL    string `yaml:"jsonl" validate:"required"`
-	PartSize string `yaml:"part_size"`
 }
 
 func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {
