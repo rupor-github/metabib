@@ -18,5 +18,8 @@ release/
 release_*/
 vendor/
 *.jsonl
+*.jsonl.gz
+*.jsonl.zst
+*.jsonl.zip
 data/
 misc/version.go

@@ -95,7 +95,7 @@ metabib cache \
 metabib merge \
   --database-dumps /path/to/sql-dumps \
   --archives /path/to/flibusta \
-  --output metabib.jsonl
+  --output metabib
 ```
 
 To use an already imported database:
@@ -135,15 +135,22 @@ is omitted.
 Merge from archives only, database only, or both:
 
 ```sh
-metabib merge --archives /path/to/flibusta --output archive-only.jsonl
-metabib merge --database-dumps /path/to/sql-dumps --output database-only.jsonl
-metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/flibusta --output combined.jsonl
+metabib merge --archives /path/to/flibusta --output archive-only
+metabib merge --database-dumps /path/to/sql-dumps --output database-only
+metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/flibusta --output combined
 ```
 
 `merge` never starts MariaDB and never reads archives directly. It fails when a
 selected manifest is missing, invalid, or stale. Use `--check-md5` for full
 source checksum verification, or `--allow-stale` to warn and continue with stale
 manifests.
+
+Merged JSONL output is zstd-compressed by default, using the same compression
+level as manifest files. Use `--output-compression zstd`, `gz`, `zip`, or `none`
+to select a different output container. The `--output` value is an output prefix,
+not a final file name: `metabib merge --output all` writes files named like
+`all.<bookid_start>-<bookid_end>.jsonl.zst`. Existing output files are replaced;
+when that happens, `metabib` logs an overwrite warning.
 
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
 for example `lib.manifest.zst` or `database.manifest.zst`.
@@ -154,8 +161,8 @@ When `--output-part-size` is used, output files are named
 with zero-padded book-id ranges so they sort naturally, for example:
 
 ```text
-metabib.0000000001-0000120345.jsonl
-metabib.0000120346-0000240872.jsonl
+metabib.0000000001-0000120345.jsonl.zst
+metabib.0000120346-0000240872.jsonl.zst
 ```
 
 Dump the default configuration:

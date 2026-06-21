@@ -72,8 +72,27 @@ func TestDumpDirDatesDiffer(t *testing.T) {
 func TestWriteOutput(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "out.jsonl")
-	err := writeOutput(context.Background(), path, "", func(out *jsonl.Writer) error {
+	path := filepath.Join(t.TempDir(), "out")
+	err := writeOutput(context.Background(), path, "", "", nil, func(out *jsonl.Writer) error {
+		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
+	})
+	if err != nil {
+		t.Fatalf("writeOutput() error = %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "out.*.jsonl.zst"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches = %#v", matches)
+	}
+}
+
+func TestWriteOutputNoCompression(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "out")
+	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
 	})
 	if err != nil {

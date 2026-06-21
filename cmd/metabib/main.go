@@ -151,7 +151,8 @@ func mergeCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "database-dumps", Usage: "directory containing SQL dumps for database manifest validation"},
 			&cli.StringSliceFlag{Name: "archives", Aliases: []string{"a"}, Usage: "archive file or directory with archives; can be repeated"},
-			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write JSONL to `FILE`", Required: true},
+			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write range-named JSONL files using `PREFIX`", Required: true},
+			&cli.StringFlag{Name: "output-compression", Value: string(jsonl.CompressionZstd), Usage: "compress JSONL output as `MODE` (zstd, gz, zip, none)"},
 			&cli.StringFlag{Name: "output-part-size", Usage: "split JSONL into range-named parts of approximate `SIZE` (supports k, m, g)"},
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in manifests"},
 			&cli.BoolFlag{Name: "allow-stale", Usage: "warn but continue when manifests are stale"},
@@ -298,7 +299,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	return writeOutput(ctx, cmd.String("output"), cmd.String("output-part-size"), func(out *jsonl.Writer) error {
+	return writeOutput(ctx, cmd.String("output"), cmd.String("output-part-size"), cmd.String("output-compression"), env.Log, func(out *jsonl.Writer) error {
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
 			if err != nil {
@@ -328,7 +329,7 @@ func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
 	return false
 }
 
-func writeOutput(ctx context.Context, path string, partSizeValue string, write func(*jsonl.Writer) error) error {
+func writeOutput(ctx context.Context, path string, partSizeValue string, compressionValue string, log *zap.Logger, write func(*jsonl.Writer) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -336,10 +337,15 @@ func writeOutput(ctx context.Context, path string, partSizeValue string, write f
 	if err != nil {
 		return err
 	}
-	out, err := jsonl.Create(path, partSize)
+	compression, err := jsonl.ParseCompression(compressionValue)
 	if err != nil {
 		return err
 	}
+	out, err := jsonl.CreateCompressed(path, partSize, compression)
+	if err != nil {
+		return err
+	}
+	out.WithLogger(log)
 	defer out.Close()
 	return write(out)
 }
