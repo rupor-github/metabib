@@ -1,10 +1,13 @@
 # Agent Notes
 
 ## Commands
+- Taskfile commands already export `GOEXPERIMENT=jsonv2`; use the same environment for direct `go`, `gopls`, `goimports-reviser`, and `staticcheck` commands.
 - Use `go tool task` for the default developer build; it builds `build/metabib` and runs staticcheck, but intentionally does not run tests.
-- Use `go test -mod=mod ./...` for full compile/test verification. A stale/ignored `vendor/` directory may exist, so keep `-mod=mod` unless you deliberately refresh vendor.
+- Use `GOEXPERIMENT=jsonv2 go test -mod=mod ./...` for full compile/test verification. A stale/ignored `vendor/` directory may exist, so keep `-mod=mod` unless you deliberately refresh vendor.
 - Use `PACKAGES='./...' go tool task test` to force the Taskfile test task to run all packages; plain `go tool task test` only runs packages that contain `*_test.go`.
-- Use `GOFLAGS=-mod=mod go tool staticcheck -f stylish -tests=true ./...` for focused linting outside the Taskfile.
+- Use `GOEXPERIMENT=jsonv2 GOFLAGS=-mod=mod go tool staticcheck -f stylish -tests=true ./...` for focused linting outside the Taskfile.
+- Use `GOEXPERIMENT=jsonv2 GOFLAGS=-mod=mod goimports-reviser -format -set-alias -company-prefixes github.com/rupor-github <changed .go files>` for Go formatting/import cleanup.
+- Use `GOEXPERIMENT=jsonv2 gopls check -severity=hint <changed .go files>` for Go diagnostics after edits.
 - Release CI runs `go tool task release` on tags matching `v*.*.*`.
 - Project is using jj-vcs (not git).
 
