@@ -21,5 +21,9 @@ vendor/
 *.jsonl.gz
 *.jsonl.zst
 *.jsonl.zip
+*.meta.json
+*.meta.json.gz
+*.meta.json.zst
+*.meta.json.zip
 data/
 misc/version.go

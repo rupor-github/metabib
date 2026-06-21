@@ -13,12 +13,14 @@ import (
 	"syscall"
 	"time"
 
+	jsonv2 "encoding/json/v2"
 	mysql "github.com/go-sql-driver/mysql"
 	cli "github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 
 	"metabib/config"
 	"metabib/db"
+	"metabib/inpx"
 	"metabib/jsonl"
 	"metabib/library"
 	"metabib/misc"
@@ -99,6 +101,7 @@ func main() {
 		Commands: []*cli.Command{
 			cacheCommand(),
 			mergeCommand(),
+			inpxCommand(),
 			{
 				Name:      "dumpconfig",
 				Usage:     "Dumps default or actual configuration (YAML)",
@@ -125,6 +128,22 @@ func main() {
 		}
 	}()
 	err = app.Run(ctx, os.Args)
+}
+
+func inpxCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "inpx",
+		Usage: "Build MyHomeLib-compatible INPX from merged JSONL parts",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "input", Aliases: []string{"i"}, Usage: "read merged JSONL parts and metadata using `PREFIX`", Required: true},
+			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write INPX using `PREFIX` plus dump date", Required: true},
+			&cli.StringFlag{Name: "format", Value: string(inpx.Format2X), Usage: "INPX format `MODE` (2x, ruks)"},
+			&cli.StringFlag{Name: "sequence", Value: string(inpx.SequenceAuthor), Usage: "sequence selection `MODE` (author, publisher, ignore)"},
+			&cli.StringFlag{Name: "prefer-fb2", Value: string(inpx.PreferComplement), Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)"},
+			&cli.BoolFlag{Name: "quick-fix", Usage: "apply MyHomeLib-compatible field length limits from config"},
+		},
+		Action: runINPX,
+	}
 }
 
 func cacheCommand() *cli.Command {
@@ -299,7 +318,20 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	return writeOutput(ctx, cmd.String("output"), cmd.String("output-part-size"), cmd.String("output-compression"), env.Log, func(out *jsonl.Writer) error {
+	outputPrefix := cmd.String("output")
+	compressionValue := cmd.String("output-compression")
+	compression, err := jsonl.ParseCompression(compressionValue)
+	if err != nil {
+		return err
+	}
+	meta, err := library.MergeMetadataFor(ctx, cfg.Database.Name, databaseManifest, archivePlan, string(compression))
+	if err != nil {
+		return err
+	}
+	if err := writeMergeMetadata(outputPrefix, compression, meta, env.Log); err != nil {
+		return err
+	}
+	return writeOutput(ctx, outputPrefix, cmd.String("output-part-size"), compressionValue, env.Log, func(out *jsonl.Writer) error {
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
 			if err != nil {
@@ -310,6 +342,95 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		_, err := library.CopyManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
 		return err
 	})
+}
+
+func runINPX(ctx context.Context, cmd *cli.Command) error {
+	cfg := state.EnvFromContext(ctx).Cfg
+	env := state.EnvFromContext(ctx)
+	format, err := inpx.ParseFormat(cmd.String("format"))
+	if err != nil {
+		return err
+	}
+	sequence, err := inpx.ParseSequenceMode(cmd.String("sequence"))
+	if err != nil {
+		return err
+	}
+	preference, err := inpx.ParseFB2Preference(cmd.String("prefer-fb2"))
+	if err != nil {
+		return err
+	}
+	limits := inpx.Limits{
+		AuthorName:   cfg.INPX.Limits.AuthorName,
+		AuthorMiddle: cfg.INPX.Limits.AuthorMiddle,
+		AuthorFamily: cfg.INPX.Limits.AuthorFamily,
+		Title:        cfg.INPX.Limits.Title,
+		Keywords:     cfg.INPX.Limits.Keywords,
+		Sequence:     cfg.INPX.Limits.Sequence,
+	}
+	quickFix := cfg.INPX.QuickFix || cmd.Bool("quick-fix")
+	path, err := inpx.Generate(ctx, inpx.Options{
+		InputPrefix:     cmd.String("input"),
+		OutputPrefix:    cmd.String("output"),
+		Format:          format,
+		SequenceMode:    sequence,
+		FB2Preference:   preference,
+		QuickFix:        quickFix,
+		Limits:          limits,
+		CommentTemplate: cfg.INPX.CommentTemplate,
+		Log:             env.Log,
+	})
+	if err != nil {
+		return err
+	}
+	if env.Log != nil {
+		env.Log.Info("INPX created", zap.String("file", path))
+	}
+	return nil
+}
+
+func writeMergeMetadata(prefix string, compression jsonl.Compression, meta model.MergeMetadata, log *zap.Logger) error {
+	path := prefix + ".meta.json"
+	finalPath := jsonl.CompressedPath(path, compression)
+	f, w, closer, err := jsonl.CreateCompressedFile(path, compression)
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := jsonv2.MarshalWrite(w, meta); err != nil {
+		f.Close()
+		return fmt.Errorf("write merge metadata %q: %w", tmpPath, err)
+	}
+	if _, err := w.Write([]byte{'\n'}); err != nil {
+		f.Close()
+		return fmt.Errorf("write merge metadata newline %q: %w", tmpPath, err)
+	}
+	if closer != nil {
+		if err := closer.Close(); err != nil {
+			f.Close()
+			return fmt.Errorf("close merge metadata compressor %q: %w", tmpPath, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close merge metadata %q: %w", tmpPath, err)
+	}
+	if _, err := os.Stat(finalPath); err == nil {
+		if log != nil {
+			log.Warn("Overwriting existing merge metadata", zap.String("file", finalPath))
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat merge metadata %q: %w", finalPath, err)
+	}
+	if err := jsonl.ReplaceOutputFile(tmpPath, finalPath); err != nil {
+		return fmt.Errorf("rename merge metadata %q to %q: %w", tmpPath, finalPath, err)
+	}
+	cleanup = false
+	return nil
 }
 
 func dumpDirDatesDiffer(dumps []db.DumpFile) bool {

@@ -356,7 +356,7 @@ func processArchive(
 
 	entryListStart := time.Now()
 	entries := make([]archiveEntry, 0, len(zr.File))
-	for _, file := range zr.File {
+	for idx, file := range zr.File {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -364,7 +364,7 @@ func processArchive(
 			continue
 		}
 		bookID, ext := entryIdentity(file.Name)
-		entries = append(entries, archiveEntry{Index: len(entries), File: file, BookID: bookID, Ext: ext})
+		entries = append(entries, archiveEntry{Index: idx, File: file, BookID: bookID, Ext: ext})
 	}
 	entryListElapsed := time.Since(entryListStart)
 	workers := max(cfg.Processing.ArchiveWorkers, 1)
@@ -556,7 +556,7 @@ func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.C
 		if err := ctx.Err(); err != nil {
 			return nil, timing, err
 		}
-		rec, et, err := processEntryWithSource(ctx, repo, cfg, archive, entry.File, entry.BookID, entry.Ext, sources[entry.BookID])
+		rec, et, err := processEntryWithSource(ctx, repo, cfg, archive, entry.File, entry.Index, entry.BookID, entry.Ext, sources[entry.BookID])
 		if err != nil {
 			return nil, timing, err
 		}
@@ -568,7 +568,7 @@ func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.C
 	return records, timing, nil
 }
 
-func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, file *zip.File, bookID int64, ext string, dbSource model.DatabaseSource) (rec model.Record, timing entryTiming, err error) {
+func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, file *zip.File, index int, bookID int64, ext string, dbSource model.DatabaseSource) (rec model.Record, timing entryTiming, err error) {
 	if err := ctx.Err(); err != nil {
 		return model.Record{}, timing, err
 	}
@@ -582,6 +582,7 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 			Archive: &model.ArchiveInfo{
 				Path:             archive,
 				Entry:            file.Name,
+				Index:            index,
 				CompressedSize:   file.CompressedSize64,
 				UncompressedSize: file.UncompressedSize64,
 				Modified:         file.Modified.Format("2006-01-02T15:04:05Z07:00"),

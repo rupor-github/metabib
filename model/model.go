@@ -18,10 +18,41 @@ type RecordID struct {
 type ArchiveInfo struct {
 	Path             string `json:"path"`
 	Entry            string `json:"entry"`
+	Index            int    `json:"index,omitempty"`
 	CompressedSize   uint64 `json:"compressed_size,omitempty"`
 	UncompressedSize uint64 `json:"uncompressed_size,omitempty"`
 	ContentMD5       string `json:"content_md5,omitempty"`
 	Modified         string `json:"modified,omitempty"`
+}
+
+type MergeMetadata struct {
+	Schema      string                 `json:"schema"`
+	Library     string                 `json:"library"`
+	Database    MergeDatabaseMetadata  `json:"database"`
+	Archives    []MergeArchiveMetadata `json:"archives,omitempty"`
+	Compression string                 `json:"compression,omitempty"`
+	Created     string                 `json:"created,omitempty"`
+}
+
+type MergeDatabaseMetadata struct {
+	DumpDir     string `json:"dump_dir,omitempty"`
+	DumpDate    string `json:"dump_date,omitempty"`
+	DumpDateISO string `json:"dump_date_iso,omitempty"`
+}
+
+type MergeArchiveMetadata struct {
+	Path         string       `json:"path"`
+	Name         string       `json:"name"`
+	Entries      int          `json:"entries"`
+	FB2Entries   int          `json:"fb2_entries"`
+	Ignored      []IndexRange `json:"ignored,omitempty"`
+	Dummy        []IndexRange `json:"dummy,omitempty"`
+	ManifestPath string       `json:"manifest_path,omitempty"`
+}
+
+type IndexRange struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
 }
 
 type RecordSources struct {

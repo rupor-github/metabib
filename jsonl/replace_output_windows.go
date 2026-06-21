@@ -15,3 +15,7 @@ func replaceOutputFile(tmpOutputName, outputName string) error {
 	}
 	return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
 }
+
+func ReplaceOutputFile(tmpOutputName, outputName string) error {
+	return replaceOutputFile(tmpOutputName, outputName)
+}

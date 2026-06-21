@@ -152,6 +152,23 @@ not a final file name: `metabib merge --output all` writes files named like
 `all.<bookid_start>-<bookid_end>.jsonl.zst`. Existing output files are replaced;
 when that happens, `metabib` logs an overwrite warning.
 
+`merge` also writes a metadata sidecar using the same compression mode, for
+example `all.meta.json.zst`. It records the database dump date and archive entry
+layout needed for exact MyHomeLib INPX generation.
+
+Build a MyHomeLib-compatible FB2 INPX from merged JSONL parts:
+
+```sh
+metabib inpx --input all --output flibusta
+```
+
+`inpx --input` is a prefix; it discovers `all.meta.json*` and all matching
+`all.*.jsonl*` parts. `inpx --output` is also a prefix; the dump date from merge
+metadata is appended automatically, producing names like `flibusta_20260603.inpx`.
+Use `--format 2x` or `--format ruks` to select the INPX record layout. Sequence
+and FB2 merge behavior defaults match the historical FB2 lib2inpx mode and can
+be adjusted with `--sequence` and `--prefer-fb2`.
+
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
 for example `lib.manifest.zst` or `database.manifest.zst`.
 

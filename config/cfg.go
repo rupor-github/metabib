@@ -19,6 +19,7 @@ type Config struct {
 	Version    int              `yaml:"version" validate:"eq=1"`
 	Database   DatabaseConfig   `yaml:"database"`
 	Processing ProcessingConfig `yaml:"processing"`
+	INPX       INPXConfig       `yaml:"inpx"`
 	Logging    LoggingConfig    `yaml:"logging"`
 }
 
@@ -61,6 +62,21 @@ type ProcessingConfig struct {
 type ManifestConfig struct {
 	ArchiveDir  string `yaml:"archive_dir"`
 	DatabaseDir string `yaml:"database_dir"`
+}
+
+type INPXConfig struct {
+	QuickFix        bool       `yaml:"quick_fix"`
+	CommentTemplate string     `yaml:"comment_template"`
+	Limits          INPXLimits `yaml:"limits"`
+}
+
+type INPXLimits struct {
+	AuthorName   int `yaml:"author_name" validate:"min=1"`
+	AuthorMiddle int `yaml:"author_middle" validate:"min=1"`
+	AuthorFamily int `yaml:"author_family" validate:"min=1"`
+	Title        int `yaml:"title" validate:"min=1"`
+	Keywords     int `yaml:"keywords" validate:"min=1"`
+	Sequence     int `yaml:"sequence" validate:"min=1"`
 }
 
 func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {
