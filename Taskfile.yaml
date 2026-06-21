@@ -28,7 +28,9 @@ tasks:
     desc: Builds development version for host OS
     aliases: [debug]
     platforms: [linux]
-    deps: [generate-project-version]
+    deps:
+      - task: pre-commit-install
+      - task: generate-project-version
     cmds:
       - task: go-build
         vars: {GOOS: 'linux', GOARCH: 'amd64', CGO_ENABLED: '0', FLAGS: 'debug', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.DEV_BUILD_DIR}}/{{.PRJ_NAME}}'}
@@ -38,7 +40,9 @@ tasks:
     desc: Builds development version for Windows
     aliases: [dw]
     platforms: [linux]
-    deps: [generate-project-version]
+    deps:
+      - task: pre-commit-install
+      - task: generate-project-version
     cmds:
       - task: go-build
         vars: {GOOS: 'windows', GOARCH: 'amd64', CGO_ENABLED: '0', FLAGS: 'debug', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.DEV_BUILD_DIR}}/{{.PRJ_NAME}}.exe'}
@@ -49,6 +53,10 @@ tasks:
     platforms: [linux]
     cmds:
       - rm -rf '{{.DEV_BUILD_DIR}}' '{{.REL_BUILD_DIR}}' '{{.REL_BUILD_DIR}}_'* misc/version.go
+      - rm -fv .task/checksum/*
+      - rm -fv .task/timestamp/*
+      - rm -fv {{.ROOT_DIR}}/.git/hooks/pre-commit
+      - rm -fv {{.ROOT_DIR}}/.git/hooks/pre-push
 
   test:
     desc: |
@@ -224,3 +232,18 @@ tasks:
         cmd: |
           echo "Vendoring with {{with $arch := split "-" .ITEM}}{{$arch._0}}{{end}} GOARCH={{with $arch := split "-" .ITEM}}{{$arch._1}}{{end}}"
           GOOS={{with $arch := split "-" .ITEM}}{{$arch._0}}{{end}} GOARCH={{with $arch := split "-" .ITEM}}{{$arch._1}}{{end}} go mod vendor {{.CLI_ARGS}}
+
+  pre-commit-install:
+    internal: true
+    desc: Installs pre-commit hooks for git
+    platforms: [linux]
+    preconditions:
+      - sh: 'command -v "pre-commit" &> /dev/null'
+        msg: "pre-commit is not available - either not installed or python venv is not set properly"
+    cmds:
+      - pre-commit install -f
+    sources:
+      - ./.pre-commit-config.yaml
+    status:
+      - test -f '{{.ROOT_DIR}}/.git/hooks/pre-commit'
+      - test -f '{{.ROOT_DIR}}/.git/hooks/pre-push'
