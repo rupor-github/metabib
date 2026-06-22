@@ -132,7 +132,16 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.Log != nil {
 		opts.Log.Info("Archive updates found", zap.Int("updates", len(updates)))
 		for _, update := range updates {
-			opts.Log.Debug("Archive update selected", zap.String("file", filepath.Join(update.dir, update.info.Name())))
+			fields := []zap.Field{
+				zap.String("file", filepath.Join(update.dir, update.info.Name())),
+				zap.Int("begin", update.begin),
+				zap.Int("end", update.end),
+			}
+			if update.begin <= merge.end {
+				opts.Log.Warn("Overlapping archive update selected", append(fields, zap.Int("existing_end", merge.end))...)
+				continue
+			}
+			opts.Log.Debug("Archive update selected", fields...)
 		}
 	}
 
@@ -155,12 +164,15 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 
 	leftBytes := opts.SizeBytes - work.existingSize
 	firstBook := work.firstBook
-	lastBook := 0
-	for _, update := range updates {
+	lastBook := work.lastBook
+	existingEnd := merge.end
+	copiedNewEntry := false
+	for updateIndex, update := range updates {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
 		}
 		updatePath := filepath.Join(update.dir, update.info.Name())
+		updateIsExisting := updateIndex == 0 && skipFirstUpdateRemoval
 		rc, err := zip.OpenReader(updatePath)
 		if err != nil {
 			if opts.Log != nil {
@@ -185,19 +197,34 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 				}
 				continue
 			}
-			if firstBook == 0 {
-				firstBook = id
+			if !updateIsExisting && id <= existingEnd {
+				if opts.Log != nil {
+					opts.Log.Warn(
+						"Skipping already finalized archive entry from overlapping update",
+						zap.String("file", updatePath),
+						zap.String("entry", file.Name),
+						zap.Int("book_id", id),
+						zap.Int("existing_end", existingEnd),
+					)
+				}
+				continue
 			}
-			previousLastBook := lastBook
-			lastBook = id
 			if err := work.writer.Copy(file); err != nil {
-				lastBook = previousLastBook
 				if opts.Log != nil {
 					opts.Log.Warn("Error copying archive entry", zap.String("file", updatePath), zap.String("entry", file.Name), zap.Error(err))
 				}
 				continue
 			}
-			leftBytes -= int64(file.CompressedSize64)
+			if firstBook == 0 || id < firstBook {
+				firstBook = id
+			}
+			if id > lastBook {
+				lastBook = id
+			}
+			if !updateIsExisting {
+				copiedNewEntry = true
+				leftBytes -= int64(file.CompressedSize64)
+			}
 			if leftBytes <= 0 {
 				finalName := filepath.Join(last.dir, fmt.Sprintf(format+".zip", firstBook, lastBook))
 				if err := work.finishAs(finalName); err != nil {
@@ -215,6 +242,7 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 					return Result{}, fmt.Errorf("stat finalized archive %q: %w", finalName, err)
 				}
 				last = archive{dir: filepath.Dir(finalName), info: lastInfo, begin: firstBook, end: lastBook}
+				existingEnd = last.end
 				work, err = createNewWorkArchive(last.dir)
 				if err != nil {
 					rc.Close()
@@ -223,6 +251,7 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 				leftBytes = opts.SizeBytes
 				firstBook = 0
 				lastBook = 0
+				copiedNewEntry = false
 			}
 		}
 		if err := rc.Close(); err != nil {
@@ -230,7 +259,7 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 		}
 	}
 
-	if firstBook == 0 {
+	if firstBook == 0 || !copiedNewEntry {
 		if err := work.remove(); err != nil {
 			return Result{}, err
 		}
@@ -270,13 +299,14 @@ type workArchive struct {
 	removeOnCleanup        bool
 	existingSize           int64
 	firstBook              int
+	lastBook               int
 	oldPath                string
 	skipFirstUpdateRemoval bool
 }
 
 func openWorkArchive(opts Options, last archive, merge archive, updates *[]archive) (*workArchive, error) {
 	if merge.info != nil {
-		return rewriteExistingMergeArchive(filepath.Join(merge.dir, merge.info.Name()), merge.begin, merge.info.Size())
+		return rewriteExistingMergeArchive(filepath.Join(merge.dir, merge.info.Name()), merge.begin, merge.end, merge.info.Size())
 	}
 	work, err := createNewWorkArchive(last.dir)
 	if err != nil {
@@ -292,6 +322,8 @@ func openWorkArchive(opts Options, last archive, merge archive, updates *[]archi
 		copy(mergedUpdates[1:], *updates)
 		*updates = mergedUpdates
 		work.oldPath = lastPath
+		work.firstBook = last.begin
+		work.lastBook = last.end
 		work.skipFirstUpdateRemoval = true
 	}
 	return work, nil
@@ -305,7 +337,7 @@ func createNewWorkArchive(dir string) (*workArchive, error) {
 	return &workArchive{file: f, writer: zip.NewWriter(f), path: f.Name(), cleanupTemp: true, removeOnCleanup: true}, nil
 }
 
-func rewriteExistingMergeArchive(path string, firstBook int, existingSize int64) (*workArchive, error) {
+func rewriteExistingMergeArchive(path string, firstBook int, lastBook int, existingSize int64) (*workArchive, error) {
 	reader, err := zip.OpenReader(path)
 	if err != nil {
 		return nil, fmt.Errorf("open merge archive %q: %w", path, err)
@@ -323,6 +355,7 @@ func rewriteExistingMergeArchive(path string, firstBook int, existingSize int64)
 		removeOnCleanup: true,
 		existingSize:    existingSize,
 		firstBook:       firstBook,
+		lastBook:        lastBook,
 		oldPath:         path,
 	}
 	for _, file := range reader.File {
@@ -481,7 +514,7 @@ func getUpdates(files []archive, last int) ([]archive, error) {
 		if err != nil {
 			return nil, err
 		}
-		if ok && last < first {
+		if ok && last < second {
 			updates = append(updates, archive{dir: file.dir, info: file.info, begin: first, end: second})
 		}
 	}

@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestNameToID(t *testing.T) {
@@ -25,6 +28,7 @@ func TestGetUpdates(t *testing.T) {
 
 	files := []archive{
 		{info: fakeInfo{name: "f.fb2.000101-000150.zip"}},
+		{info: fakeInfo{name: "f.fb2.000140-000160.zip"}},
 		{info: fakeInfo{name: "f.fb2.000151-000200.zip"}},
 		{info: fakeInfo{name: "f.fb2.000201-000250.zip.tmp"}},
 		{info: fakeInfo{name: "backup-f.fb2.000251-000300.zip"}},
@@ -34,8 +38,8 @@ func TestGetUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getUpdates() error = %v", err)
 	}
-	if len(updates) != 1 || updates[0].begin != 151 || updates[0].end != 200 {
-		t.Fatalf("updates = %#v, want 151-200", updates)
+	if len(updates) != 2 || updates[0].begin != 140 || updates[0].end != 160 || updates[1].begin != 151 || updates[1].end != 200 {
+		t.Fatalf("updates = %#v, want 140-160 and 151-200", updates)
 	}
 }
 
@@ -184,20 +188,91 @@ func TestRunDoesNotRemoveTempLikeUpdateNames(t *testing.T) {
 	}
 }
 
+func TestRunKeepsNewEntriesFromOverlappingUpdates(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	oldArchive := filepath.Join(archives, "fb2-0000000001-0000000100.zip")
+	writeZip(t, oldArchive, map[string]string{"1.fb2": "one", "100.fb2": "hundred"})
+	writeZip(t, filepath.Join(updates, "f.fb2.0000000050-0000000102.zip"), map[string]string{
+		"50.fb2":  "duplicate",
+		"101.fb2": "new",
+		"102.fb2": "new",
+	})
+	core, logs := observer.New(zap.WarnLevel)
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir:  archives,
+		UpdateDirs:  []string{updates},
+		SizeBytes:   1_000_000,
+		KeepUpdates: true,
+		Log:         zap.New(core),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000102.merging" {
+		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
+	}
+	if entries, err := countZipEntries(res.ActiveMerge); err != nil || entries != 4 {
+		t.Fatalf("entries=%d err=%v, want 4 entries", entries, err)
+	}
+	if logs.FilterMessage("Overlapping archive update selected").Len() != 1 {
+		t.Fatalf("logs = %#v, want overlapping update warning", logs.All())
+	}
+	if logs.FilterMessage("Skipping already finalized archive entry from overlapping update").Len() != 1 {
+		t.Fatalf("logs = %#v, want duplicate entry warning", logs.All())
+	}
+}
+
+func TestRunUsesMinMaxRangeForOutOfOrderEntries(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	writeZipOrdered(t, filepath.Join(updates, "f.fb2.0000000001-0000000002.zip"), []zipEntry{
+		{Name: "2.fb2", Content: "two"},
+		{Name: "1.fb2", Content: "one"},
+	})
+
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: true})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000002.merging" {
+		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
+	}
+}
+
 func writeZip(t *testing.T, path string, files map[string]string) {
+	t.Helper()
+	entries := make([]zipEntry, 0, len(files))
+	for name, content := range files {
+		entries = append(entries, zipEntry{Name: name, Content: content})
+	}
+	writeZipOrdered(t, path, entries)
+}
+
+type zipEntry struct {
+	Name    string
+	Content string
+}
+
+func writeZipOrdered(t *testing.T, path string, entries []zipEntry) {
 	t.Helper()
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatalf("create %s: %v", path, err)
 	}
 	zw := zip.NewWriter(f)
-	for name, content := range files {
-		w, err := zw.Create(name)
+	for _, entry := range entries {
+		w, err := zw.Create(entry.Name)
 		if err != nil {
-			t.Fatalf("create entry %s: %v", name, err)
+			t.Fatalf("create entry %s: %v", entry.Name, err)
 		}
-		if _, err := w.Write([]byte(content)); err != nil {
-			t.Fatalf("write entry %s: %v", name, err)
+		if _, err := w.Write([]byte(entry.Content)); err != nil {
+			t.Fatalf("write entry %s: %v", entry.Name, err)
 		}
 	}
 	if err := zw.Close(); err != nil {

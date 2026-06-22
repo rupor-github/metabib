@@ -41,7 +41,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `rollup/rollup.go:422-426`, `rollup/rollup.go:489-490`, `rollup/rollup.go:247-255`.
   - Notes: Substring matches like `fb2.000001-000002.zip.tmp` can be selected as updates.
 
-- [ ] High: Handle overlapping rollup updates and compute archive ranges from min/max IDs.
+- [x] High: Handle overlapping rollup updates and compute archive ranges from min/max IDs.
   - References: `rollup/rollup.go:174-193`, `rollup/rollup.go:475-486`.
   - Notes: Overlapping updates are skipped and range names depend on ZIP entry order.
 
