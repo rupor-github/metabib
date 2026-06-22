@@ -57,6 +57,12 @@ type archiveEntry struct {
 	Ext    string
 }
 
+type archiveRepository interface {
+	BookSourcesByIDs(ctx context.Context, ids []int64) (map[int64]model.DatabaseSource, error)
+	BookIDByFilename(ctx context.Context, filename string) (int64, error)
+	BookByID(ctx context.Context, id int64) (model.DatabaseSource, error)
+}
+
 type archiveBatch struct {
 	Index   int
 	Entries []archiveEntry
@@ -401,10 +407,14 @@ func processArchive(
 	defer cancel()
 
 	var wg sync.WaitGroup
+	var archiveRepo archiveRepository
+	if repo != nil {
+		archiveRepo = repo
+	}
 	for worker := 0; worker < workers; worker++ {
 		wg.Go(func() {
 			for batch := range jobs {
-				records, timing, err := processArchiveBatch(ctx, repo, cfg, path, batch.Entries)
+				records, timing, err := processArchiveBatch(ctx, archiveRepo, cfg, path, batch.Entries)
 				if err != nil {
 					select {
 					case errs <- err:
@@ -535,7 +545,7 @@ func processArchive(
 	return records, nil
 }
 
-func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, entries []archiveEntry) ([]model.Record, dbBatchResult, error) {
+func processArchiveBatch(ctx context.Context, repo archiveRepository, cfg *config.Config, archive string, entries []archiveEntry) ([]model.Record, dbBatchResult, error) {
 	var timing dbBatchResult
 	if err := ctx.Err(); err != nil {
 		return nil, timing, err
@@ -573,7 +583,7 @@ func processArchiveBatch(ctx context.Context, repo *db.Repository, cfg *config.C
 	return records, timing, nil
 }
 
-func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *config.Config, archive string, file *zip.File, index int, bookID int64, ext string, dbSource model.DatabaseSource) (rec model.Record, timing entryTiming, err error) {
+func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *config.Config, archive string, file *zip.File, index int, bookID int64, ext string, dbSource model.DatabaseSource) (rec model.Record, timing entryTiming, err error) {
 	if err := ctx.Err(); err != nil {
 		return model.Record{}, timing, err
 	}
@@ -595,7 +605,7 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 		},
 	}
 	rec.Source.Database = dbSource
-	if repo != nil && !rec.Source.Database.Present && !strings.EqualFold(ext, "fb2") {
+	if shouldLookupArchiveFilename(repo, rec.Source.Database, rec.ID.BookID, ext) {
 		lookupStart := time.Now()
 		id, err := repo.BookIDByFilename(ctx, filepath.Base(file.Name))
 		timing.FallbackLookupElapsed += time.Since(lookupStart)
@@ -657,6 +667,10 @@ func processEntryWithSource(ctx context.Context, repo *db.Repository, cfg *confi
 		}
 	}
 	return rec, timing, nil
+}
+
+func shouldLookupArchiveFilename(repo archiveRepository, dbSource model.DatabaseSource, bookID int64, ext string) bool {
+	return repo != nil && !dbSource.Present && (bookID <= 0 || !strings.EqualFold(ext, "fb2"))
 }
 
 type hashWriter interface {

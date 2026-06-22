@@ -65,7 +65,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `library/manifest.go:301-335`.
   - Notes: Iteration ignores header schema and does not compare actual records with declared `records`.
 
-- [ ] Medium: Enable archive DB fallback lookup for non-numeric FB2 filenames.
+- [x] Medium: Enable archive DB fallback lookup for non-numeric FB2 filenames.
   - References: `library/process.go:363-367`, `library/process.go:593-595`.
   - Notes: Non-numeric `.fb2` entries remain `BookID=0` and never look up DB metadata by filename.
 
