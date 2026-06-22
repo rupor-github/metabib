@@ -111,21 +111,30 @@ func (r *Repository) FileIdentitiesByIDs(ctx context.Context, ids []int64) (map[
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return out, err
 	}
-	query, args := inQuery(`SELECT BookId, FileName FROM libfilename WHERE BookId IN (`, ids, `) ORDER BY BookId`)
+	// libfilename preserves names from old Librusec archives where some files were
+	// not named as numeric BookID.ext. It maps those legacy filenames back to the
+	// book ID without requiring the old archives to be renamed. In current data this
+	// is rare for FB2 entries and those legacy FB2 files are not expected in our archives.
+	query, args := inQuery(`SELECT BookId, FileName FROM libfilename WHERE BookId IN (`, ids, `) ORDER BY BookId, FileName`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query file identities: %w", err)
 	}
 	defer rows.Close()
+	selected := make(map[int64]struct{}, len(ids))
 	for rows.Next() {
 		var id int64
 		var name string
 		if err := rows.Scan(&id, &name); err != nil {
 			return nil, fmt.Errorf("scan file identity: %w", err)
 		}
+		if _, exists := selected[id]; exists {
+			continue
+		}
 		stem := strings.TrimSuffix(name, filepath.Ext(name))
 		ext := strings.TrimPrefix(filepath.Ext(name), ".")
 		out[id] = FileIdentity{FileName: stem, Extension: ext}
+		selected[id] = struct{}{}
 	}
 	return out, rows.Err()
 }
@@ -262,7 +271,7 @@ func (r *Repository) attachContributors(ctx context.Context, ids []int64, out ma
 SELECT a.BookId, n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName,
        n.uid, n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
 	  FROM %s
-	 WHERE a.BookId IN (`, contributorFromClause(table, idColumn, useAliases)), ids, `) ORDER BY a.BookId`)
+	 WHERE a.BookId IN (`, contributorFromClause(table, idColumn, useAliases)), ids, `) ORDER BY a.BookId, a.Pos, n.AvtorId`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query contributors batch from %s: %w", table, err)
@@ -495,7 +504,8 @@ func (r *Repository) contributors(ctx context.Context, id int64, table string, i
 SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
        n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
 	  FROM %s
-	 WHERE a.BookId = ?`, contributorFromClause(table, idColumn, useAliases))
+	 WHERE a.BookId = ?
+  ORDER BY a.Pos, n.AvtorId`, contributorFromClause(table, idColumn, useAliases))
 	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("query contributors from %s for book %d: %w", table, id, err)

@@ -64,3 +64,29 @@ func TestContributorFromClause(t *testing.T) {
 		t.Fatalf("alias clause missing canonical join: %q", aliased)
 	}
 }
+
+func TestRepositoryOrderClauses(t *testing.T) {
+	t.Parallel()
+
+	query, _ := inQuery(`SELECT BookId, FileName FROM libfilename WHERE BookId IN (`, []int64{1, 2}, `) ORDER BY BookId, FileName`)
+	if !strings.Contains(query, "ORDER BY BookId, FileName") {
+		t.Fatalf("file identity query = %q", query)
+	}
+	batchQuery, _ := inQuery(`
+SELECT a.BookId, n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName,
+       n.uid, n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
+	  FROM `+contributorFromClause("libavtor", "AvtorId", false)+`
+	 WHERE a.BookId IN (`, []int64{1, 2}, `) ORDER BY a.BookId, a.Pos, n.AvtorId`)
+	if !strings.Contains(batchQuery, "ORDER BY a.BookId, a.Pos, n.AvtorId") {
+		t.Fatalf("batch contributor query = %q", batchQuery)
+	}
+	singleQuery := `
+SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
+       n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
+	  FROM ` + contributorFromClause("libavtor", "AvtorId", false) + `
+	 WHERE a.BookId = ?
+  ORDER BY a.Pos, n.AvtorId`
+	if !strings.Contains(singleQuery, "ORDER BY a.Pos, n.AvtorId") {
+		t.Fatalf("single contributor query = %q", singleQuery)
+	}
+}

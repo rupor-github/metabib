@@ -77,7 +77,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `inpx/inpx.go:469-488`, `inpx/inpx.go:656-660`.
   - Notes: Text containing `\x04` or lone `\r` can corrupt `.inp` field layout.
 
-- [ ] Medium: Make repository contributor and filename identity ordering deterministic.
+- [x] Medium: Make repository contributor and filename identity ordering deterministic.
   - References: `db/repository.go:114-128`, `db/repository.go:261-265`, `db/repository.go:494-499`.
   - Notes: Missing tie-breakers can make output unstable across query plans.
 
