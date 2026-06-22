@@ -345,6 +345,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 }
 
 func runINPX(ctx context.Context, cmd *cli.Command) error {
+	start := time.Now()
 	cfg := state.EnvFromContext(ctx).Cfg
 	env := state.EnvFromContext(ctx)
 	format, err := inpx.ParseFormat(cmd.String("format"))
@@ -368,7 +369,7 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 		Sequence:     cfg.INPX.Limits.Sequence,
 	}
 	quickFix := cfg.INPX.QuickFix || cmd.Bool("quick-fix")
-	path, err := inpx.Generate(ctx, inpx.Options{
+	stats, err := inpx.Generate(ctx, inpx.Options{
 		InputPrefix:     cmd.String("input"),
 		OutputPrefix:    cmd.String("output"),
 		Format:          format,
@@ -383,7 +384,18 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if env.Log != nil {
-		env.Log.Info("INPX created", zap.String("file", path))
+		env.Log.Info(
+			"INPX created",
+			zap.String("file", stats.OutputPath),
+			zap.String("dump_date", stats.DumpDate),
+			zap.Int("archives", stats.Archives),
+			zap.Int("files", stats.Files),
+			zap.Int64("records", stats.Records),
+			zap.Int64("db_records", stats.DBRecords),
+			zap.Int64("fb2_records", stats.FB2Records),
+			zap.Int64("dummy_records", stats.Dummy),
+			zap.Duration("elapsed", time.Since(start)),
+		)
 	}
 	return nil
 }

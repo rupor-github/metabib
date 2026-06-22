@@ -61,14 +61,17 @@ func TestGenerate(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	out, err := Generate(context.Background(), Options{InputPrefix: prefix, OutputPrefix: filepath.Join(dir, "flibusta"), Format: Format2X, SequenceMode: SequenceAuthor, FB2Preference: PreferComplement, QuickFix: true, Limits: DefaultLimits()})
+	stats, err := Generate(context.Background(), Options{InputPrefix: prefix, OutputPrefix: filepath.Join(dir, "flibusta"), Format: Format2X, SequenceMode: SequenceAuthor, FB2Preference: PreferComplement, QuickFix: true, Limits: DefaultLimits()})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
-	if filepath.Base(out) != "flibusta_20260603.inpx" {
-		t.Fatalf("output = %q", out)
+	if filepath.Base(stats.OutputPath) != "flibusta_20260603.inpx" {
+		t.Fatalf("output = %q", stats.OutputPath)
 	}
-	zr, err := zip.OpenReader(out)
+	if stats.Archives != 1 || stats.Files != 2 || stats.Records != 1 || stats.DBRecords != 1 || stats.FB2Records != 0 || stats.Dummy != 1 || stats.DumpDate != "20260603" {
+		t.Fatalf("stats = %#v", stats)
+	}
+	zr, err := zip.OpenReader(stats.OutputPath)
 	if err != nil {
 		t.Fatalf("OpenReader() error = %v", err)
 	}
@@ -98,6 +101,28 @@ func TestGenerate(t *testing.T) {
 	}
 	if strings.TrimSpace(entries["version.info"]) != "20260603" {
 		t.Fatalf("version.info = %q", entries["version.info"])
+	}
+	if !strings.HasPrefix(entries["collection.info"], "\ufeff") {
+		t.Fatalf("collection.info missing UTF-8 BOM: %q", entries["collection.info"])
+	}
+}
+
+func TestDBSequenceEmitsZeroNumber(t *testing.T) {
+	t.Parallel()
+
+	name, num := dbSequence([]model.DBSequence{{Name: "Series", Number: 0}}, SequenceAuthor)
+	if name != "Series" || num != "0" {
+		t.Fatalf("dbSequence() = %q, %q", name, num)
+	}
+}
+
+func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
+	t.Parallel()
+
+	titleInfo := &model.FB2TitleInfo{Authors: []model.FB2Person{{FirstName: "неизвестен", LastName: "Автор"}}}
+	got := authorsString(true, nil, titleInfo, Options{FB2Preference: PreferComplement, Limits: DefaultLimits()})
+	if got != "неизвестный,автор,:" {
+		t.Fatalf("authorsString() = %q", got)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -71,6 +70,27 @@ type Options struct {
 	Log             *zap.Logger
 }
 
+type Stats struct {
+	OutputPath string
+	DumpDate   string
+	Archives   int
+	Files      int
+	Records    int64
+	DBRecords  int64
+	FB2Records int64
+	Dummy      int64
+}
+
+type ArchiveStats struct {
+	Name       string
+	Files      int
+	Records    int64
+	DBRecords  int64
+	FB2Records int64
+	Dummy      int64
+	Elapsed    time.Duration
+}
+
 type archiveRows struct {
 	Meta    model.MergeArchiveMetadata
 	Records map[int]model.Record
@@ -119,55 +139,79 @@ func ParseFB2Preference(value string) (FB2Preference, error) {
 	}
 }
 
-func Generate(ctx context.Context, opts Options) (string, error) {
+func Generate(ctx context.Context, opts Options) (Stats, error) {
+	stats := Stats{}
 	if opts.InputPrefix == "" {
-		return "", errors.New("INPX input prefix is required")
+		return stats, errors.New("INPX input prefix is required")
 	}
 	if opts.OutputPrefix == "" {
-		return "", errors.New("INPX output prefix is required")
+		return stats, errors.New("INPX output prefix is required")
 	}
 	if opts.Limits == (Limits{}) {
 		opts.Limits = DefaultLimits()
 	}
 	metaPath, err := discoverMetadata(opts.InputPrefix)
 	if err != nil {
-		return "", err
+		return stats, err
+	}
+	if opts.Log != nil {
+		opts.Log.Info("INPX metadata selected", zap.String("metadata", metaPath))
 	}
 	meta, err := readMetadata(metaPath)
 	if err != nil {
-		return "", err
+		return stats, err
 	}
+	stats.DumpDate = meta.Database.DumpDate
 	parts, err := discoverInputParts(opts.InputPrefix)
 	if err != nil {
-		return "", err
+		return stats, err
+	}
+	if opts.Log != nil {
+		opts.Log.Info("INPX input parts selected", zap.Int("parts", len(parts)), zap.Int("archives", len(meta.Archives)), zap.String("dump_date", meta.Database.DumpDate))
 	}
 	archives := make(map[string]*archiveRows, len(meta.Archives))
 	for _, archive := range meta.Archives {
 		archives[archive.Path] = &archiveRows{Meta: archive, Records: make(map[int]model.Record)}
 	}
-	if err := readRecords(ctx, parts, archives); err != nil {
-		return "", err
+	loadStart := time.Now()
+	loaded, err := readRecords(ctx, parts, archives)
+	if err != nil {
+		return stats, err
+	}
+	if opts.Log != nil {
+		opts.Log.Info("INPX records loaded", zap.Int64("records", loaded), zap.Int("parts", len(parts)), zap.Duration("elapsed", time.Since(loadStart)))
 	}
 	outputPath := inpxOutputPath(opts.OutputPrefix, meta)
+	stats.OutputPath = outputPath
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-		return "", fmt.Errorf("create INPX output directory: %w", err)
+		return stats, fmt.Errorf("create INPX output directory: %w", err)
 	}
 	tmpPath := outputPath + ".tmp"
 	_ = os.Remove(tmpPath)
 	if _, err := os.Stat(outputPath); err == nil && opts.Log != nil {
 		opts.Log.Warn("Overwriting existing INPX output", zap.String("file", outputPath))
 	} else if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("stat INPX output %q: %w", outputPath, err)
+		return stats, fmt.Errorf("stat INPX output %q: %w", outputPath, err)
 	}
-	if err := writeINPX(ctx, tmpPath, meta, archives, opts); err != nil {
+	if opts.Log != nil {
+		opts.Log.Info("INPX creation started", zap.String("file", outputPath), zap.Int("archives", len(archives)))
+	}
+	writeStats, err := writeINPX(ctx, tmpPath, meta, archives, opts)
+	if err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return stats, err
 	}
+	stats.Archives = writeStats.Archives
+	stats.Files = writeStats.Files
+	stats.Records = writeStats.Records
+	stats.DBRecords = writeStats.DBRecords
+	stats.FB2Records = writeStats.FB2Records
+	stats.Dummy = writeStats.Dummy
 	if err := jsonl.ReplaceOutputFile(tmpPath, outputPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("replace INPX output %q: %w", outputPath, err)
+		return stats, fmt.Errorf("replace INPX output %q: %w", outputPath, err)
 	}
-	return outputPath, nil
+	return stats, nil
 }
 
 func discoverMetadata(prefix string) (string, error) {
@@ -211,14 +255,15 @@ func readMetadata(path string) (model.MergeMetadata, error) {
 	return meta, nil
 }
 
-func readRecords(ctx context.Context, parts []string, archives map[string]*archiveRows) error {
+func readRecords(ctx context.Context, parts []string, archives map[string]*archiveRows) (int64, error) {
+	var records int64
 	for _, part := range parts {
 		if err := ctx.Err(); err != nil {
-			return err
+			return records, err
 		}
 		r, err := jsonl.OpenCompressedFile(part)
 		if err != nil {
-			return err
+			return records, err
 		}
 		dec := jsontext.NewDecoder(r)
 		for {
@@ -228,8 +273,9 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 					break
 				}
 				r.Close()
-				return fmt.Errorf("decode JSONL part %q: %w", part, err)
+				return records, fmt.Errorf("decode JSONL part %q: %w", part, err)
 			}
+			records++
 			if rec.ID.Archive == nil {
 				continue
 			}
@@ -241,16 +287,17 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 			archive.Records[rec.ID.Archive.Index] = rec
 		}
 		if err := r.Close(); err != nil {
-			return err
+			return records, err
 		}
 	}
-	return nil
+	return records, nil
 }
 
-func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archives map[string]*archiveRows, opts Options) error {
+func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archives map[string]*archiveRows, opts Options) (Stats, error) {
+	stats := Stats{DumpDate: meta.Database.DumpDate}
 	f, err := os.Create(path)
 	if err != nil {
-		return fmt.Errorf("create INPX %q: %w", path, err)
+		return stats, fmt.Errorf("create INPX %q: %w", path, err)
 	}
 	zw := zip.NewWriter(f)
 	zw.SetComment(zipComment(meta))
@@ -263,45 +310,55 @@ func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archi
 		if err := ctx.Err(); err != nil {
 			zw.Close()
 			f.Close()
-			return err
+			return stats, err
 		}
-		if err := writeArchiveINP(zw, archive, opts); err != nil {
+		archiveStats, err := writeArchiveINP(zw, archive, opts)
+		if err != nil {
 			zw.Close()
 			f.Close()
-			return err
+			return stats, err
 		}
+		stats.Archives++
+		stats.Files += archiveStats.Files
+		stats.Records += archiveStats.Records
+		stats.DBRecords += archiveStats.DBRecords
+		stats.FB2Records += archiveStats.FB2Records
+		stats.Dummy += archiveStats.Dummy
 	}
 	if err := writeZipText(zw, "collection.info", collectionInfo(meta, opts)); err != nil {
 		zw.Close()
 		f.Close()
-		return err
+		return stats, err
 	}
 	if err := writeZipText(zw, "version.info", meta.Database.DumpDate+"\r\n"); err != nil {
 		zw.Close()
 		f.Close()
-		return err
+		return stats, err
 	}
 	if err := zw.Close(); err != nil {
 		f.Close()
-		return fmt.Errorf("close INPX zip %q: %w", path, err)
+		return stats, fmt.Errorf("close INPX zip %q: %w", path, err)
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close INPX %q: %w", path, err)
+		return stats, fmt.Errorf("close INPX %q: %w", path, err)
 	}
-	return nil
+	return stats, nil
 }
 
-func writeArchiveINP(zw *zip.Writer, archive *archiveRows, opts Options) error {
+func writeArchiveINP(zw *zip.Writer, archive *archiveRows, opts Options) (Stats, error) {
+	start := time.Now()
+	stats := Stats{}
 	name := strings.TrimSuffix(archive.Meta.Name, filepath.Ext(archive.Meta.Name)) + ".inp"
 	w, err := zw.Create(name)
 	if err != nil {
-		return fmt.Errorf("create INPX entry %q: %w", name, err)
+		return stats, fmt.Errorf("create INPX entry %q: %w", name, err)
 	}
 	bw := bufio.NewWriter(w)
 	for idx := 0; idx < archive.Meta.Entries; idx++ {
 		if inRanges(archive.Meta.Ignored, idx) {
 			continue
 		}
+		stats.Files++
 		rec, ok := archive.Records[idx]
 		line := ""
 		if ok {
@@ -309,12 +366,35 @@ func writeArchiveINP(zw *zip.Writer, archive *archiveRows, opts Options) error {
 		}
 		if line == "" {
 			line = dummyLine(idx + 1)
+			stats.Dummy++
+		} else {
+			stats.Records++
+			if rec.Source.Database.Present {
+				stats.DBRecords++
+			} else {
+				stats.FB2Records++
+			}
 		}
 		if _, err := bw.WriteString(line); err != nil {
-			return fmt.Errorf("write INPX entry %q: %w", name, err)
+			return stats, fmt.Errorf("write INPX entry %q: %w", name, err)
 		}
 	}
-	return bw.Flush()
+	if err := bw.Flush(); err != nil {
+		return stats, err
+	}
+	if opts.Log != nil {
+		opts.Log.Info(
+			"INPX entry created",
+			zap.String("entry", name),
+			zap.String("archive", archive.Meta.Name),
+			zap.Int64("records", stats.DBRecords),
+			zap.Int64("fb2_records", stats.FB2Records),
+			zap.Int64("dummy_records", stats.Dummy),
+			zap.Int("files", stats.Files),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	}
+	return stats, nil
 }
 
 func writeZipText(zw *zip.Writer, name string, text string) error {
@@ -340,7 +420,7 @@ func recordLine(rec model.Record, opts Options) string {
 	if title == "" && fb2.TitleInfo != nil {
 		title = fb2.TitleInfo.Title
 	}
-	authors := authorsString(db.Authors, fb2.TitleInfo, opts)
+	authors := authorsString(db.Present, db.Authors, fb2.TitleInfo, opts)
 	genres := genresString(db.Genres, fb2.TitleInfo)
 	sequence, seqNum := sequenceString(db.Sequences, fb2.TitleInfo, opts)
 	fileName := rec.ID.FileName
@@ -383,7 +463,7 @@ func recordLine(rec model.Record, opts Options) string {
 		keywords = fb2.TitleInfo.Keywords
 	}
 	if db.Rating != nil && db.Rating.Count > 0 {
-		rate = strconv.FormatInt(int64(math.Round(db.Rating.Average)), 10)
+		rate = strconv.FormatInt(int64(db.Rating.Average), 10)
 	}
 	fields := []string{
 		authors,
@@ -407,9 +487,12 @@ func recordLine(rec model.Record, opts Options) string {
 	return strings.Join(fields, fieldSep) + fieldSep + "\r\n"
 }
 
-func authorsString(authors []model.Contributor, titleInfo *model.FB2TitleInfo, opts Options) string {
+func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model.FB2TitleInfo, opts Options) string {
 	if opts.FB2Preference == PreferReplace && titleInfo != nil && len(titleInfo.Authors) > 0 {
 		return fb2AuthorsString(titleInfo.Authors, opts)
+	}
+	if dbPresent && len(authors) == 0 {
+		return "неизвестный,автор,:"
 	}
 	if len(authors) == 0 && titleInfo != nil && len(titleInfo.Authors) > 0 {
 		return fb2AuthorsString(titleInfo.Authors, opts)
@@ -502,10 +585,7 @@ func dbSequence(sequences []model.DBSequence, mode SequenceMode) (string, string
 		return strings.Compare(a.Name, b.Name)
 	})
 	seq := sequences[0]
-	num := ""
-	if seq.Number > 0 {
-		num = strconv.FormatInt(seq.Number, 10)
-	}
+	num := strconv.FormatInt(seq.Number, 10)
 	return seq.Name, num
 }
 
@@ -556,10 +636,9 @@ func collectionInfo(meta model.MergeMetadata, opts Options) string {
 	date := displayDate(meta)
 	comment := opts.CommentTemplate
 	if comment == "" {
-		comment = "%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
-		return fmt.Sprintf(comment, meta.Library, date, name, meta.Library, date)
+		comment = "\ufeff%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
 	}
-	return fmt.Sprintf(comment, name)
+	return fmt.Sprintf(comment, meta.Library, date, name, meta.Library, date)
 }
 
 func displayDate(meta model.MergeMetadata) string {

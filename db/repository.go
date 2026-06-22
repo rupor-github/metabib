@@ -258,7 +258,7 @@ func (r *Repository) attachContributors(ctx context.Context, ids []int64, out ma
 SELECT a.BookId, n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName,
        n.uid, n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
   FROM %s a JOIN libavtorname n ON n.AvtorId = a.%s
- WHERE a.BookId IN (`, table, idColumn), ids, `) ORDER BY a.BookId, a.Pos, n.AvtorId`)
+ WHERE a.BookId IN (`, table, idColumn), ids, `) ORDER BY a.BookId`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query contributors batch from %s: %w", table, err)
@@ -295,7 +295,7 @@ func (r *Repository) attachGenres(ctx context.Context, ids []int64, out map[int6
 SELECT g.BookId, gl.GenreId, gl.GenreCode, '', gl.GenreDesc, gl.GenreMeta
   FROM libgenre g JOIN libgenrelist gl ON gl.GenreId = g.GenreId
  WHERE g.BookId IN (`
-	suffix := `) ORDER BY g.BookId, gl.GenreCode`
+	suffix := `) ORDER BY g.BookId`
 	if ok, err := r.tableExists(ctx, "libgenretranslate"); err != nil {
 		return err
 	} else if ok {
@@ -358,7 +358,7 @@ func (r *Repository) attachRatings(ctx context.Context, ids []int64, out map[int
 		return err
 	}
 	query, args := inQuery(`
-SELECT BookId, AVG(CAST(Rate AS UNSIGNED)), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
+SELECT BookId, ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
   FROM librate WHERE BookId IN (`, ids, `) GROUP BY BookId`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -487,7 +487,7 @@ func (r *Repository) contributors(ctx context.Context, id int64, table string, i
 SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
        n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
   FROM %s a JOIN libavtorname n ON n.AvtorId = a.%s
- WHERE a.BookId = ? ORDER BY a.Pos, n.AvtorId`, table, idColumn)
+ WHERE a.BookId = ?`, table, idColumn)
 	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("query contributors from %s for book %d: %w", table, id, err)
@@ -515,7 +515,7 @@ func (r *Repository) genres(ctx context.Context, id int64) ([]model.DBGenre, err
 	query := `
 SELECT gl.GenreId, gl.GenreCode, '', gl.GenreDesc, gl.GenreMeta
   FROM libgenre g JOIN libgenrelist gl ON gl.GenreId = g.GenreId
- WHERE g.BookId = ? ORDER BY gl.GenreCode`
+ WHERE g.BookId = ?`
 	if ok, err := r.tableExists(ctx, "libgenretranslate"); err != nil {
 		return nil, err
 	} else if ok {
@@ -523,7 +523,7 @@ SELECT gl.GenreId, gl.GenreCode, '', gl.GenreDesc, gl.GenreMeta
 SELECT gl.GenreId, gl.GenreCode, COALESCE(gt.trgGenreCode, ''), gl.GenreDesc, gl.GenreMeta
   FROM libgenre g JOIN libgenrelist gl ON gl.GenreId = g.GenreId
   LEFT JOIN libgenretranslate gt ON gt.srcGenreCode = gl.GenreCode
- WHERE g.BookId = ? ORDER BY gl.GenreCode`
+ WHERE g.BookId = ?`
 	}
 	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {
@@ -572,7 +572,7 @@ func (r *Repository) rating(ctx context.Context, id int64) (*model.DBRating, err
 		return nil, err
 	}
 	row := r.db.QueryRowContext(ctx, `
-SELECT AVG(CAST(Rate AS UNSIGNED)), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
+SELECT ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
   FROM librate WHERE BookId = ?`, id)
 	var avg sql.NullFloat64
 	var count int64

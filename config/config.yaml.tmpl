@@ -90,10 +90,10 @@ inpx:
   # Apply MyHomeLib-compatible field length limits when generating INPX.
   quick_fix: true
 
-  # Optional fmt-style collection.info template. When empty, metabib uses a
-  # lib2inpx-compatible FB2 local archive comment. Custom templates receive one
-  # argument: generated collection name, for example flibusta_20260603.
-  comment_template: ""
+  # fmt-style collection.info template. Arguments are library name, display date,
+  # generated collection name, library name, display date. The default starts
+  # with UTF-8 BOM (\ufeff) for MyHomeLib/lib2inpx compatibility.
+  comment_template: "\ufeff%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
 
   limits:
     author_name: 128

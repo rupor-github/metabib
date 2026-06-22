@@ -25,5 +25,6 @@ vendor/
 *.meta.json.gz
 *.meta.json.zst
 *.meta.json.zip
+*.inpx
 data/
 misc/version.go
