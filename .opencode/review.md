@@ -45,7 +45,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `rollup/rollup.go:174-193`, `rollup/rollup.go:475-486`.
   - Notes: Overlapping updates are skipped and range names depend on ZIP entry order.
 
-- [ ] High: Make archive manifest identity and INPX archive matching robust across relocated paths.
+- [x] High: Make archive manifest identity and INPX archive matching robust across relocated paths.
   - References: `library/process.go:583-584`, `library/manifest.go:861-865`, `library/metadata.go:42-49`, `inpx/inpx.go:283-288`, `inpx/inpx.go:358-363`.
   - Notes: Manifest validation compares only basenames, but records and metadata use exact paths.
 

@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
+	jsonv2 "encoding/json/v2"
+	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
 
 	"metabib/db"
@@ -149,6 +152,90 @@ func TestWriteOutputJoinsWriteAndCloseErrors(t *testing.T) {
 	}
 	if err == writeErr {
 		t.Fatalf("writeOutput() error = %v, want joined close error", err)
+	}
+}
+
+func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "books.manifest.zst")
+	oldPath := filepath.Join(dir, "old", "books.zip")
+	writeTestManifest(t, manifestPath, model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			BookID:  1,
+			Archive: &model.ArchiveInfo{Path: oldPath, Entry: "1.fb2"},
+		},
+	})
+
+	currentPath := filepath.Join(dir, "new", "books.zip")
+	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), 0, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if err := mergeArchiveManifests(ctx, []library.ArchiveManifestDecision{{ArchivePath: currentPath, ManifestPath: manifestPath}}, databaseIndex{}, out, nil); err != nil {
+		t.Fatalf("mergeArchiveManifests() error = %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("Close output error = %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "out.*.jsonl"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("matches = %#v, want one output", matches)
+	}
+	data, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), currentPath) || strings.Contains(string(data), oldPath) {
+		t.Fatalf("merged output = %s, want current path %q only", data, currentPath)
+	}
+}
+
+func writeTestManifest(t *testing.T, path string, records ...model.Record) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("Create(%q) error = %v", path, err)
+	}
+	enc, err := zstd.NewWriter(f)
+	if err != nil {
+		f.Close()
+		t.Fatalf("NewWriter() error = %v", err)
+	}
+	if err := jsonv2.MarshalWrite(enc, map[string]any{"schema": "test", "records": len(records)}); err != nil {
+		enc.Close()
+		f.Close()
+		t.Fatalf("MarshalWrite(header) error = %v", err)
+	}
+	if _, err := enc.Write([]byte{'\n'}); err != nil {
+		enc.Close()
+		f.Close()
+		t.Fatalf("Write(header newline) error = %v", err)
+	}
+	for _, rec := range records {
+		if err := jsonv2.MarshalWrite(enc, rec); err != nil {
+			enc.Close()
+			f.Close()
+			t.Fatalf("MarshalWrite(record) error = %v", err)
+		}
+		if _, err := enc.Write([]byte{'\n'}); err != nil {
+			enc.Close()
+			f.Close()
+			t.Fatalf("Write(record newline) error = %v", err)
+		}
+	}
+	if err := enc.Close(); err != nil {
+		f.Close()
+		t.Fatalf("Close encoder error = %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("Close file error = %v", err)
 	}
 }
 

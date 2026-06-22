@@ -663,6 +663,9 @@ func mergeArchiveManifests(
 			return err
 		}
 		count, err := library.ForEachManifestRecord(ctx, decision.ManifestPath, func(rec model.Record) error {
+			if rec.ID.Archive != nil {
+				rec.ID.Archive.Path = decision.ArchivePath
+			}
 			rec.Source.Database = model.DatabaseSource{}
 			if rec.ID.BookID > 0 {
 				if source, ok := dbIndex.byID[rec.ID.BookID]; ok {
