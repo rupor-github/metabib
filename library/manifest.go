@@ -134,13 +134,14 @@ func PlanArchives(ctx context.Context, cfg *config.Config, archivePaths []string
 	if err != nil {
 		return nil, false, err
 	}
+	manifestPaths := archiveManifestPaths(cfg, archives, log)
 	decisions := make([]ArchiveManifestDecision, 0, len(archives))
 	allReady := len(archives) > 0
 	for _, archive := range archives {
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		decision, err := planArchiveManifest(ctx, cfg, archive, checkMD5, log)
+		decision, err := planArchiveManifest(ctx, cfg, archive, manifestPaths[archive], checkMD5, log)
 		if err != nil {
 			return nil, false, err
 		}
@@ -346,10 +347,11 @@ func ValidateArchiveManifests(
 	if err != nil {
 		return nil, nil, err
 	}
+	manifestPaths := archiveManifestPaths(cfg, archives, log)
 	decisions := make([]ArchiveManifestDecision, 0, len(archives))
 	reports := make([]ManifestReport, 0, len(archives))
 	for _, archive := range archives {
-		decision, report, err := validateArchiveManifest(ctx, cfg, archive, checkMD5, log)
+		decision, report, err := validateArchiveManifest(ctx, cfg, archive, manifestPaths[archive], checkMD5, log)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -528,9 +530,8 @@ func (w *manifestWriter) Abort() error {
 	return nil
 }
 
-func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string, checkMD5 bool, log *zap.Logger) (ArchiveManifestDecision, error) {
+func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string, manifestPath string, checkMD5 bool, log *zap.Logger) (ArchiveManifestDecision, error) {
 	start := time.Now()
-	manifestPath := archiveManifestPath(cfg, archive)
 	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
 	archiveInfo, err := os.Stat(archive)
 	if err != nil {
@@ -667,10 +668,10 @@ func validateArchiveManifest(
 	ctx context.Context,
 	cfg *config.Config,
 	archive string,
+	manifestPath string,
 	checkMD5 bool,
 	log *zap.Logger,
 ) (ArchiveManifestDecision, ManifestReport, error) {
-	manifestPath := archiveManifestPath(cfg, archive)
 	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
 	report := ManifestReport{Kind: "archive", SourcePath: archive, ManifestPath: manifestPath}
 	archiveInfo, err := os.Stat(archive)
@@ -760,6 +761,118 @@ func archiveManifestPath(cfg *config.Config, archive string) string {
 		return filepath.Join(cfg.Processing.Manifests.ArchiveDir, base)
 	}
 	return filepath.Join(filepath.Dir(archive), base)
+}
+
+func archiveManifestPaths(cfg *config.Config, archives []string, log *zap.Logger) map[string]string {
+	out := make(map[string]string, len(archives))
+	for _, archive := range archives {
+		out[archive] = archiveManifestPath(cfg, archive)
+	}
+	if cfg.Processing.Manifests.ArchiveDir == "" {
+		return out
+	}
+	seen := make(map[string]string, len(archives))
+	used := make(map[string]struct{}, len(archives))
+	for _, archive := range archives {
+		manifestPath := out[archive]
+		if previous, ok := seen[manifestPath]; ok {
+			if sameCleanPath(previous, archive) {
+				continue
+			}
+			collidingPath := collidingArchiveManifestPath(cfg, archive, used)
+			out[archive] = collidingPath
+			if log != nil {
+				log.Warn(
+					"Archive manifest path collision detected; using source-qualified manifest name",
+					zap.String("archive", archive),
+					zap.String("collides_with", previous),
+					zap.String("default_manifest", manifestPath),
+					zap.String("manifest", collidingPath),
+				)
+			}
+			used[collidingPath] = struct{}{}
+			continue
+		}
+		seen[manifestPath] = archive
+		used[manifestPath] = struct{}{}
+	}
+	return out
+}
+
+func sameCleanPath(left string, right string) bool {
+	leftAbs, leftErr := filepath.Abs(left)
+	rightAbs, rightErr := filepath.Abs(right)
+	if leftErr == nil {
+		left = leftAbs
+	}
+	if rightErr == nil {
+		right = rightAbs
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func collidingArchiveManifestPath(cfg *config.Config, archive string, used map[string]struct{}) string {
+	stem := strings.TrimSuffix(filepath.Base(archive), filepath.Ext(archive))
+	source := sourcePathLabel(archive)
+	base := filepath.Join(cfg.Processing.Manifests.ArchiveDir, fmt.Sprintf("%s.from-%s%s", stem, source, manifestExt))
+	if _, ok := used[base]; !ok {
+		return base
+	}
+	for idx := 2; ; idx++ {
+		candidate := filepath.Join(cfg.Processing.Manifests.ArchiveDir, fmt.Sprintf("%s.from-%s.%d%s", stem, source, idx, manifestExt))
+		if _, ok := used[candidate]; !ok {
+			return candidate
+		}
+	}
+}
+
+func sourcePathLabel(archive string) string {
+	abs, err := filepath.Abs(filepath.Dir(archive))
+	if err != nil {
+		abs = filepath.Dir(archive)
+	}
+	clean := filepath.Clean(abs)
+	volume := filepath.VolumeName(clean)
+	var components []string
+	if volume != "" {
+		clean = strings.TrimPrefix(clean, volume)
+		if label := sanitizePathComponent(volume); label != "" {
+			components = append(components, label)
+		}
+	}
+	clean = strings.Trim(clean, string(os.PathSeparator))
+	if clean == "" {
+		if len(components) == 0 {
+			return "root"
+		}
+		return strings.Join(components, "--")
+	}
+	for _, component := range strings.FieldsFunc(clean, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if label := sanitizePathComponent(component); label != "" {
+			components = append(components, label)
+		}
+	}
+	if len(components) == 0 {
+		return "root"
+	}
+	return strings.Join(components, "--")
+}
+
+func sanitizePathComponent(value string) string {
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }
 
 func databaseManifestPath(cfg *config.Config, dumpDir string) string {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,7 +137,6 @@ func TestArchiveManifestIgnoresAbsoluteSourcePath(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	manifestDir := t.TempDir()
 	sourceDir := t.TempDir()
 	targetDir := t.TempDir()
 	sourceArchive := filepath.Join(sourceDir, "books.zip")
@@ -150,13 +151,13 @@ func TestArchiveManifestIgnoresAbsoluteSourcePath(t *testing.T) {
 		t.Fatalf("Chtimes(target) error = %v", err)
 	}
 	cfg := manifestTestConfig()
-	cfg.Processing.Manifests.ArchiveDir = manifestDir
 
 	plan, _, err := PlanArchives(ctx, cfg, []string{sourceArchive}, false, nil)
 	if err != nil {
 		t.Fatalf("PlanArchives() error = %v", err)
 	}
-	writer, err := newManifestWriter(plan[0].ManifestPath)
+	targetManifest := archiveManifestPath(cfg, targetArchive)
+	writer, err := newManifestWriter(targetManifest)
 	if err != nil {
 		t.Fatalf("newManifestWriter() error = %v", err)
 	}
@@ -171,7 +172,7 @@ func TestArchiveManifestIgnoresAbsoluteSourcePath(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 	future := time.Now().Add(time.Hour)
-	if err := os.Chtimes(plan[0].ManifestPath, future, future); err != nil {
+	if err := os.Chtimes(targetManifest, future, future); err != nil {
 		t.Fatalf("Chtimes(manifest) error = %v", err)
 	}
 
@@ -181,6 +182,72 @@ func TestArchiveManifestIgnoresAbsoluteSourcePath(t *testing.T) {
 	}
 	if len(reports) != 1 || !reports[0].Ready(false) {
 		t.Fatalf("reports = %#v", reports)
+	}
+}
+
+func TestArchiveManifestPathsQualifyOnlyCollisionsInArchiveDir(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	cfg.Processing.Manifests.ArchiveDir = t.TempDir()
+	leftArchive := filepath.Join(t.TempDir(), "books.zip")
+	rightArchive := filepath.Join(t.TempDir(), "books.zip")
+	otherArchive := filepath.Join(t.TempDir(), "other.zip")
+	paths := archiveManifestPaths(cfg, []string{leftArchive, rightArchive, otherArchive}, nil)
+	if paths[leftArchive] == paths[rightArchive] {
+		t.Fatalf("archiveManifestPaths() collision for same basename: %q", paths[leftArchive])
+	}
+	if filepath.Base(paths[leftArchive]) != "books.manifest.zst" {
+		t.Fatalf("first manifest path = %q, want unchanged basename", paths[leftArchive])
+	}
+	if filepath.Base(paths[otherArchive]) != "other.manifest.zst" {
+		t.Fatalf("non-colliding manifest path = %q, want unchanged basename", paths[otherArchive])
+	}
+	if filepath.Base(paths[rightArchive]) == "books.manifest.zst" {
+		t.Fatalf("second manifest path = %q, want source-qualified basename", paths[rightArchive])
+	}
+	if filepath.Dir(paths[leftArchive]) != cfg.Processing.Manifests.ArchiveDir || filepath.Dir(paths[rightArchive]) != cfg.Processing.Manifests.ArchiveDir {
+		t.Fatalf("manifest paths are not in archive_dir: %#v", paths)
+	}
+}
+
+func TestSourcePathLabelIncludesVolume(t *testing.T) {
+	t.Parallel()
+
+	label := sourcePathLabel(`C:\data\flibusta\daily\books.zip`)
+	if runtime.GOOS == "windows" {
+		if !strings.HasPrefix(label, "C") {
+			t.Fatalf("sourcePathLabel() = %q, want drive prefix", label)
+		}
+		return
+	}
+	if label == "" {
+		t.Fatal("sourcePathLabel() returned empty label")
+	}
+}
+
+func TestSourcePathLabelPreservesComponentBoundaries(t *testing.T) {
+	t.Parallel()
+
+	if label := sourcePathLabel(filepath.Join(string(os.PathSeparator), "data", "flibusta-daily", "books.zip")); label != "data--flibusta-daily" {
+		t.Fatalf("sourcePathLabel(hyphen component) = %q", label)
+	}
+	if label := sourcePathLabel(filepath.Join(string(os.PathSeparator), "data", "flibusta", "daily", "books.zip")); label != "data--flibusta--daily" {
+		t.Fatalf("sourcePathLabel(split component) = %q", label)
+	}
+}
+
+func TestSourcePathLabelWindowsLikePaths(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range []string{
+		`\\server\share\flibusta-daily\books.zip`,
+		`\\?\C:\flibusta-daily\books.zip`,
+		`\\.\C:\flibusta-daily\books.zip`,
+	} {
+		if label := sourcePathLabel(path); label == "" || strings.Contains(label, string(os.PathSeparator)) || strings.Contains(label, "\\") {
+			t.Fatalf("sourcePathLabel(%q) = %q, want safe non-empty label", path, label)
+		}
 	}
 }
 

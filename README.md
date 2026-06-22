@@ -350,7 +350,10 @@ an existing file is overwritten, `metabib` logs a warning. During generation,
 one live message per created `.inp` member, and final aggregate INPX statistics.
 
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
-for example `lib.manifest.zst` or `database.manifest.zst`.
+for example `lib.manifest.zst` or `database.manifest.zst`. When archive
+manifests are stored in a central `processing.manifests.archive_dir`, the first
+archive with a basename keeps the usual manifest name. Later archives with the
+same basename get a source-qualified manifest name and a warning is logged.
 
 Use global `--verbose` to enable detailed progress reporting.
 

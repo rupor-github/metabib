@@ -49,7 +49,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `library/process.go:583-584`, `library/manifest.go:861-865`, `library/metadata.go:42-49`, `inpx/inpx.go:283-288`, `inpx/inpx.go:358-363`.
   - Notes: Manifest validation compares only basenames, but records and metadata use exact paths.
 
-- [ ] High: Avoid central archive manifest collisions for archives with the same basename.
+- [x] High: Avoid central archive manifest collisions for archives with the same basename.
   - References: `library/manifest.go:757-763`, `library/manifest.go:861-865`.
   - Notes: `archive_dir` maps `/a/books.zip` and `/b/books.zip` to the same manifest path.
 

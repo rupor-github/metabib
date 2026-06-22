@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"metabib/model"
@@ -124,6 +125,7 @@ func TestBuildArchiveManifestsKeepsBatchesAfterSkippedEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForEachManifestRecord() error = %v", err)
 	}
+	slices.Sort(ids)
 	if count != 2 || len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
 		t.Fatalf("count=%d ids=%v, want [1 2]", count, ids)
 	}
