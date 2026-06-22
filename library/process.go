@@ -57,6 +57,11 @@ type archiveEntry struct {
 	Ext    string
 }
 
+type archiveBatch struct {
+	Index   int
+	Entries []archiveEntry
+}
+
 func ProcessArchives(
 	ctx context.Context,
 	repo *db.Repository,
@@ -389,7 +394,7 @@ func processArchive(
 		)
 	}
 
-	jobs := make(chan []archiveEntry, workers*2)
+	jobs := make(chan archiveBatch, workers*2)
 	results := make(chan dbBatchResult, workers*2)
 	errs := make(chan error, 1)
 	ctx, cancel := context.WithCancel(ctx)
@@ -399,7 +404,7 @@ func processArchive(
 	for worker := 0; worker < workers; worker++ {
 		wg.Go(func() {
 			for batch := range jobs {
-				records, timing, err := processArchiveBatch(ctx, repo, cfg, path, batch)
+				records, timing, err := processArchiveBatch(ctx, repo, cfg, path, batch.Entries)
 				if err != nil {
 					select {
 					case errs <- err:
@@ -408,7 +413,7 @@ func processArchive(
 					cancel()
 					return
 				}
-				timing.Index = batch[0].Index / batchSize
+				timing.Index = batch.Index
 				timing.Records = records
 				timing.ReadyAt = time.Now()
 				select {
@@ -421,10 +426,10 @@ func processArchive(
 	}
 	go func() {
 		defer close(jobs)
-		for start := 0; start < len(entries); start += batchSize {
+		for idx, start := 0, 0; start < len(entries); idx, start = idx+1, start+batchSize {
 			end := min(start+batchSize, len(entries))
 			select {
-			case jobs <- entries[start:end]:
+			case jobs <- archiveBatch{Index: idx, Entries: entries[start:end]}:
 			case <-ctx.Done():
 				return
 			}

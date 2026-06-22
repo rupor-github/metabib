@@ -21,7 +21,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `db/runtime.go:200-205`.
   - Notes: `--db-overwrite` currently calls `os.RemoveAll` on configured `data_dir` without path safety checks.
 
-- [ ] Critical: Fix archive batch result indexing so skipped ZIP entries cannot drop batches.
+- [x] Critical: Fix archive batch result indexing so skipped ZIP entries cannot drop batches.
   - References: `library/process.go:411`, `library/process.go:424-499`.
   - Notes: Batches are based on filtered entries but result index is derived from original ZIP index.
 
