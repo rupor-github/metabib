@@ -1,6 +1,7 @@
 package db
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -140,5 +141,43 @@ func TestValidateManagedDataDirOverwriteRejectsDangerousPaths(t *testing.T) {
 				t.Fatalf("validateManagedDataDirOverwrite(%q) error = nil", path)
 			}
 		})
+	}
+}
+
+func TestRemoveStaleSocket(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing.sock")
+	if err := removeStaleSocket(missing); err != nil {
+		t.Fatalf("removeStaleSocket(missing) error = %v", err)
+	}
+
+	regular := filepath.Join(t.TempDir(), "not-a-socket")
+	if err := os.WriteFile(regular, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := removeStaleSocket(regular); err == nil {
+		t.Fatal("removeStaleSocket(regular) error = nil")
+	}
+	if _, err := os.Stat(regular); err != nil {
+		t.Fatalf("regular file was removed: %v", err)
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	socket := filepath.Join(t.TempDir(), "stale.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatalf("Listen(unix) error = %v", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatalf("Close listener error = %v", err)
+	}
+	if err := removeStaleSocket(socket); err != nil {
+		t.Fatalf("removeStaleSocket(socket) error = %v", err)
+	}
+	if _, err := os.Stat(socket); !os.IsNotExist(err) {
+		t.Fatalf("socket stat error = %v, want not exist", err)
 	}
 }

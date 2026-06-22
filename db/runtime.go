@@ -346,8 +346,8 @@ func (r *Runtime) startServer(ctx context.Context, server string) error {
 		"--collation-server=utf8mb4_unicode_ci",
 	}
 	if r.Config.Protocol == "unix" {
-		if err := os.Remove(r.Config.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove stale MariaDB socket: %w", err)
+		if err := removeStaleSocket(r.Config.Socket); err != nil {
+			return err
 		}
 		args = append(args, "--socket="+r.Config.Socket, "--skip-networking")
 	} else {
@@ -370,6 +370,23 @@ func (r *Runtime) startServer(ctx context.Context, server string) error {
 			fields = append(fields, zap.String("host", r.Config.Host), zap.Int("port", r.Config.Port))
 		}
 		r.Log.Info("Managed MariaDB started", fields...)
+	}
+	return nil
+}
+
+func removeStaleSocket(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat stale MariaDB socket %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("refusing to remove stale MariaDB socket %q: not a socket", path)
+	}
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("remove stale MariaDB socket %q: %w", path, err)
 	}
 	return nil
 }
