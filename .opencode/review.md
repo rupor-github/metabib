@@ -33,7 +33,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `cmd/metabib/main.go:606-612`, `jsonl/writer.go:101-105`, `jsonl/writer.go:132-170`.
   - Notes: `writeOutput` defers `out.Close()` and ignores close-time failures.
 
-- [ ] High: Ensure rollup removes or replaces superseded finalized archives when merging the last archive.
+- [x] High: Ensure rollup removes or replaces superseded finalized archives when merging the last archive.
   - References: `rollup/rollup.go:285-293`, `rollup/rollup.go:357-360`.
   - Notes: Old finalized archives can remain beside the new merged archive and later duplicate books.
 

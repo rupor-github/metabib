@@ -283,13 +283,15 @@ func openWorkArchive(opts Options, last archive, merge archive, updates *[]archi
 		return nil, err
 	}
 	if last.info != nil && opts.SizeBytes-last.info.Size() > 0 {
+		lastPath := filepath.Join(last.dir, last.info.Name())
 		if opts.Log != nil {
-			opts.Log.Info("Merging last archive", zap.String("file", filepath.Join(last.dir, last.info.Name())))
+			opts.Log.Info("Merging last archive", zap.String("file", lastPath))
 		}
 		mergedUpdates := make([]archive, len(*updates)+1)
 		mergedUpdates[0] = last
 		copy(mergedUpdates[1:], *updates)
 		*updates = mergedUpdates
+		work.oldPath = lastPath
 		work.skipFirstUpdateRemoval = true
 	}
 	return work, nil

@@ -104,6 +104,34 @@ func TestRunFinalizesArchive(t *testing.T) {
 	}
 }
 
+func TestRunRemovesSupersededLastArchive(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	oldArchive := filepath.Join(archives, "fb2-0000000001-0000000001.zip")
+	writeZip(t, oldArchive, map[string]string{"1.fb2": "one"})
+	writeZip(t, filepath.Join(updates, "f.fb2.0000000002-0000000002.zip"), map[string]string{"2.fb2": "two"})
+
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: true})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(oldArchive); !os.IsNotExist(err) {
+		t.Fatalf("old archive stat error = %v, want not exist", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000002.merging" {
+		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
+	}
+	entries, err := countZipEntries(res.ActiveMerge)
+	if err != nil {
+		t.Fatalf("countZipEntries() error = %v", err)
+	}
+	if entries != 2 {
+		t.Fatalf("entries = %d, want 2", entries)
+	}
+}
+
 func writeZip(t *testing.T, path string, files map[string]string) {
 	t.Helper()
 	f, err := os.Create(path)
