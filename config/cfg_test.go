@@ -29,6 +29,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Processing.Manifests.ArchiveDir != "" {
 		t.Fatalf("ArchiveDir = %q, want empty", cfg.Processing.Manifests.ArchiveDir)
 	}
+	if _, ok := cfg.Fetch.FindLibrary("flibusta"); !ok {
+		t.Fatal("default flibusta fetch profile is missing")
+	}
 }
 
 func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {

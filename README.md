@@ -36,6 +36,8 @@ tools.
 
 `metabib` is organized around reusable processing passes:
 
+- `fetch` downloads new daily archive updates and SQL dumps from a configured
+  remote library profile;
 - `cache` imports SQL dumps, queries database metadata, walks FB2 archive
   entries, parses FB2 descriptions, and writes manifest files for each selected
   source;
@@ -90,6 +92,44 @@ sudo systemctl disable mariadb
 ```
 
 ## Usage
+
+### Fetch Remote Updates
+
+Download new daily archive ZIPs and current SQL dumps using a configured remote
+library profile:
+
+```sh
+metabib fetch --library flibusta --to upd_flibusta --tosql flibusta_20260622 --continue
+```
+
+`fetch` replaces the old `libget2` role. It reads profiles from the `fetch`
+section of the YAML configuration, discovers the last local book ID from existing
+`fb2-*.zip` or `fb2-*.merging` archives in `--to`, downloads only newer daily
+archive updates, and decompresses downloaded `*.sql.gz` dumps into `--tosql`.
+When `--tosql` is omitted, the SQL output directory is generated from the library
+name and current UTC timestamp. Use `--nosql` to download archive updates only.
+
+The command preserves the old `libget2` automation exit-code contract: exit code
+`0` means no new archive updates were downloaded, exit code `1` means an error
+occurred, and exit code `2` means one or more new archive updates were downloaded.
+Use code `2` to decide whether archive rollup or index/cache rebuild work is
+needed.
+
+Available `fetch` arguments:
+
+- `--library NAME`, `-l NAME`: fetch profile name from configuration. Default is
+  `flibusta`.
+- `--to DIR`, `-o DIR`: required destination directory for daily archive ZIPs.
+- `--tosql DIR`: destination directory for decompressed SQL dump files.
+- `--nosql`: skip SQL dump downloads.
+- `--retry N`: download attempts per index or file. Default is `3`.
+- `--timeout SECONDS`: per-request timeout. Default is `20`.
+- `--chunksize MB`: download chunk size used while streaming files. Default is
+  `10`.
+- `--continue`: resume partial downloads when the server supports ranges.
+- `--sticky`: ignore HTTP redirects and keep using the original host.
+
+### Build Cache Manifests
 
 ```sh
 metabib cache \

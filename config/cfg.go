@@ -18,6 +18,7 @@ var ConfigTmpl []byte
 type Config struct {
 	Version    int              `yaml:"version" validate:"eq=1"`
 	Database   DatabaseConfig   `yaml:"database"`
+	Fetch      FetchConfig      `yaml:"fetch"`
 	Processing ProcessingConfig `yaml:"processing"`
 	INPX       INPXConfig       `yaml:"inpx"`
 	Logging    LoggingConfig    `yaml:"logging"`
@@ -57,6 +58,30 @@ type ProcessingConfig struct {
 	ArchiveBatchSize   int            `yaml:"archive_batch_size" validate:"min=1"`
 	ArchiveReadBuffer  int            `yaml:"archive_read_buffer_size" validate:"min=0"`
 	Rebuild            bool           `yaml:"-"`
+}
+
+type FetchConfig struct {
+	Libraries []FetchLibraryConfig `yaml:"libraries" validate:"dive"`
+}
+
+type FetchLibraryConfig struct {
+	Name            string `yaml:"name" validate:"required"`
+	LibraryName     string `yaml:"library_name"`
+	ArchivePattern  string `yaml:"archive_pattern" validate:"required"`
+	SQLPattern      string `yaml:"sql_pattern" validate:"required"`
+	ArchiveURL      string `yaml:"archive_url" validate:"required,url"`
+	SQLURL          string `yaml:"sql_url" validate:"required,url"`
+	Proxy           string `yaml:"proxy" validate:"omitempty,url"`
+	UserAgentSuffix string `yaml:"user_agent_suffix"`
+}
+
+func (c *FetchConfig) FindLibrary(name string) (FetchLibraryConfig, bool) {
+	for _, lib := range c.Libraries {
+		if lib.Name == name {
+			return lib, true
+		}
+	}
+	return FetchLibraryConfig{}, false
 }
 
 type ManifestConfig struct {

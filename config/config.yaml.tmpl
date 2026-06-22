@@ -48,6 +48,19 @@ database:
   max_idle_connections: 32
   connection_max_lifetime_seconds: 0
 
+fetch:
+  # Remote library profiles used by `metabib fetch`. Patterns must capture the
+  # file name as the first regexp group. library_name is used for generated SQL
+  # dump directories when --sql-output is omitted.
+  libraries:
+    - name: flibusta
+      library_name: flibusta
+      archive_pattern: '(?i)<a\s+href="(f(?:\.fb2)*\.[0-9]+-[0-9]+\.zip)">'
+      sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
+      archive_url: http://flibusta.is/daily/
+      sql_url: http://flibusta.is/sql/
+      proxy: ""
+
 processing:
   # Parse FB2 description metadata from archive entries.
   parse_fb2: true

@@ -20,6 +20,7 @@ import (
 
 	"metabib/config"
 	"metabib/db"
+	"metabib/fetch"
 	"metabib/inpx"
 	"metabib/jsonl"
 	"metabib/library"
@@ -77,6 +78,9 @@ func exitErrHandler(ctx context.Context, _ *cli.Command, err error) {
 	if err == nil {
 		return
 	}
+	if _, ok := err.(fetchExitCode); ok {
+		return
+	}
 	env := state.EnvFromContext(ctx)
 	if env.Log != nil {
 		env.Log.Error("Program ended with error", zap.Error(err))
@@ -99,6 +103,7 @@ func main() {
 			&cli.BoolFlag{Name: "verbose", Aliases: []string{"V"}, Usage: "enable detailed progress reporting"},
 		},
 		Commands: []*cli.Command{
+			fetchCommand(),
 			cacheCommand(),
 			mergeCommand(),
 			inpxCommand(),
@@ -128,6 +133,25 @@ func main() {
 		}
 	}()
 	err = app.Run(ctx, os.Args)
+}
+
+func fetchCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "fetch",
+		Usage: "Download new daily archives and SQL dumps from a configured library",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "library", Aliases: []string{"l"}, Value: "flibusta", Usage: "fetch profile `NAME` from configuration"},
+			&cli.IntFlag{Name: "retry", Value: 3, Usage: "number of download attempts"},
+			&cli.IntFlag{Name: "timeout", Value: 20, Usage: "per-request timeout in seconds"},
+			&cli.IntFlag{Name: "chunksize", Value: 10, Usage: "download chunk size in megabytes"},
+			&cli.BoolFlag{Name: "nosql", Usage: "do not download SQL dumps"},
+			&cli.BoolFlag{Name: "sticky", Usage: "ignore HTTP redirects and keep using the original host"},
+			&cli.BoolFlag{Name: "continue", Usage: "continue partially downloaded files when the server supports ranges"},
+			&cli.StringFlag{Name: "to", Aliases: []string{"o"}, Usage: "destination directory for daily archive ZIP files", Required: true},
+			&cli.StringFlag{Name: "tosql", Usage: "destination directory for SQL dump files"},
+		},
+		Action: runFetch,
+	}
 }
 
 func inpxCommand() *cli.Command {
@@ -177,6 +201,56 @@ func mergeCommand() *cli.Command {
 		},
 		Action: runMerge,
 	}
+}
+
+func runFetch(ctx context.Context, cmd *cli.Command) error {
+	cfg := state.EnvFromContext(ctx).Cfg
+	env := state.EnvFromContext(ctx)
+	library, ok := cfg.Fetch.FindLibrary(cmd.String("library"))
+	if !ok {
+		return fmt.Errorf("unable to find fetch profile %q", cmd.String("library"))
+	}
+	res, err := fetch.Run(ctx, fetch.Options{
+		Library:       library,
+		ArchiveDir:    cmd.String("to"),
+		SQLDir:        cmd.String("tosql"),
+		DownloadSQL:   !cmd.Bool("nosql"),
+		Retry:         cmd.Int("retry"),
+		Timeout:       time.Duration(cmd.Int("timeout")) * time.Second,
+		ChunkSize:     int64(cmd.Int("chunksize")) * 1024 * 1024,
+		Continue:      cmd.Bool("continue"),
+		Sticky:        cmd.Bool("sticky"),
+		Verbose:       env.Verbose,
+		Log:           env.Log,
+		UserAgentName: misc.GetAppName(),
+	})
+	if err != nil {
+		return err
+	}
+	if env.Log != nil {
+		env.Log.Info(
+			"Fetch completed",
+			zap.String("library", res.LibraryName),
+			zap.Int("last_book_id", res.LastBookID),
+			zap.Int("archives", res.Archives),
+			zap.Int("sql_tables", res.SQLTables),
+			zap.String("sql_directory", res.SQLDir),
+		)
+	}
+	if res.Archives > 0 {
+		return fetchExitCode(fetch.NewArchivesExitCode)
+	}
+	return nil
+}
+
+type fetchExitCode int
+
+func (c fetchExitCode) Error() string {
+	return fmt.Sprintf("fetch completed with exit code %d", c)
+}
+
+func (c fetchExitCode) ExitCode() int {
+	return int(c)
 }
 
 func runCache(ctx context.Context, cmd *cli.Command) error {
