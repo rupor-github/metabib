@@ -73,7 +73,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `fb2/parse.go:87-91`, `fb2/parse.go:148-150`, `fb2/parse.go:205-215`.
   - Notes: `coverpage` is skipped and mixed text is reordered by `collectText`.
 
-- [ ] Medium: Escape or remove INPX field separators and lone carriage returns.
+- [x] Medium: Escape or remove INPX field separators and lone carriage returns.
   - References: `inpx/inpx.go:469-488`, `inpx/inpx.go:656-660`.
   - Notes: Text containing `\x04` or lone `\r` can corrupt `.inp` field layout.
 

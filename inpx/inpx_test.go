@@ -126,6 +126,42 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 	}
 }
 
+func TestCleanseRemovesINPLayoutCharacters(t *testing.T) {
+	t.Parallel()
+
+	got := cleanse("a" + fieldSep + "b\rc\r\nd\ne\u00a0f")
+	if strings.Contains(got, fieldSep) || strings.Contains(got, "\r") || strings.Contains(got, "\n") {
+		t.Fatalf("cleanse() = %q, still contains layout characters", got)
+	}
+	if got != "a b c de f" {
+		t.Fatalf("cleanse() = %q", got)
+	}
+}
+
+func TestRecordLineSanitizesFieldSeparators(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		ID: model.RecordID{BookID: 1, FileName: "file" + fieldSep + "name", Extension: "fb2"},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: 1, Title: "bad" + fieldSep + "title", FileType: "fb2", Keywords: "bad\rkeywords"},
+			Authors: []model.Contributor{{FirstName: "First" + fieldSep + "Name", LastName: "Last\rName"}},
+			Genres:  []model.DBGenre{{Code: "sf" + fieldSep + "bad"}},
+		}},
+	}
+	line := recordLine(rec, Options{Format: Format2X, QuickFix: true, Limits: DefaultLimits()})
+	fields := strings.Split(strings.TrimSuffix(line, "\r\n"), fieldSep)
+	if len(fields) != 15 {
+		t.Fatalf("field count = %d fields=%#v line=%q", len(fields), fields, line)
+	}
+	for idx, field := range fields[:len(fields)-1] {
+		if strings.Contains(field, fieldSep) || strings.Contains(field, "\r") {
+			t.Fatalf("field %d = %q contains unsanitized layout character", idx, field)
+		}
+	}
+}
+
 func writeMetadata(t *testing.T, prefix string, meta model.MergeMetadata) {
 	t.Helper()
 	data, err := jsonv2.Marshal(meta)

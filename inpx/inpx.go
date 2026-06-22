@@ -655,7 +655,9 @@ func displayDate(meta model.MergeMetadata) string {
 
 func cleanse(value string) string {
 	value = strings.ReplaceAll(value, "\r\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
 	value = strings.ReplaceAll(value, "\n", "")
+	value = strings.ReplaceAll(value, fieldSep, " ")
 	value = strings.ReplaceAll(value, "\u00a0", " ")
 	return value
 }
