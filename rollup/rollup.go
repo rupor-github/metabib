@@ -422,10 +422,10 @@ func collectArchives(dirs []string) ([]archive, error) {
 }
 
 var (
-	archiveNameRE = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.zip`)
-	mergeNameRE   = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.merging`)
-	updateNameRE  = regexp.MustCompile(`(?i)\s*fb2\.([0-9]+)-([0-9]+)\.zip`)
-	localNameRE   = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.(?:zip|merging)`)
+	archiveNameRE = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.zip$`)
+	mergeNameRE   = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.merging$`)
+	updateNameRE  = regexp.MustCompile(`(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$`)
+	localNameRE   = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.(?:zip|merging)$`)
 )
 
 func archiveNameWidth(last archive, merge archive) int {

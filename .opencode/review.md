@@ -37,7 +37,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `rollup/rollup.go:285-293`, `rollup/rollup.go:357-360`.
   - Notes: Old finalized archives can remain beside the new merged archive and later duplicate books.
 
-- [ ] High: Anchor rollup filename regexes and avoid selecting/removing temp or backup files.
+- [x] High: Anchor rollup filename regexes and avoid selecting/removing temp or backup files.
   - References: `rollup/rollup.go:422-426`, `rollup/rollup.go:489-490`, `rollup/rollup.go:247-255`.
   - Notes: Substring matches like `fb2.000001-000002.zip.tmp` can be selected as updates.
 

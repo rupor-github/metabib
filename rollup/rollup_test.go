@@ -26,6 +26,8 @@ func TestGetUpdates(t *testing.T) {
 	files := []archive{
 		{info: fakeInfo{name: "f.fb2.000101-000150.zip"}},
 		{info: fakeInfo{name: "f.fb2.000151-000200.zip"}},
+		{info: fakeInfo{name: "f.fb2.000201-000250.zip.tmp"}},
+		{info: fakeInfo{name: "backup-f.fb2.000251-000300.zip"}},
 		{info: fakeInfo{name: "fb2-000001-000100.zip"}},
 	}
 	updates, err := getUpdates(files, 150)
@@ -34,6 +36,31 @@ func TestGetUpdates(t *testing.T) {
 	}
 	if len(updates) != 1 || updates[0].begin != 151 || updates[0].end != 200 {
 		t.Fatalf("updates = %#v, want 151-200", updates)
+	}
+}
+
+func TestLocalArchiveNamesRequireExactMatch(t *testing.T) {
+	t.Parallel()
+
+	files := []archive{
+		{info: fakeInfo{name: "fb2-000001-000100.zip.tmp"}},
+		{info: fakeInfo{name: "backup-fb2-000001-000200.zip"}},
+		{info: fakeInfo{name: "fb2-000001-000300.merging.tmp"}},
+		{info: fakeInfo{name: "fb2-000001-000400.zip"}},
+	}
+	last, err := getLastArchive(files)
+	if err != nil {
+		t.Fatalf("getLastArchive() error = %v", err)
+	}
+	if last.end != 400 {
+		t.Fatalf("last.end = %d, want 400", last.end)
+	}
+	merge, err := getMergeArchive(files)
+	if err != nil {
+		t.Fatalf("getMergeArchive() error = %v", err)
+	}
+	if merge.info != nil {
+		t.Fatalf("merge = %#v, want none", merge)
 	}
 }
 
@@ -129,6 +156,31 @@ func TestRunRemovesSupersededLastArchive(t *testing.T) {
 	}
 	if entries != 2 {
 		t.Fatalf("entries = %d, want 2", entries)
+	}
+}
+
+func TestRunDoesNotRemoveTempLikeUpdateNames(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	bogusUpdate := filepath.Join(updates, "f.fb2.0000000001-0000000001.zip.tmp")
+	writeZip(t, bogusUpdate, map[string]string{"1.fb2": "one"})
+	validUpdate := filepath.Join(updates, "f.fb2.0000000002-0000000002.zip")
+	writeZip(t, validUpdate, map[string]string{"2.fb2": "two"})
+
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: false})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(bogusUpdate); err != nil {
+		t.Fatalf("bogus update stat error = %v, want preserved", err)
+	}
+	if _, err := os.Stat(validUpdate); !os.IsNotExist(err) {
+		t.Fatalf("valid update stat error = %v, want removed", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "fb2-0000000002-0000000002.merging" {
+		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
 	}
 }
 
