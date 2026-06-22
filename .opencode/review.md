@@ -25,7 +25,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `library/process.go:411`, `library/process.go:424-499`.
   - Notes: Batches are based on filtered entries but result index is derived from original ZIP index.
 
-- [ ] Critical: Make JSONL split filenames unique when ranges repeat or BookID is zero.
+- [x] Critical: Make JSONL split filenames unique when ranges repeat or BookID is zero.
   - References: `jsonl/writer.go:88-97`, `jsonl/writer.go:151-169`.
   - Notes: Multiple split parts can resolve to the same final filename and overwrite previous output.
 

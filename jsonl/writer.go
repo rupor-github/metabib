@@ -33,6 +33,7 @@ type Writer struct {
 	maxBytes    int64
 	compression Compression
 	log         *zap.Logger
+	finalPaths  map[string]struct{}
 
 	file        *os.File
 	closer      io.Closer
@@ -50,7 +51,7 @@ func Create(path string, maxBytes int64) (*Writer, error) {
 
 func CreateCompressed(path string, maxBytes int64, compression Compression) (*Writer, error) {
 	path = normalizeBasePath(path, compression)
-	w := &Writer{basePath: path, maxBytes: maxBytes, compression: compression}
+	w := &Writer{basePath: path, maxBytes: maxBytes, compression: compression, finalPaths: make(map[string]struct{})}
 	return w, nil
 }
 
@@ -148,7 +149,7 @@ func (w *Writer) closePart() error {
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
-	finalJSONLPath := rangedPath(w.basePath, w.partStartID, w.partEndID)
+	finalJSONLPath := w.finalJSONLPath()
 	finalPath := compressedPath(finalJSONLPath, w.compression)
 	partPath := w.partPath
 	if w.compression == CompressionZip {
@@ -168,11 +169,37 @@ func (w *Writer) closePart() error {
 	if err := fileutil.ReplaceOutputFile(partPath, finalPath); err != nil {
 		return fmt.Errorf("rename JSONL output %q to %q: %w", partPath, finalPath, err)
 	}
+	w.finalPaths[finalPath] = struct{}{}
 	w.file = nil
 	w.closer = nil
 	w.buf = nil
 	w.partPath = ""
 	return nil
+}
+
+func (w *Writer) finalJSONLPath() string {
+	path := rangedPath(w.basePath, w.partStartID, w.partEndID)
+	compressed := compressedPath(path, w.compression)
+	reason := ""
+	if w.partStartID == 0 || w.partEndID == 0 {
+		reason = "zero_book_id"
+	} else if _, exists := w.finalPaths[compressed]; exists {
+		reason = "repeated_range"
+	}
+	if reason == "" {
+		return path
+	}
+	partPath := rangedPartPath(w.basePath, w.partStartID, w.partEndID, w.partIndex)
+	if w.log != nil {
+		w.log.Warn(
+			"Changing JSONL output path to avoid overwriting a non-unique range",
+			zap.String("reason", reason),
+			zap.String("range_file", compressed),
+			zap.String("file", compressedPath(partPath, w.compression)),
+			zap.Int("part", w.partIndex),
+		)
+	}
+	return partPath
 }
 
 func (w *Writer) compressedWriter(f *os.File) (io.Writer, io.Closer, error) {
@@ -240,6 +267,10 @@ func (w *Writer) zipPart(finalJSONLPath string) (string, error) {
 
 func rangedPath(path string, startID int64, endID int64) string {
 	return fmt.Sprintf("%s.%010d-%010d.jsonl", path, startID, endID)
+}
+
+func rangedPartPath(path string, startID int64, endID int64, partIndex int) string {
+	return fmt.Sprintf("%s.%010d-%010d.part-%06d.jsonl", path, startID, endID, partIndex)
 }
 
 func compressedPath(path string, compression Compression) string {

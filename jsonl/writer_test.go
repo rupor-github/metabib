@@ -3,6 +3,7 @@ package jsonl
 import (
 	"archive/zip"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -57,6 +58,72 @@ func TestRangedPathDefaultExtension(t *testing.T) {
 	got := rangedPath("out", 1, 2)
 	if got != "out.0000000001-0000000002.jsonl" {
 		t.Fatalf("rangedPath() = %q", got)
+	}
+}
+
+func TestWriterSplitUsesUniqueNamesForZeroBookID(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "out")
+	core, logs := observer.New(zap.WarnLevel)
+	w, err := Create(base, 1)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	w.WithLogger(zap.New(core))
+	for range 2 {
+		if err := w.Write(model.Record{Schema: "metabib.record/1"}); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(base), "out.*.jsonl"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 2 {
+		t.Fatalf("matches = %#v, want 2 files", matches)
+	}
+	for idx, match := range matches {
+		if !strings.Contains(filepath.Base(match), fmt.Sprintf("part-%06d", idx+1)) {
+			t.Fatalf("file %d name = %q", idx, match)
+		}
+	}
+	if logs.FilterMessage("Changing JSONL output path to avoid overwriting a non-unique range").Len() != 2 {
+		t.Fatalf("logs = %#v, want zero-id path change warnings", logs.All())
+	}
+}
+
+func TestWriterSplitUsesUniqueNamesForRepeatedRanges(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "out")
+	core, logs := observer.New(zap.WarnLevel)
+	w, err := Create(base, 1)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	w.WithLogger(zap.New(core))
+	for range 2 {
+		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 10}}); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	plain := filepath.Join(filepath.Dir(base), "out.0000000010-0000000010.jsonl")
+	if _, err := os.Stat(plain); err != nil {
+		t.Fatalf("Stat(%q) error = %v", plain, err)
+	}
+	part := filepath.Join(filepath.Dir(base), "out.0000000010-0000000010.part-000002.jsonl")
+	if _, err := os.Stat(part); err != nil {
+		t.Fatalf("Stat(%q) error = %v", part, err)
+	}
+	if logs.FilterMessage("Changing JSONL output path to avoid overwriting a non-unique range").Len() != 1 {
+		t.Fatalf("logs = %#v, want repeated-range path change warning", logs.All())
 	}
 }
 
