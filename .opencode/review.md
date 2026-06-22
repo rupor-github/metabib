@@ -17,7 +17,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `db/runtime.go:249-264`, `db/runtime.go:99`, `config/cfg.go:29-39`.
   - Notes: Managed server uses `--skip-grant-tables`; TCP host is configurable.
 
-- [ ] Critical: Add safety guards around destructive managed data directory overwrite.
+- [x] Critical: Add safety guards around destructive managed data directory overwrite.
   - References: `db/runtime.go:200-205`.
   - Notes: `--db-overwrite` currently calls `os.RemoveAll` on configured `data_dir` without path safety checks.
 
