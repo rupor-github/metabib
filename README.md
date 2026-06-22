@@ -1,5 +1,5 @@
 <h1>
-    <img src="docs/library.svg" style="vertical-align:middle; width:8%" align="absmiddle"/>
+    <img src="docs/library.svg" style="vertical-align:middle; width:14%" align="absmiddle"/>
     <span style="vertical-align:middle;">&nbsp;&nbsp;Metadata extractor from Flibusta-style SQL dumps and FB2 archives.</span>
 </h1>
 
