@@ -608,8 +608,12 @@ func writeOutput(ctx context.Context, path string, partSizeValue string, compres
 		return err
 	}
 	out.WithLogger(log)
-	defer out.Close()
-	return write(out)
+	writeErr := write(out)
+	closeErr := out.Close()
+	if writeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	return closeErr
 }
 
 func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger) (databaseIndex, error) {

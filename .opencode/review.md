@@ -29,7 +29,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `jsonl/writer.go:88-97`, `jsonl/writer.go:151-169`.
   - Notes: Multiple split parts can resolve to the same final filename and overwrite previous output.
 
-- [ ] High: Return final JSONL close, flush, compressor, and rename errors from CLI output paths.
+- [x] High: Return final JSONL close, flush, compressor, and rename errors from CLI output paths.
   - References: `cmd/metabib/main.go:606-612`, `jsonl/writer.go:101-105`, `jsonl/writer.go:132-170`.
   - Notes: `writeOutput` defers `out.Close()` and ignores close-time failures.
 

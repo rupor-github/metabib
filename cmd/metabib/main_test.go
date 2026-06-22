@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -104,6 +106,49 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("matches = %#v", matches)
+	}
+}
+
+func TestWriteOutputReturnsCloseError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out")
+	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
+		if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}}); err != nil {
+			return err
+		}
+		finalPath := filepath.Join(dir, "out.0000000042-0000000042.jsonl")
+		if err := os.Mkdir(finalPath, 0o755); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err == nil {
+		t.Fatal("writeOutput() error = nil, want close rename error")
+	}
+}
+
+func TestWriteOutputJoinsWriteAndCloseErrors(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeErr := assertErr("write failed")
+	err := writeOutput(context.Background(), filepath.Join(dir, "out"), "", "none", nil, func(out *jsonl.Writer) error {
+		if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}}); err != nil {
+			return err
+		}
+		finalPath := filepath.Join(dir, "out.0000000042-0000000042.jsonl")
+		if err := os.Mkdir(finalPath, 0o755); err != nil {
+			return err
+		}
+		return writeErr
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("writeOutput() error = %v, want write error", err)
+	}
+	if err == writeErr {
+		t.Fatalf("writeOutput() error = %v, want joined close error", err)
 	}
 }
 
