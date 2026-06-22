@@ -148,7 +148,6 @@ type FB2TitleInfo struct {
 	Annotation  string        `json:"annotation,omitempty"`
 	Keywords    string        `json:"keywords,omitempty"`
 	Date        *FB2Date      `json:"date,omitempty"`
-	CoverImages []string      `json:"cover_images,omitempty"`
 	Language    string        `json:"language,omitempty"`
 	SourceLang  string        `json:"source_language,omitempty"`
 	Sequences   []FB2Sequence `json:"sequences,omitempty"`

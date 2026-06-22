@@ -43,7 +43,7 @@ func TestParseTitleInfoOnly(t *testing.T) {
 	if got := src.TitleInfo.Authors[0].LastName; got != "Strugatsky" {
 		t.Fatalf("author last name = %q", got)
 	}
-	if got := src.TitleInfo.Annotation; got != "Hello . world" {
+	if got := src.TitleInfo.Annotation; got != "Hello world." {
 		t.Fatalf("annotation = %q", got)
 	}
 	if len(src.TitleInfo.Sequences) != 2 {
@@ -63,6 +63,21 @@ func TestParsePreservesDescription(t *testing.T) {
 	}
 	if src.Description.Name != "description" {
 		t.Fatalf("description node name = %q", src.Description.Name)
+	}
+}
+
+func TestParseMixedTextOrder(t *testing.T) {
+	t.Parallel()
+
+	src, err := Parse(strings.NewReader(`<FictionBook><description><title-info><book-title>A <em>B</em> C <strong>D</strong></book-title><annotation>Hello <strong>world</strong>.</annotation></title-info></description></FictionBook>`), false)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got := src.TitleInfo.Title; got != "A B C D" {
+		t.Fatalf("Title = %q", got)
+	}
+	if got := src.TitleInfo.Annotation; got != "Hello world." {
+		t.Fatalf("Annotation = %q", got)
 	}
 }
 

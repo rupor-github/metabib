@@ -69,7 +69,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `library/process.go:363-367`, `library/process.go:593-595`.
   - Notes: Non-numeric `.fb2` entries remain `BookID=0` and never look up DB metadata by filename.
 
-- [ ] Medium: Preserve FB2 coverpage metadata and mixed text order.
+- [x] Medium: Preserve FB2 mixed text order and remove cover image metadata.
   - References: `fb2/parse.go:87-91`, `fb2/parse.go:148-150`, `fb2/parse.go:205-215`.
   - Notes: `coverpage` is skipped and mixed text is reordered by `collectText`.
 

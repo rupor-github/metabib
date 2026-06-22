@@ -95,6 +95,7 @@ func readNode(dec *xml.Decoder, start xml.StartElement) (model.XMLNode, error) {
 				return node, err
 			}
 			node.Children = append(node.Children, child)
+			text.WriteString(collectText(child))
 		case xml.CharData:
 			text.WriteString(string(t))
 		case xml.EndElement:
@@ -145,8 +146,6 @@ func parseTitleInfo(node model.XMLNode) model.FB2TitleInfo {
 			info.Keywords = collectText(child)
 		case "date":
 			info.Date = &model.FB2Date{Text: collectText(child), Value: findAttr(child, "value")}
-		case "coverpage":
-			info.CoverImages = coverImages(child)
 		case "lang":
 			info.Language = collectText(child)
 		case "src-lang":
@@ -190,23 +189,11 @@ func parseSequences(node model.XMLNode) []model.FB2Sequence {
 	return out
 }
 
-func coverImages(node model.XMLNode) []string {
-	var out []string
-	for _, child := range node.Children {
-		if child.Name == "image" {
-			if href := findAttr(child, "href"); href != "" {
-				out = append(out, href)
-			}
-		}
-	}
-	return out
-}
-
 func collectText(node model.XMLNode) string {
-	parts := make([]string, 0, len(node.Children)+1)
-	if strings.TrimSpace(node.Text) != "" {
-		parts = append(parts, strings.TrimSpace(node.Text))
+	if text := strings.TrimSpace(node.Text); text != "" {
+		return text
 	}
+	parts := make([]string, 0, len(node.Children)+1)
 	for _, child := range node.Children {
 		if text := collectText(child); text != "" {
 			parts = append(parts, text)
