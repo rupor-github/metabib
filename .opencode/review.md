@@ -53,7 +53,7 @@ Generated from the thorough code review on 2026-06-22.
   - References: `library/manifest.go:757-763`, `library/manifest.go:861-865`.
   - Notes: `archive_dir` maps `/a/books.zip` and `/b/books.zip` to the same manifest path.
 
-- [ ] High: Prevent `--db-overwrite` from dropping external or DSN databases unintentionally.
+- [x] High: Prevent `--db-overwrite` from dropping external or DSN databases unintentionally.
   - References: `cmd/metabib/main.go:371-379`, `db/runtime.go:50-60`, `db/importer.go:134-135`.
   - Notes: External DB runs still pass overwrite into importer and execute `DROP DATABASE`.
 

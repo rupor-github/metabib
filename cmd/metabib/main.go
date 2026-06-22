@@ -376,7 +376,8 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 			cfg.Database = runtime.Config
 
 			if importDumps {
-				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose, true, overwriteDB)
+				dropBeforeImport := shouldDropDatabaseBeforeImport(overwriteDB, runtime.Managed(), env.Log)
+				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose, true, dropBeforeImport)
 				if err := importer.PrepareDatabase(ctx); err != nil {
 					return err
 				}
@@ -401,6 +402,19 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 		reports = append(reports, report)
 	}
 	return failIfReportsNotReady(reports, false)
+}
+
+func shouldDropDatabaseBeforeImport(overwriteDB bool, managed bool, log *zap.Logger) bool {
+	if !overwriteDB {
+		return false
+	}
+	if managed {
+		return true
+	}
+	if log != nil {
+		log.Warn("Ignoring --db-overwrite database drop for external database runtime")
+	}
+	return false
 }
 
 func runMerge(ctx context.Context, cmd *cli.Command) error {

@@ -154,6 +154,10 @@ func (r *Runtime) Close() error {
 	return errors.Join(errs...)
 }
 
+func (r *Runtime) Managed() bool {
+	return r != nil && r.managed
+}
+
 func (r *Runtime) prepareManagedPaths() error {
 	if r.Config.Temporary {
 		tmp, err := os.MkdirTemp("", "metabib-mariadb-*")
