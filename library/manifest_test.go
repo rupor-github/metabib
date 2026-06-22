@@ -46,6 +46,45 @@ func TestManifestWriterAndIterator(t *testing.T) {
 	}
 }
 
+func TestForEachManifestRecordRejectsUnexpectedSchema(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "records.manifest.zst")
+	w, err := newManifestWriter(path)
+	if err != nil {
+		t.Fatalf("newManifestWriter() error = %v", err)
+	}
+	if err := w.Close(map[string]any{"schema": "bad", "records": 0}); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := ForEachManifestRecord(context.Background(), path, nil); err == nil {
+		t.Fatal("ForEachManifestRecord() error = nil, want schema error")
+	}
+}
+
+func TestForEachManifestRecordRejectsRecordCountMismatch(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "records.manifest.zst")
+	w, err := newManifestWriter(path)
+	if err != nil {
+		t.Fatalf("newManifestWriter() error = %v", err)
+	}
+	if err := w.Write(model.Record{Schema: recordSchema, ID: model.RecordID{BookID: 10}}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := w.Close(archiveManifestHeader{Schema: archiveManifestSchema, Records: 2}); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	count, err := ForEachManifestRecord(context.Background(), path, nil)
+	if err == nil {
+		t.Fatal("ForEachManifestRecord() error = nil, want record count mismatch")
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want decoded count 1", count)
+	}
+}
+
 func TestPlanDatabaseManifestMissingAndFresh(t *testing.T) {
 	t.Parallel()
 

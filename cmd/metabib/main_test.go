@@ -227,7 +227,7 @@ func writeTestManifest(t *testing.T, path string, records ...model.Record) {
 		f.Close()
 		t.Fatalf("NewWriter() error = %v", err)
 	}
-	if err := jsonv2.MarshalWrite(enc, map[string]any{"schema": "test", "records": len(records)}); err != nil {
+	if err := jsonv2.MarshalWrite(enc, map[string]any{"schema": "metabib.archive_manifest/1", "records": len(records)}); err != nil {
 		enc.Close()
 		f.Close()
 		t.Fatalf("MarshalWrite(header) error = %v", err)

@@ -57,11 +57,11 @@ Generated from the thorough code review on 2026-06-22.
   - References: `cmd/metabib/main.go:371-379`, `db/runtime.go:50-60`, `db/importer.go:134-135`.
   - Notes: External DB runs still pass overwrite into importer and execute `DROP DATABASE`.
 
-- [ ] High: Stop exposing DB passwords in process arguments.
+- [ ] Skipped: Stop exposing DB passwords in process arguments.
   - References: `db/importer.go:277-278`, `db/importer.go:291-292`, `db/runtime.go:110-111`.
   - Notes: Passwords are passed as `--password=<secret>` to MariaDB clients.
 
-- [ ] Medium: Validate manifest schema and declared record count during manifest iteration/copy.
+- [x] Medium: Validate manifest schema and declared record count during manifest iteration/copy.
   - References: `library/manifest.go:301-335`.
   - Notes: Iteration ignores header schema and does not compare actual records with declared `records`.
 

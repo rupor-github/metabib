@@ -92,6 +92,11 @@ type databaseManifestHeader struct {
 	Records    int64                  `json:"records"`
 }
 
+type manifestIterationHeader struct {
+	Schema  string `json:"schema"`
+	Records int64  `json:"records"`
+}
+
 type DatabaseManifestSource struct {
 	DumpDir  string               `json:"dump_dir"`
 	DumpDate string               `json:"dump_date,omitempty"`
@@ -307,12 +312,18 @@ func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func
 	defer r.Close()
 
 	dec := jsontext.NewDecoder(r)
-	var header jsontext.Value
+	var header manifestIterationHeader
 	if err := jsonv2.UnmarshalDecode(dec, &header); err != nil {
 		if err == io.EOF {
 			return 0, fmt.Errorf("manifest %q is empty", manifestPath)
 		}
 		return 0, fmt.Errorf("read manifest header %q: %w", manifestPath, err)
+	}
+	if header.Schema != archiveManifestSchema && header.Schema != databaseManifestSchema {
+		return 0, fmt.Errorf("manifest %q has unexpected schema %q", manifestPath, header.Schema)
+	}
+	if header.Records < 0 {
+		return 0, fmt.Errorf("manifest %q declares negative record count %d", manifestPath, header.Records)
 	}
 	var records int64
 	for {
@@ -332,6 +343,9 @@ func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func
 			}
 		}
 		records++
+	}
+	if records != header.Records {
+		return records, fmt.Errorf("manifest %q record count mismatch: declared %d, read %d", manifestPath, header.Records, records)
 	}
 	return records, nil
 }
