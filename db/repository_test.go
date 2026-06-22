@@ -48,3 +48,19 @@ func TestFileIdentityFallback(t *testing.T) {
 		t.Fatalf("stem = %q", stem)
 	}
 }
+
+func TestContributorFromClause(t *testing.T) {
+	t.Parallel()
+
+	direct := contributorFromClause("libavtor", "AvtorId", false)
+	if !strings.Contains(direct, "JOIN libavtorname n ON n.AvtorId = a.AvtorId") || strings.Contains(direct, "libavtoraliase") {
+		t.Fatalf("direct clause = %q", direct)
+	}
+	aliased := contributorFromClause("libavtor", "AvtorId", true)
+	if !strings.Contains(aliased, "LEFT JOIN libavtoraliase aa ON aa.BadId = a.AvtorId") {
+		t.Fatalf("alias clause missing alias join: %q", aliased)
+	}
+	if !strings.Contains(aliased, "n.AvtorId = COALESCE(aa.GoodId, a.AvtorId)") {
+		t.Fatalf("alias clause missing canonical join: %q", aliased)
+	}
+}

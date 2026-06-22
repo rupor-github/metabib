@@ -1,9 +1,11 @@
 package db
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"metabib/config"
@@ -87,6 +89,33 @@ func TestClientArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAuthorAliasFixup(t *testing.T) {
+	t.Parallel()
+
+	input := strings.Join([]string{
+		"CREATE TABLE `libavtoraliase` (",
+		"  `AliaseId` int(11) NOT NULL auto_increment,",
+		"  `BadId` int(11) NOT NULL default '0',",
+		"  `GoodId` int(11) NOT NULL default '0'",
+		");",
+		"INSERT INTO `libavtoraliase` VALUES (0,10,20);",
+	}, "\n")
+	var out bytes.Buffer
+	if err := writeAuthorAliasFixup(&out, strings.NewReader(input)); err != nil {
+		t.Fatalf("writeAuthorAliasFixup() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "`dummyId` int(11) NOT NULL default '0',") {
+		t.Fatalf("fixup output missing dummyId: %s", got)
+	}
+	if !strings.Contains(got, "INSERT INTO `libavtoraliase` (dummyId, BadId, GoodId) VALUES (0,10,20);") {
+		t.Fatalf("fixup output missing explicit INSERT columns: %s", got)
+	}
+	if !isAuthorAliasDump("lib.libavtoraliase.sql") {
+		t.Fatal("isAuthorAliasDump() = false")
 	}
 }
 

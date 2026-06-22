@@ -189,6 +189,10 @@ func (i *Importer) importDump(ctx context.Context, client string, dump DumpFile)
 		return fmt.Errorf("open dump %q: %w", dump.Path, err)
 	}
 	defer f.Close()
+	var stdin io.Reader = f
+	if isAuthorAliasDump(dump.Name) {
+		stdin = authorAliasFixupReader(f)
+	}
 
 	args, err := i.clientArgs()
 	if err != nil {
@@ -196,13 +200,57 @@ func (i *Importer) importDump(ctx context.Context, client string, dump DumpFile)
 	}
 
 	cmd := exec.CommandContext(ctx, client, args...)
-	cmd.Stdin = f
+	cmd.Stdin = stdin
 	cmd.Stdout = i.logOut
 	cmd.Stderr = i.logOut
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("import dump %q with %q: %w", dump.Path, client, err)
 	}
 	return nil
+}
+
+func isAuthorAliasDump(name string) bool {
+	return strings.Contains(strings.ToLower(filepath.Base(name)), "libavtoraliase")
+}
+
+func authorAliasFixupReader(r io.Reader) io.Reader {
+	pr, pw := io.Pipe()
+	go func() {
+		_ = pw.CloseWithError(writeAuthorAliasFixup(pw, r))
+	}()
+	return pr
+}
+
+func writeAuthorAliasFixup(w io.Writer, r io.Reader) error {
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			if _, writeErr := io.WriteString(w, fixAuthorAliasSQLLine(line)); writeErr != nil {
+				return writeErr
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func fixAuthorAliasSQLLine(line string) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(trimmed)]
+	if strings.HasPrefix(trimmed, "`AliaseId` int(11) NOT NULL auto_increment,") ||
+		strings.HasPrefix(trimmed, "`AliaseId` int(11) NOT NULL AUTO_INCREMENT,") {
+		return line + indent + "`dummyId` int(11) NOT NULL default '0',\n"
+	}
+	const insertPrefix = "INSERT INTO `libavtoraliase`"
+	if rest, ok := strings.CutPrefix(trimmed, insertPrefix); ok {
+		return indent + "INSERT INTO `libavtoraliase` (dummyId, BadId, GoodId)" + rest
+	}
+	return line
 }
 
 func (i *Importer) clientArgs() ([]string, error) {

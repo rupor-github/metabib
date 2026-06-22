@@ -254,11 +254,15 @@ func (r *Repository) attachContributors(ctx context.Context, ids []int64, out ma
 	if ok, err := r.tableExists(ctx, "libavtorname"); err != nil || !ok {
 		return err
 	}
+	useAliases, err := r.useAuthorAliases(ctx, table)
+	if err != nil {
+		return err
+	}
 	query, args := inQuery(fmt.Sprintf(`
 SELECT a.BookId, n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName,
        n.uid, n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
-  FROM %s a JOIN libavtorname n ON n.AvtorId = a.%s
- WHERE a.BookId IN (`, table, idColumn), ids, `) ORDER BY a.BookId`)
+	  FROM %s
+	 WHERE a.BookId IN (`, contributorFromClause(table, idColumn, useAliases)), ids, `) ORDER BY a.BookId`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query contributors batch from %s: %w", table, err)
@@ -483,11 +487,15 @@ func (r *Repository) contributors(ctx context.Context, id int64, table string, i
 	if ok, err := r.tableExists(ctx, "libavtorname"); err != nil || !ok {
 		return nil, err
 	}
+	useAliases, err := r.useAuthorAliases(ctx, table)
+	if err != nil {
+		return nil, err
+	}
 	query := fmt.Sprintf(`
 SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
        n.Email, n.Homepage, n.Gender, n.MasterId, a.Pos
-  FROM %s a JOIN libavtorname n ON n.AvtorId = a.%s
- WHERE a.BookId = ?`, table, idColumn)
+	  FROM %s
+	 WHERE a.BookId = ?`, contributorFromClause(table, idColumn, useAliases))
 	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("query contributors from %s for book %d: %w", table, id, err)
@@ -503,6 +511,25 @@ SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func (r *Repository) useAuthorAliases(ctx context.Context, table string) (bool, error) {
+	if table != "libavtor" {
+		return false, nil
+	}
+	return r.tableExists(ctx, "libavtoraliase")
+}
+
+func contributorFromClause(table string, idColumn string, useAliases bool) string {
+	if useAliases {
+		return fmt.Sprintf(
+			"%s a LEFT JOIN libavtoraliase aa ON aa.BadId = a.%s JOIN libavtorname n ON n.AvtorId = COALESCE(aa.GoodId, a.%s)",
+			table,
+			idColumn,
+			idColumn,
+		)
+	}
+	return fmt.Sprintf("%s a JOIN libavtorname n ON n.AvtorId = a.%s", table, idColumn)
 }
 
 func (r *Repository) genres(ctx context.Context, id int64) ([]model.DBGenre, error) {
