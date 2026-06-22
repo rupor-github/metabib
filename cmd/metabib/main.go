@@ -22,10 +22,12 @@ import (
 	"metabib/db"
 	"metabib/fetch"
 	"metabib/inpx"
+	"metabib/internal/fileutil"
 	"metabib/jsonl"
 	"metabib/library"
 	"metabib/misc"
 	"metabib/model"
+	"metabib/rollup"
 	"metabib/state"
 )
 
@@ -81,6 +83,9 @@ func exitErrHandler(ctx context.Context, _ *cli.Command, err error) {
 	if _, ok := err.(fetchExitCode); ok {
 		return
 	}
+	if _, ok := err.(rollupExitCode); ok {
+		return
+	}
 	env := state.EnvFromContext(ctx)
 	if env.Log != nil {
 		env.Log.Error("Program ended with error", zap.Error(err))
@@ -104,6 +109,7 @@ func main() {
 		},
 		Commands: []*cli.Command{
 			fetchCommand(),
+			rollupCommand(),
 			cacheCommand(),
 			mergeCommand(),
 			inpxCommand(),
@@ -151,6 +157,20 @@ func fetchCommand() *cli.Command {
 			&cli.StringFlag{Name: "tosql", Usage: "destination directory for SQL dump files"},
 		},
 		Action: runFetch,
+	}
+}
+
+func rollupCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "rollup",
+		Usage: "Roll daily FB2 update archives into size-bounded archive ZIPs",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "archives", Aliases: []string{"a"}, Usage: "directory for finalized fb2-*.zip archives and active .merging archive", Required: true},
+			&cli.StringSliceFlag{Name: "updates", Aliases: []string{"u"}, Usage: "directory containing daily update ZIPs; can be repeated; defaults to --archives"},
+			&cli.IntFlag{Name: "size", Value: 2000, Usage: "finalized archive target size in decimal megabytes"},
+			&cli.BoolFlag{Name: "keep-updates", Usage: "keep consumed daily update archives"},
+		},
+		Action: runRollup,
 	}
 }
 
@@ -250,6 +270,43 @@ func (c fetchExitCode) Error() string {
 }
 
 func (c fetchExitCode) ExitCode() int {
+	return int(c)
+}
+
+func runRollup(ctx context.Context, cmd *cli.Command) error {
+	env := state.EnvFromContext(ctx)
+	res, err := rollup.Run(ctx, rollup.Options{
+		ArchiveDir:  cmd.String("archives"),
+		UpdateDirs:  cmd.StringSlice("updates"),
+		SizeBytes:   int64(cmd.Int("size")) * 1000 * 1000,
+		KeepUpdates: cmd.Bool("keep-updates"),
+		Log:         env.Log,
+	})
+	if err != nil {
+		return err
+	}
+	if env.Log != nil {
+		env.Log.Info(
+			"Rollup completed",
+			zap.Int("updates", res.Updates),
+			zap.Int("finalized", res.Finalized),
+			zap.String("active_merge", res.ActiveMerge),
+			zap.Strings("finalized_archives", res.FinalizedArchives),
+		)
+	}
+	if res.Finalized > 0 {
+		return rollupExitCode(rollup.NewArchiveExitCode)
+	}
+	return nil
+}
+
+type rollupExitCode int
+
+func (c rollupExitCode) Error() string {
+	return fmt.Sprintf("rollup completed with exit code %d", c)
+}
+
+func (c rollupExitCode) ExitCode() int {
 	return int(c)
 }
 
@@ -510,7 +567,7 @@ func writeMergeMetadata(prefix string, compression jsonl.Compression, meta model
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat merge metadata %q: %w", finalPath, err)
 	}
-	if err := jsonl.ReplaceOutputFile(tmpPath, finalPath); err != nil {
+	if err := fileutil.ReplaceOutputFile(tmpPath, finalPath); err != nil {
 		return fmt.Errorf("rename merge metadata %q to %q: %w", tmpPath, finalPath, err)
 	}
 	cleanup = false

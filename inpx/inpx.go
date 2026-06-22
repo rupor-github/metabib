@@ -19,6 +19,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"go.uber.org/zap"
 
+	"metabib/internal/fileutil"
 	"metabib/jsonl"
 	"metabib/model"
 )
@@ -207,7 +208,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	stats.DBRecords = writeStats.DBRecords
 	stats.FB2Records = writeStats.FB2Records
 	stats.Dummy = writeStats.Dummy
-	if err := jsonl.ReplaceOutputFile(tmpPath, outputPath); err != nil {
+	if err := fileutil.ReplaceOutputFile(tmpPath, outputPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return stats, fmt.Errorf("replace INPX output %q: %w", outputPath, err)
 	}

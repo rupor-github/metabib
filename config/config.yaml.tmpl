@@ -124,6 +124,6 @@ logging:
 
   # controls logging to a file. MariaDB server/client output goes here by default.
   file:
-    destination: metabib.log
+    destination: '{{ joinPath .ProjectDir "metabib.log" }}'
     level: debug
-    mode: overwrite
+    mode: append

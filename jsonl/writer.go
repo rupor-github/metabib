@@ -15,6 +15,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
 
+	"metabib/internal/fileutil"
 	"metabib/model"
 )
 
@@ -164,7 +165,7 @@ func (w *Writer) closePart() error {
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat JSONL output %q: %w", finalPath, err)
 	}
-	if err := replaceOutputFile(partPath, finalPath); err != nil {
+	if err := fileutil.ReplaceOutputFile(partPath, finalPath); err != nil {
 		return fmt.Errorf("rename JSONL output %q to %q: %w", partPath, finalPath, err)
 	}
 	w.file = nil

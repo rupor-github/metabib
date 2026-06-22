@@ -38,6 +38,7 @@ tools.
 
 - `fetch` downloads new daily archive updates and SQL dumps from a configured
   remote library profile;
+- `rollup` folds daily FB2 update ZIPs into size-bounded local archive ZIPs;
 - `cache` imports SQL dumps, queries database metadata, walks FB2 archive
   entries, parses FB2 descriptions, and writes manifest files for each selected
   source;
@@ -128,6 +129,36 @@ Available `fetch` arguments:
   `10`.
 - `--continue`: resume partial downloads when the server supports ranges.
 - `--sticky`: ignore HTTP redirects and keep using the original host.
+
+### Roll Up Daily Archives
+
+Roll downloaded daily update ZIPs into local size-bounded FB2 archives:
+
+```sh
+metabib rollup --archives flibusta --updates upd_flibusta --keep-updates
+```
+
+`rollup` replaces the old `libmerge` role. It keeps finalized archives and the
+active `.merging` archive in `--archives`, reads daily update ZIPs from each
+`--updates` directory, and appends ZIP entries without recompressing them. If no
+`--updates` directory is provided, `rollup` scans `--archives` for update ZIPs as
+well. Generated archive names use the ID width of the existing `.merging` archive
+or latest finalized `fb2-*.zip`; new archive directories default to 10-digit IDs.
+
+The command preserves the old `libmerge` automation exit-code contract: exit code
+`0` means no finalized archive was produced, exit code `1` means an error
+occurred, and exit code `2` means one or more finalized `fb2-*.zip` archives were
+created. Use code `2` to decide whether cache/index rebuild work is needed.
+
+Available `rollup` arguments:
+
+- `--archives DIR`, `-a DIR`: required directory for finalized `fb2-*.zip`
+  archives and the active `fb2-*.merging` archive.
+- `--updates DIR`, `-u DIR`: directory containing daily update ZIPs; can be
+  repeated. Defaults to `--archives` when omitted.
+- `--size MB`: finalized archive target size in decimal megabytes. Default is
+  `2000`.
+- `--keep-updates`: keep consumed daily update ZIPs instead of removing them.
 
 ### Build Cache Manifests
 

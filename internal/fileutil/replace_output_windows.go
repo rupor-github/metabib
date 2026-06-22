@@ -1,10 +1,10 @@
 //go:build windows
 
-package jsonl
+package fileutil
 
 import "golang.org/x/sys/windows"
 
-func replaceOutputFile(tmpOutputName, outputName string) error {
+func ReplaceOutputFile(tmpOutputName string, outputName string) error {
 	from, err := windows.UTF16PtrFromString(tmpOutputName)
 	if err != nil {
 		return err
@@ -14,8 +14,4 @@ func replaceOutputFile(tmpOutputName, outputName string) error {
 		return err
 	}
 	return windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
-}
-
-func ReplaceOutputFile(tmpOutputName, outputName string) error {
-	return replaceOutputFile(tmpOutputName, outputName)
 }
