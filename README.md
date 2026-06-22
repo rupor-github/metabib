@@ -15,6 +15,8 @@ set. The intentionally unported areas include:
 - Librusec schema differences and Flibusta-specific assumptions;
 - historical dump schema changes and migration compatibility;
 - legacy INPX compatibility quirks for specific catalog readers.
+- creation of INPX daily updates is not presently supported because the legacy
+approach has too many limitations.
 
 Instead, `metabib` aims to provide an easily parsable source of truth for the
 growing number of catalog programs. INPX is useful as an interchange artifact,
@@ -40,11 +42,12 @@ tools.
 - `merge` reads existing manifests and combines database-derived and
   archive-derived metadata into final `metabib.record/1` JSONL records described
   by `docs/metabib.schema.json`;
-- `inpx` consumes the merged JSONL dataset and metadata sidecar to produce a
+- `mhl-inpx` consumes the merged JSONL dataset and metadata sidecar to produce a
   MyHomeLib-compatible FB2 INPX without coupling the main extraction pipeline to
-  legacy output constraints. The same transformation approach can support other
-  derived artifacts later, including update lineages and differential update
-  schemes.
+  legacy output constraints.
+
+The same transformation approach can support other derived artifacts later,
+including update lineages and differential update schemes.
 
 ## MariaDB Binaries
 
@@ -162,16 +165,16 @@ layout needed for exact MyHomeLib INPX generation.
 Build a MyHomeLib-compatible FB2 INPX from merged JSONL parts:
 
 ```sh
-metabib inpx --input all --output flibusta
+metabib mhl-inpx --input all --output flibusta
 ```
 
-`inpx` is intentionally FB2-only. It consumes the merged JSONL dataset and the
+`mhl-inpx` is intentionally FB2-only. It consumes the merged JSONL dataset and the
 merge metadata sidecar; it does not read SQL dumps, start MariaDB, or parse FB2
 archives directly.
 
-Available `inpx` arguments:
+Available `mhl-inpx` arguments:
 
-- `--input PREFIX`, `-i PREFIX`: required input prefix. `metabib inpx --input all`
+- `--input PREFIX`, `-i PREFIX`: required input prefix. `metabib mhl-inpx --input all`
   discovers one `all.meta.json*` sidecar and all matching `all.*.jsonl*` parts,
   including uncompressed, zstd, gzip, and ZIP-compressed merge outputs.
 - `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date from merge

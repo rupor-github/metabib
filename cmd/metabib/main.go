@@ -132,7 +132,7 @@ func main() {
 
 func inpxCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "inpx",
+		Name:  "mhl-inpx",
 		Usage: "Build MyHomeLib-compatible INPX from merged JSONL parts",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "input", Aliases: []string{"i"}, Usage: "read merged JSONL parts and metadata using `PREFIX`", Required: true},
