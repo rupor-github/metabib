@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -96,7 +97,7 @@ func (r *Runtime) Close() error {
 			r.Log.Info("Database runtime closed", zap.Bool("managed", r.managed), zap.Duration("elapsed", time.Since(start)))
 		}
 	}()
-	if r != nil && r.managed && r.cmd != nil && !r.Config.KeepRunning {
+	if r != nil && r.managed && r.cmd != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		admin, err := findBinary("", "mariadb-admin", "mysqladmin")
@@ -145,7 +146,7 @@ func (r *Runtime) Close() error {
 			}
 		}
 	}
-	if r != nil && r.tmpDir != "" && !r.Config.KeepRunning {
+	if r != nil && r.tmpDir != "" {
 		if err := os.RemoveAll(r.tmpDir); err != nil {
 			errs = append(errs, fmt.Errorf("remove temporary MariaDB directory: %w", err))
 		}
@@ -189,12 +190,23 @@ func (r *Runtime) prepareManagedPaths() error {
 	} else {
 		r.Config.Protocol = "tcp"
 		r.Config.Host = defaultString(r.Config.Host, "127.0.0.1")
+		if !isLoopbackHost(r.Config.Host) {
+			return fmt.Errorf("managed TCP MariaDB requires a loopback host, got %q", r.Config.Host)
+		}
 		if r.Config.Port == 0 {
 			return errors.New("managed TCP MariaDB requires database.port to be set")
 		}
 	}
 	r.Config.User = defaultString(r.Config.User, "root")
 	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (r *Runtime) initializeDataDir(ctx context.Context, installDB string, overwrite bool) error {

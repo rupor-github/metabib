@@ -35,7 +35,6 @@ type DatabaseConfig struct {
 	Managed         bool   `yaml:"managed"`
 	DataDir         string `yaml:"data_dir" validate:"required"`
 	Temporary       bool   `yaml:"temporary"`
-	KeepRunning     bool   `yaml:"keep_running"`
 	Socket          string `yaml:"socket"`
 	PIDFile         string `yaml:"pid_file"`
 	LogFile         string `yaml:"log_file"`

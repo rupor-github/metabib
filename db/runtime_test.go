@@ -82,3 +82,17 @@ func TestPrepareManagedPathsUnixAndTCP(t *testing.T) {
 		t.Fatalf("tcp config = %#v", rt.Config)
 	}
 }
+
+func TestPrepareManagedPathsRejectsNonLoopbackTCP(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{Config: config.DatabaseConfig{
+		Protocol: "tcp",
+		Host:     "0.0.0.0",
+		Port:     3307,
+		DataDir:  filepath.Join(t.TempDir(), "data"),
+	}}
+	if err := rt.prepareManagedPaths(); err == nil {
+		t.Fatal("prepareManagedPaths() error = nil, want non-loopback host rejection")
+	}
+}
