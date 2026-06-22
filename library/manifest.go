@@ -201,14 +201,14 @@ func PlanDatabaseManifest(
 		)
 	}
 	header, err := readDatabaseManifestHeader(manifestPath)
-	if err == nil && databaseManifestLightMatches(header, cfg, dumpDir, dumpDate, dumpSources, true) {
+	if err == nil && databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, true) {
 		if checkMD5 {
 			dumpSources, err = dumpSourcesWithMD5(ctx, dumps)
 			if err != nil {
 				return decision, err
 			}
 			decision.Dumps = dumpSources
-			if !databaseManifestMatches(header, cfg, dumpDir, dumpDate, dumpSources) {
+			if !databaseManifestMatches(header, cfg, dumpDate, dumpSources) {
 				if !cfg.Processing.Rebuild {
 					if log != nil {
 						log.Warn("Database manifest checksum does not match current dumps; run cache --rebuild to recreate it", zap.String("manifest", manifestPath))
@@ -405,13 +405,13 @@ func ValidateDatabaseManifest(
 	report.Records = header.Records
 	decision.Records = header.Records
 	decision.Use = true
-	if !databaseManifestLightMatches(header, cfg, dumpDir, dumpDate, dumpSources, false) {
+	if !databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, false) {
 		report.Valid = false
 		report.Reason = "manifest does not match current database inputs"
 		logManifestReport(log, report)
 		return decision, report, nil
 	}
-	if manifestInfo.ModTime().After(latest) && databaseManifestLightMatches(header, cfg, dumpDir, dumpDate, dumpSources, true) {
+	if manifestInfo.ModTime().After(latest) && databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, true) {
 		report.Fresh = true
 	} else {
 		report.Reason = "manifest is older than source dumps or source timestamps changed"
@@ -422,7 +422,7 @@ func ValidateDatabaseManifest(
 			return decision, report, err
 		}
 		decision.Dumps = dumpSources
-		if !databaseManifestMatches(header, cfg, dumpDir, dumpDate, dumpSources) {
+		if !databaseManifestMatches(header, cfg, dumpDate, dumpSources) {
 			report.Valid = false
 			report.Reason = "manifest checksum does not match source dumps"
 		} else {
@@ -859,7 +859,7 @@ func archiveManifestMatches(header archiveManifestHeader, cfg *config.Config, ar
 }
 
 func archiveManifestLightMatches(header archiveManifestHeader, cfg *config.Config, archive string, modified time.Time, compareModified bool) bool {
-	if header.Source.Path != archive || header.Processing != processingManifest(cfg) {
+	if filepath.Base(header.Source.Path) != filepath.Base(archive) || header.Processing != processingManifest(cfg) {
 		return false
 	}
 	return !compareModified || header.Source.Modified == modified.Format(time.RFC3339Nano)
@@ -868,11 +868,10 @@ func archiveManifestLightMatches(header archiveManifestHeader, cfg *config.Confi
 func databaseManifestMatches(
 	header databaseManifestHeader,
 	cfg *config.Config,
-	dumpDir string,
 	dumpDate string,
 	dumps []DumpManifestSource,
 ) bool {
-	if header.Source.DumpDir != dumpDir || header.Source.DumpDate != dumpDate || header.Processing != processingManifest(cfg) {
+	if header.Source.DumpDate != dumpDate || header.Processing != processingManifest(cfg) {
 		return false
 	}
 	if len(header.Source.Dumps) != len(dumps) {
@@ -881,6 +880,8 @@ func databaseManifestMatches(
 	for idx := range dumps {
 		stored := header.Source.Dumps[idx]
 		current := dumps[idx]
+		stored.Path = ""
+		current.Path = ""
 		stored.Modified = ""
 		current.Modified = ""
 		if stored != current {
@@ -893,12 +894,11 @@ func databaseManifestMatches(
 func databaseManifestLightMatches(
 	header databaseManifestHeader,
 	cfg *config.Config,
-	dumpDir string,
 	dumpDate string,
 	dumps []DumpManifestSource,
 	compareModified bool,
 ) bool {
-	if header.Source.DumpDir != dumpDir || header.Source.DumpDate != dumpDate || header.Processing != processingManifest(cfg) {
+	if header.Source.DumpDate != dumpDate || header.Processing != processingManifest(cfg) {
 		return false
 	}
 	if len(header.Source.Dumps) != len(dumps) {
@@ -907,6 +907,8 @@ func databaseManifestLightMatches(
 	for idx := range dumps {
 		stored := header.Source.Dumps[idx]
 		current := dumps[idx]
+		stored.Path = ""
+		current.Path = ""
 		if !compareModified {
 			stored.Modified = ""
 			current.Modified = ""

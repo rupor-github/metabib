@@ -131,6 +131,105 @@ func TestPlanArchiveManifestMissingAndValidation(t *testing.T) {
 	}
 }
 
+func TestArchiveManifestIgnoresAbsoluteSourcePath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	manifestDir := t.TempDir()
+	sourceDir := t.TempDir()
+	targetDir := t.TempDir()
+	sourceArchive := filepath.Join(sourceDir, "books.zip")
+	targetArchive := filepath.Join(targetDir, "books.zip")
+	writeZip(t, sourceArchive, map[string]string{"1.fb2": `<FictionBook/>`})
+	writeZip(t, targetArchive, map[string]string{"1.fb2": `<FictionBook/>`})
+	archiveTime := time.Now().Add(-time.Hour).Round(0)
+	if err := os.Chtimes(sourceArchive, archiveTime, archiveTime); err != nil {
+		t.Fatalf("Chtimes(source) error = %v", err)
+	}
+	if err := os.Chtimes(targetArchive, archiveTime, archiveTime); err != nil {
+		t.Fatalf("Chtimes(target) error = %v", err)
+	}
+	cfg := manifestTestConfig()
+	cfg.Processing.Manifests.ArchiveDir = manifestDir
+
+	plan, _, err := PlanArchives(ctx, cfg, []string{sourceArchive}, false, nil)
+	if err != nil {
+		t.Fatalf("PlanArchives() error = %v", err)
+	}
+	writer, err := newManifestWriter(plan[0].ManifestPath)
+	if err != nil {
+		t.Fatalf("newManifestWriter() error = %v", err)
+	}
+	if err := writer.Write(model.Record{Schema: recordSchema, ID: model.RecordID{BookID: 1}}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	header, err := archiveManifestHeaderFor(cfg, plan[0], 1)
+	if err != nil {
+		t.Fatalf("archiveManifestHeaderFor() error = %v", err)
+	}
+	if err := writer.Close(header); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(plan[0].ManifestPath, future, future); err != nil {
+		t.Fatalf("Chtimes(manifest) error = %v", err)
+	}
+
+	_, reports, err := ValidateArchiveManifests(ctx, cfg, []string{targetArchive}, false, nil)
+	if err != nil {
+		t.Fatalf("ValidateArchiveManifests() error = %v", err)
+	}
+	if len(reports) != 1 || !reports[0].Ready(false) {
+		t.Fatalf("reports = %#v", reports)
+	}
+}
+
+func TestDatabaseManifestIgnoresAbsoluteSourcePaths(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	manifestDir := t.TempDir()
+	sourceDir := t.TempDir()
+	targetDir := t.TempDir()
+	sourceDump := writeManifestTestFile(t, sourceDir, "a.sql", "dump")
+	targetDump := writeManifestTestFile(t, targetDir, "a.sql", "dump")
+	dumpTime := time.Now().Add(-time.Hour).Round(0)
+	if err := os.Chtimes(sourceDump, dumpTime, dumpTime); err != nil {
+		t.Fatalf("Chtimes(source) error = %v", err)
+	}
+	if err := os.Chtimes(targetDump, dumpTime, dumpTime); err != nil {
+		t.Fatalf("Chtimes(target) error = %v", err)
+	}
+	cfg := manifestTestConfig()
+	cfg.Processing.Manifests.DatabaseDir = manifestDir
+	sourceDumps := []db.DumpFile{{Path: sourceDump, Name: "a.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
+	targetDumps := []db.DumpFile{{Path: targetDump, Name: "a.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
+
+	decision, err := PlanDatabaseManifest(ctx, cfg, sourceDir, sourceDumps, "2026-06-20", false, nil)
+	if err != nil {
+		t.Fatalf("PlanDatabaseManifest() error = %v", err)
+	}
+	writer, err := newManifestWriter(decision.ManifestPath)
+	if err != nil {
+		t.Fatalf("newManifestWriter() error = %v", err)
+	}
+	if err := writer.Close(databaseManifestHeaderFor(cfg, decision, 0)); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(decision.ManifestPath, future, future); err != nil {
+		t.Fatalf("Chtimes(manifest) error = %v", err)
+	}
+
+	_, report, err := ValidateDatabaseManifest(ctx, cfg, targetDir, targetDumps, "2026-06-20", true, nil)
+	if err != nil {
+		t.Fatalf("ValidateDatabaseManifest() error = %v", err)
+	}
+	if !report.Ready(false) || !report.ChecksumVerified {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestExpandArchivesFromDirectory(t *testing.T) {
 	t.Parallel()
 

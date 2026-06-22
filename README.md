@@ -92,7 +92,65 @@ it, for example:
 sudo systemctl disable mariadb
 ```
 
+On Synology, install the `MariaDB 10` package and point `metabib` at the packaged
+binaries explicitly, for example:
+
+```yaml
+version: 1
+processing:
+  manifests:
+    archive_dir: "/volume4/backup/library/manifests"
+database:
+  server_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadbd"
+  install_db_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb-install-db"
+  client_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb"
+```
+
 ## Usage
+
+### Flibusta Script
+
+`scripts/fb2_flibusta.sh` automates the common Flibusta FB2 workflow. The
+`metabib` executable is expected to be in the same directory as the script; if
+`metabib.yaml` exists there, it is passed to every `metabib` invocation.
+
+Run the full update workflow:
+
+```sh
+scripts/fb2_flibusta.sh /volume4/backup/library full
+```
+
+Run indexing only from existing local archives and the latest existing SQL dump
+directory matching `<library-root>/flibusta_*`:
+
+```sh
+scripts/fb2_flibusta.sh /volume4/backup/library reindex
+```
+
+Both modes accept an optional third argument with the user account whose home
+directory should be used as the working directory. This is useful for Synology
+Task Scheduler setups:
+
+```sh
+scripts/fb2_flibusta.sh /volume4/backup/library full myuser
+```
+
+The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and `mhl-inpx`. It exits
+early when no new daily archives are downloaded or when rollup does not finalize a
+new archive. The `reindex` mode skips download and rollup and reruns `cache`,
+`merge`, and `mhl-inpx` from already available data.
+
+Expected library layout under `<library-root>`:
+
+- `flibusta/`: finalized local FB2 archives and active `.merging` archive.
+- `upd_flibusta/`: downloaded daily update archives.
+- `flibusta_<timestamp>/`: downloaded SQL dumps.
+- `inpx/`: generated INPX files and merged JSONL sidecars/parts.
+
+The script writes a console log next to itself named like
+`flibusta_full_20260622_103000.log` or `flibusta_reindex_20260622_103000.log`.
+The default `metabib.log` file is renamed at the end of the run to a matching
+`flibusta_<mode>_metabib_<timestamp>.log` file.
 
 ### Fetch Remote Updates
 
@@ -201,6 +259,11 @@ metabib cache --archives /path/to/flibusta
 checked using source modification times; stale or invalid manifests fail unless
 `--rebuild` is used. Use `cache --check-md5` to additionally verify MD5 checksums
 recorded in existing manifests.
+
+Manifests are portable across directories and machines. Stored absolute paths are
+kept as provenance, but manifest matching uses archive or dump file names,
+recorded metadata, processing settings, timestamps for freshness, and optional
+MD5 checksums when `--check-md5` is enabled.
 
 By default, `cache` requires all SQL dump files to report the same dump date
 before import. Use `cache --allow-dump-date-mismatch` to accept mixed dump dates;
