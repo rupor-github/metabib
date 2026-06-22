@@ -40,10 +40,11 @@ tools.
 - `merge` reads existing manifests and combines database-derived and
   archive-derived metadata into final `metabib.record/1` JSONL records described
   by `docs/metabib.schema.json`;
-- future transformation passes can consume the latest JSONL dataset and produce
-  derived formats, for example a MyHomeLib-compatible INPX, without coupling the
-  main extraction pipeline to legacy output constraints. This may include building
-  various update lineages, differential update schemes, etc.
+- `inpx` consumes the merged JSONL dataset and metadata sidecar to produce a
+  MyHomeLib-compatible FB2 INPX without coupling the main extraction pipeline to
+  legacy output constraints. The same transformation approach can support other
+  derived artifacts later, including update lineages and differential update
+  schemes.
 
 ## MariaDB Binaries
 
@@ -156,18 +157,54 @@ when that happens, `metabib` logs an overwrite warning.
 example `all.meta.json.zst`. It records the database dump date and archive entry
 layout needed for exact MyHomeLib INPX generation.
 
+### INPX Generation
+
 Build a MyHomeLib-compatible FB2 INPX from merged JSONL parts:
 
 ```sh
 metabib inpx --input all --output flibusta
 ```
 
-`inpx --input` is a prefix; it discovers `all.meta.json*` and all matching
-`all.*.jsonl*` parts. `inpx --output` is also a prefix; the dump date from merge
-metadata is appended automatically, producing names like `flibusta_20260603.inpx`.
-Use `--format 2x` or `--format ruks` to select the INPX record layout. Sequence
-and FB2 merge behavior defaults match the historical FB2 lib2inpx mode and can
-be adjusted with `--sequence` and `--prefer-fb2`.
+`inpx` is intentionally FB2-only. It consumes the merged JSONL dataset and the
+merge metadata sidecar; it does not read SQL dumps, start MariaDB, or parse FB2
+archives directly.
+
+Available `inpx` arguments:
+
+- `--input PREFIX`, `-i PREFIX`: required input prefix. `metabib inpx --input all`
+  discovers one `all.meta.json*` sidecar and all matching `all.*.jsonl*` parts,
+  including uncompressed, zstd, gzip, and ZIP-compressed merge outputs.
+- `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date from merge
+  metadata is appended automatically, so `--output flibusta` writes a file named
+  like `flibusta_20260603.inpx`.
+- `--format MODE`: INPX record layout. Supported values are `2x` and `ruks`.
+  Default is `2x`, matching the classic MyHomeLib/lib2inpx format. `ruks` appends
+  MD5 and replacement fields when available.
+- `--sequence MODE`: database sequence selection. Supported values are `author`,
+  `publisher`, and `ignore`. Default is `author`, matching lib2inpx FB2 mode.
+- `--prefer-fb2 MODE`: how FB2 sequence metadata is used relative to database
+  sequence metadata. Supported values are `ignore`, `merge`, `complement`, and
+  `replace`. Default is `complement`, matching the historical Flibusta script:
+  database sequence data is preferred, and FB2 sequence data fills missing values.
+
+INPX-specific defaults live under the `inpx` section of the YAML configuration.
+They include MyHomeLib field length limits and the `collection.info` template.
+The default template is lib2inpx-compatible.
+
+```yaml
+inpx:
+  quick_fix: true
+  comment_template: "\ufeff%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
+```
+
+Template arguments are library name, display date, generated collection name,
+library name, and display date. If you replace the template and still need
+MyHomeLib/lib2inpx compatibility, keep the leading `\ufeff` BOM.
+
+Existing INPX output is replaced only after the new archive is fully written. If
+an existing file is overwritten, `metabib` logs a warning. During generation,
+`metabib` logs the selected metadata, input part count, record loading progress,
+one live message per created `.inp` member, and final aggregate INPX statistics.
 
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
 for example `lib.manifest.zst` or `database.manifest.zst`.

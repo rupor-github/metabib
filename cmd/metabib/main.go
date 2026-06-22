@@ -140,7 +140,6 @@ func inpxCommand() *cli.Command {
 			&cli.StringFlag{Name: "format", Value: string(inpx.Format2X), Usage: "INPX format `MODE` (2x, ruks)"},
 			&cli.StringFlag{Name: "sequence", Value: string(inpx.SequenceAuthor), Usage: "sequence selection `MODE` (author, publisher, ignore)"},
 			&cli.StringFlag{Name: "prefer-fb2", Value: string(inpx.PreferComplement), Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)"},
-			&cli.BoolFlag{Name: "quick-fix", Usage: "apply MyHomeLib-compatible field length limits from config"},
 		},
 		Action: runINPX,
 	}
@@ -368,14 +367,13 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 		Keywords:     cfg.INPX.Limits.Keywords,
 		Sequence:     cfg.INPX.Limits.Sequence,
 	}
-	quickFix := cfg.INPX.QuickFix || cmd.Bool("quick-fix")
 	stats, err := inpx.Generate(ctx, inpx.Options{
 		InputPrefix:     cmd.String("input"),
 		OutputPrefix:    cmd.String("output"),
 		Format:          format,
 		SequenceMode:    sequence,
 		FB2Preference:   preference,
-		QuickFix:        quickFix,
+		QuickFix:        cfg.INPX.QuickFix,
 		Limits:          limits,
 		CommentTemplate: cfg.INPX.CommentTemplate,
 		Log:             env.Log,
