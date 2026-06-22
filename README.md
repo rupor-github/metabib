@@ -3,7 +3,7 @@
     <span style="vertical-align:middle;">&nbsp;&nbsp;Metadata extractor from Flibusta-style SQL dumps and FB2 archives.</span>
 </h1>
 
-# metabib
+## metabib
 [![GitHub Release](https://img.shields.io/github/release/rupor-github/metabib.svg)](https://github.com/rupor-github/metabib/releases)
 
 `metabib` extracts metadata from Flibusta-style SQL dumps and FB2 archives into
