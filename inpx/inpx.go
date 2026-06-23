@@ -410,20 +410,21 @@ func writeZipText(zw *zip.Writer, name string, text string) error {
 func recordLine(rec model.Record, opts Options) string {
 	db := rec.Source.Database
 	fb2 := rec.Source.FB2
+	titleInfo := fb2TitleInfo(fb2)
 	book := db.Book
-	if book == nil && fb2.TitleInfo == nil {
+	if book == nil && titleInfo == nil {
 		return ""
 	}
 	title := ""
 	if book != nil {
 		title = book.Title
 	}
-	if title == "" && fb2.TitleInfo != nil {
-		title = fb2.TitleInfo.Title
+	if title == "" && titleInfo != nil {
+		title = titleInfo.Title
 	}
-	authors := authorsString(db.Present, db.Authors, fb2.TitleInfo, opts)
-	genres := genresString(db.Genres, fb2.TitleInfo)
-	sequence, seqNum := sequenceString(db.Sequences, fb2.TitleInfo, opts)
+	authors := authorsString(db.Present, db.Authors, titleInfo, opts)
+	genres := genresString(db.Genres, titleInfo)
+	sequence, seqNum := sequenceString(db.Sequences, titleInfo, opts)
 	fileName := rec.ID.FileName
 	if fileName == "" && rec.ID.BookID > 0 {
 		fileName = strconv.FormatInt(rec.ID.BookID, 10)
@@ -457,11 +458,11 @@ func recordLine(rec model.Record, opts Options) string {
 	if date == "" && rec.ID.Archive != nil {
 		date = dateOnly(rec.ID.Archive.Modified)
 	}
-	if lang == "" && fb2.TitleInfo != nil {
-		lang = fb2.TitleInfo.Language
+	if lang == "" && titleInfo != nil {
+		lang = titleInfo.Language
 	}
-	if keywords == "" && fb2.TitleInfo != nil {
-		keywords = fb2.TitleInfo.Keywords
+	if keywords == "" && titleInfo != nil {
+		keywords = titleInfo.Keywords
 	}
 	if db.Rating != nil && db.Rating.Count > 0 {
 		rate = strconv.FormatInt(int64(db.Rating.Average), 10)
@@ -486,6 +487,13 @@ func recordLine(rec model.Record, opts Options) string {
 		fields = append(fields, md5, replaced)
 	}
 	return strings.Join(fields, fieldSep) + fieldSep + "\r\n"
+}
+
+func fb2TitleInfo(src model.FB2Source) *model.FB2TitleInfo {
+	if src.Description == nil {
+		return nil
+	}
+	return src.Description.TitleInfo
 }
 
 func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model.FB2TitleInfo, opts Options) string {

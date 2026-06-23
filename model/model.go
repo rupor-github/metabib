@@ -135,21 +135,29 @@ type DBJoinedBook struct {
 }
 
 type FB2Source struct {
-	Present     bool          `json:"present"`
-	TitleInfo   *FB2TitleInfo `json:"title_info,omitempty"`
-	Description *XMLNode      `json:"description,omitempty"`
+	Present     bool            `json:"present"`
+	Description *FB2Description `json:"description,omitempty"`
+}
+
+type FB2Description struct {
+	TitleInfo    *FB2TitleInfo    `json:"title_info,omitempty"`
+	SrcTitleInfo *FB2TitleInfo    `json:"src_title_info,omitempty"`
+	DocumentInfo *FB2DocumentInfo `json:"document_info,omitempty"`
+	PublishInfo  *FB2PublishInfo  `json:"publish_info,omitempty"`
+	CustomInfo   []FB2CustomInfo  `json:"custom_info,omitempty"`
+	Output       []FB2Output      `json:"output,omitempty"`
 }
 
 type FB2TitleInfo struct {
 	Genres      []FB2Genre    `json:"genres,omitempty"`
 	Authors     []FB2Person   `json:"authors,omitempty"`
-	Translators []FB2Person   `json:"translators,omitempty"`
 	Title       string        `json:"title,omitempty"`
 	Annotation  string        `json:"annotation,omitempty"`
 	Keywords    string        `json:"keywords,omitempty"`
 	Date        *FB2Date      `json:"date,omitempty"`
 	Language    string        `json:"language,omitempty"`
 	SourceLang  string        `json:"source_language,omitempty"`
+	Translators []FB2Person   `json:"translators,omitempty"`
 	Sequences   []FB2Sequence `json:"sequences,omitempty"`
 }
 
@@ -159,6 +167,7 @@ type FB2Genre struct {
 }
 
 type FB2Person struct {
+	ID         string   `json:"id,omitempty"`
 	FirstName  string   `json:"first_name,omitempty"`
 	MiddleName string   `json:"middle_name,omitempty"`
 	LastName   string   `json:"last_name,omitempty"`
@@ -173,13 +182,56 @@ type FB2Date struct {
 }
 
 type FB2Sequence struct {
-	Name   string `json:"name,omitempty"`
-	Number string `json:"number,omitempty"`
+	Name   string        `json:"name,omitempty"`
+	Number string        `json:"number,omitempty"`
+	Lang   string        `json:"language,omitempty"`
+	Nested []FB2Sequence `json:"sequences,omitempty"`
 }
 
-type XMLNode struct {
-	Name     string            `json:"name"`
-	Attrs    map[string]string `json:"attrs,omitempty"`
-	Text     string            `json:"text,omitempty"`
-	Children []XMLNode         `json:"children,omitempty"`
+type FB2DocumentInfo struct {
+	Authors     []FB2Person `json:"authors,omitempty"`
+	ProgramUsed string      `json:"program_used,omitempty"`
+	Date        *FB2Date    `json:"date,omitempty"`
+	SrcURLs     []string    `json:"src_urls,omitempty"`
+	SrcOCR      string      `json:"src_ocr,omitempty"`
+	ID          string      `json:"id,omitempty"`
+	Version     string      `json:"version,omitempty"`
+	History     string      `json:"history,omitempty"`
+	Publishers  []FB2Person `json:"publishers,omitempty"`
+}
+
+type FB2PublishInfo struct {
+	BookName  string        `json:"book_name,omitempty"`
+	Publisher string        `json:"publisher,omitempty"`
+	City      string        `json:"city,omitempty"`
+	Year      string        `json:"year,omitempty"`
+	ISBN      string        `json:"isbn,omitempty"`
+	Sequences []FB2Sequence `json:"sequences,omitempty"`
+}
+
+type FB2CustomInfo struct {
+	Type string `json:"type,omitempty"`
+	Text string `json:"text,omitempty"`
+}
+
+type FB2Output struct {
+	Mode                  string                   `json:"mode,omitempty"`
+	IncludeAll            string                   `json:"include_all,omitempty"`
+	Price                 string                   `json:"price,omitempty"`
+	Currency              string                   `json:"currency,omitempty"`
+	Parts                 []FB2OutputPart          `json:"parts,omitempty"`
+	OutputDocumentClasses []FB2OutputDocumentClass `json:"output_document_classes,omitempty"`
+}
+
+type FB2OutputPart struct {
+	Type    string `json:"type,omitempty"`
+	Href    string `json:"href,omitempty"`
+	Include string `json:"include,omitempty"`
+}
+
+type FB2OutputDocumentClass struct {
+	Name   string          `json:"name,omitempty"`
+	Create string          `json:"create,omitempty"`
+	Price  string          `json:"price,omitempty"`
+	Parts  []FB2OutputPart `json:"parts,omitempty"`
 }

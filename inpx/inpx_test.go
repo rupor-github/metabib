@@ -126,6 +126,35 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 	}
 }
 
+func TestRecordLineRUKSAppendsMD5AndReplacement(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		ID: model.RecordID{BookID: 1, FileName: "1", Extension: "fb2"},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book: &model.DBBook{
+				BookID:     1,
+				FileSize:   123,
+				Title:      "Title",
+				FileType:   "fb2",
+				MD5:        "0123456789abcdef0123456789abcdef",
+				ReplacedBy: 42,
+			},
+			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
+			Genres:  []model.DBGenre{{Code: "sf"}},
+		}},
+	}
+	line := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
+	fields := strings.Split(strings.TrimSuffix(line, "\r\n"), fieldSep)
+	if len(fields) != 17 {
+		t.Fatalf("field count = %d fields=%#v line=%q", len(fields), fields, line)
+	}
+	if fields[14] != "0123456789abcdef0123456789abcdef" || fields[15] != "42" || fields[16] != "" {
+		t.Fatalf("RUKS tail fields = %#v", fields[14:])
+	}
+}
+
 func TestCleanseRemovesINPLayoutCharacters(t *testing.T) {
 	t.Parallel()
 

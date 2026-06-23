@@ -6,7 +6,13 @@
   "required": ["schema", "id", "sources"],
   "properties": {
     "schema": {"const": "metabib.record/1"},
-    "id": {
+    "id": {"$ref": "#/$defs/record_id"},
+    "sources": {"$ref": "#/$defs/record_sources"},
+    "errors": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "record_id": {
       "type": "object",
       "required": ["library"],
       "properties": {
@@ -14,23 +20,25 @@
         "book_id": {"type": "integer"},
         "file_name": {"type": "string"},
         "extension": {"type": "string"},
-        "archive": {
-          "type": "object",
-          "required": ["path", "entry"],
-          "properties": {
-            "path": {"type": "string"},
-            "entry": {"type": "string"},
-            "compressed_size": {"type": "integer"},
-            "uncompressed_size": {"type": "integer"},
-            "content_md5": {"type": "string"},
-            "modified": {"type": "string"}
-          },
-          "additionalProperties": false
-        }
+        "archive": {"$ref": "#/$defs/archive_info"}
       },
       "additionalProperties": false
     },
-    "sources": {
+    "archive_info": {
+      "type": "object",
+      "required": ["path", "entry"],
+      "properties": {
+        "path": {"type": "string"},
+        "entry": {"type": "string"},
+        "index": {"type": "integer"},
+        "compressed_size": {"type": "integer"},
+        "uncompressed_size": {"type": "integer"},
+        "content_md5": {"type": "string"},
+        "modified": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "record_sources": {
       "type": "object",
       "required": ["database", "fb2"],
       "properties": {
@@ -39,23 +47,104 @@
       },
       "additionalProperties": false
     },
-    "errors": {"type": "array", "items": {"type": "string"}}
-  },
-  "additionalProperties": false,
-  "$defs": {
     "database_source": {
       "type": "object",
       "required": ["present"],
       "properties": {
         "present": {"type": "boolean"},
-        "book": {"type": "object"},
-        "authors": {"type": "array", "items": {"type": "object"}},
-        "translators": {"type": "array", "items": {"type": "object"}},
-        "genres": {"type": "array", "items": {"type": "object"}},
-        "sequences": {"type": "array", "items": {"type": "object"}},
-        "rating": {"type": "object"},
+        "book": {"$ref": "#/$defs/database_book"},
+        "authors": {"type": "array", "items": {"$ref": "#/$defs/contributor"}},
+        "translators": {"type": "array", "items": {"$ref": "#/$defs/contributor"}},
+        "genres": {"type": "array", "items": {"$ref": "#/$defs/database_genre"}},
+        "sequences": {"type": "array", "items": {"$ref": "#/$defs/database_sequence"}},
+        "rating": {"$ref": "#/$defs/database_rating"},
         "filenames": {"type": "array", "items": {"type": "string"}},
-        "joined_books": {"type": "array", "items": {"type": "object"}}
+        "joined_books": {"type": "array", "items": {"$ref": "#/$defs/database_joined_book"}}
+      },
+      "additionalProperties": false
+    },
+    "database_book": {
+      "type": "object",
+      "required": ["book_id", "file_size", "title"],
+      "properties": {
+        "book_id": {"type": "integer"},
+        "file_size": {"type": "integer"},
+        "time": {"type": "string"},
+        "title": {"type": "string"},
+        "lang": {"type": "string"},
+        "src_lang": {"type": "string"},
+        "file_type": {"type": "string"},
+        "year": {"type": "integer"},
+        "deleted": {"type": "string"},
+        "file_author": {"type": "string"},
+        "keywords": {"type": "string"},
+        "md5": {"type": "string"},
+        "modified": {"type": "string"},
+        "replaced_by": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "contributor": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "integer"},
+        "first_name": {"type": "string"},
+        "middle_name": {"type": "string"},
+        "last_name": {"type": "string"},
+        "nick_name": {"type": "string"},
+        "uid": {"type": "integer"},
+        "email": {"type": "string"},
+        "homepage": {"type": "string"},
+        "gender": {"type": "string"},
+        "master_id": {"type": "integer"},
+        "position": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "database_genre": {
+      "type": "object",
+      "required": ["id", "code"],
+      "properties": {
+        "id": {"type": "integer"},
+        "code": {"type": "string"},
+        "translated_code": {"type": "string"},
+        "description": {"type": "string"},
+        "meta": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "database_sequence": {
+      "type": "object",
+      "required": ["id", "name"],
+      "properties": {
+        "id": {"type": "integer"},
+        "name": {"type": "string"},
+        "number": {"type": "integer"},
+        "level": {"type": "integer"},
+        "type": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "database_rating": {
+      "type": "object",
+      "required": ["count"],
+      "properties": {
+        "average": {"type": "number"},
+        "count": {"type": "integer"},
+        "min": {"type": "integer"},
+        "max": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "database_joined_book": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "integer"},
+        "time": {"type": "string"},
+        "bad_id": {"type": "integer"},
+        "good_id": {"type": "integer"},
+        "real_id": {"type": "integer"}
       },
       "additionalProperties": false
     },
@@ -64,19 +153,141 @@
       "required": ["present"],
       "properties": {
         "present": {"type": "boolean"},
-        "title_info": {"type": "object"},
-        "description": {"$ref": "#/$defs/xml_node"}
+        "description": {"$ref": "#/$defs/fb2_description"}
       },
       "additionalProperties": false
     },
-    "xml_node": {
+    "fb2_description": {
       "type": "object",
-      "required": ["name"],
+      "properties": {
+        "title_info": {"$ref": "#/$defs/fb2_title_info"},
+        "src_title_info": {"$ref": "#/$defs/fb2_title_info"},
+        "document_info": {"$ref": "#/$defs/fb2_document_info"},
+        "publish_info": {"$ref": "#/$defs/fb2_publish_info"},
+        "custom_info": {"type": "array", "items": {"$ref": "#/$defs/fb2_custom_info"}},
+        "output": {"type": "array", "items": {"$ref": "#/$defs/fb2_output"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_title_info": {
+      "type": "object",
+      "properties": {
+        "genres": {"type": "array", "items": {"$ref": "#/$defs/fb2_genre"}},
+        "authors": {"type": "array", "items": {"$ref": "#/$defs/fb2_person"}},
+        "title": {"type": "string"},
+        "annotation": {"type": "string"},
+        "keywords": {"type": "string"},
+        "date": {"$ref": "#/$defs/fb2_date"},
+        "language": {"type": "string"},
+        "source_language": {"type": "string"},
+        "translators": {"type": "array", "items": {"$ref": "#/$defs/fb2_person"}},
+        "sequences": {"type": "array", "items": {"$ref": "#/$defs/fb2_sequence"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_genre": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {"type": "string"},
+        "match": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "fb2_person": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string"},
+        "first_name": {"type": "string"},
+        "middle_name": {"type": "string"},
+        "last_name": {"type": "string"},
+        "nick_name": {"type": "string"},
+        "home_pages": {"type": "array", "items": {"type": "string"}},
+        "emails": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_date": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "fb2_sequence": {
+      "type": "object",
       "properties": {
         "name": {"type": "string"},
-        "attrs": {"type": "object", "additionalProperties": {"type": "string"}},
-        "text": {"type": "string"},
-        "children": {"type": "array", "items": {"$ref": "#/$defs/xml_node"}}
+        "number": {"type": "string"},
+        "language": {"type": "string"},
+        "sequences": {"type": "array", "items": {"$ref": "#/$defs/fb2_sequence"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_document_info": {
+      "type": "object",
+      "properties": {
+        "authors": {"type": "array", "items": {"$ref": "#/$defs/fb2_person"}},
+        "program_used": {"type": "string"},
+        "date": {"$ref": "#/$defs/fb2_date"},
+        "src_urls": {"type": "array", "items": {"type": "string"}},
+        "src_ocr": {"type": "string"},
+        "id": {"type": "string"},
+        "version": {"type": "string"},
+        "history": {"type": "string"},
+        "publishers": {"type": "array", "items": {"$ref": "#/$defs/fb2_person"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_publish_info": {
+      "type": "object",
+      "properties": {
+        "book_name": {"type": "string"},
+        "publisher": {"type": "string"},
+        "city": {"type": "string"},
+        "year": {"type": "string"},
+        "isbn": {"type": "string"},
+        "sequences": {"type": "array", "items": {"$ref": "#/$defs/fb2_sequence"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_custom_info": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string"},
+        "text": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "fb2_output": {
+      "type": "object",
+      "properties": {
+        "mode": {"type": "string"},
+        "include_all": {"type": "string"},
+        "price": {"type": "string"},
+        "currency": {"type": "string"},
+        "parts": {"type": "array", "items": {"$ref": "#/$defs/fb2_output_part"}},
+        "output_document_classes": {"type": "array", "items": {"$ref": "#/$defs/fb2_output_document_class"}}
+      },
+      "additionalProperties": false
+    },
+    "fb2_output_part": {
+      "type": "object",
+      "properties": {
+        "type": {"type": "string"},
+        "href": {"type": "string"},
+        "include": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "fb2_output_document_class": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"},
+        "create": {"type": "string"},
+        "price": {"type": "string"},
+        "parts": {"type": "array", "items": {"$ref": "#/$defs/fb2_output_part"}}
       },
       "additionalProperties": false
     }

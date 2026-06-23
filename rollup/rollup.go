@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -183,7 +184,10 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 		if opts.Log != nil {
 			opts.Log.Info("Processing update archive", zap.String("file", updatePath))
 		}
-		for _, file := range rc.File {
+		files := slices.SortedFunc(slices.Values(rc.File), func(a, b *zip.File) int {
+			return nameToID(a.FileInfo().Name()) - nameToID(b.FileInfo().Name())
+		})
+		for _, file := range files {
 			if file.FileInfo().Size() == 0 {
 				if opts.Log != nil {
 					opts.Log.Warn("Skipping empty archive entry", zap.String("file", updatePath), zap.String("entry", file.Name))
