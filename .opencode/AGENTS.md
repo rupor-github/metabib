@@ -26,5 +26,6 @@
 - `--output-part-size 512mb` splits output into approximate byte-sized parts before range rename.
 - Archive processing is parallel within one archive; archives themselves are processed sequentially.
 - `archive_content_md5: true` is expensive because it forces reading/decompressing the whole archive entry after FB2 description parsing; turn it off for fast archive runs.
-- `fb2_description_tree: false` keeps only `title_info` and is faster/smaller than preserving the full FB2 `<description>` tree.
+- `fb2_description_tree: false` keeps only `description.title_info` and is faster/smaller than preserving the full FB2 `<description>`.
+- `mhl-inpx` defaults to database authors when present; use `--prefer-fb2 replace` when FB2 author order should win.
 - Detailed progress logs are disabled by default; enable with global `--verbose`.

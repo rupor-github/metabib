@@ -310,7 +310,8 @@ metabib mhl-inpx --input all --output flibusta
 
 `mhl-inpx` is intentionally FB2-only. It consumes the merged JSONL dataset and the
 merge metadata sidecar; it does not read SQL dumps, start MariaDB, or parse FB2
-archives directly.
+archives directly. FB2 fallback metadata is read from
+`sources.fb2.description.title_info`.
 
 Available `mhl-inpx` arguments:
 
@@ -325,10 +326,11 @@ Available `mhl-inpx` arguments:
   MD5 and replacement fields when available.
 - `--sequence MODE`: database sequence selection. Supported values are `author`,
   `publisher`, and `ignore`. Default is `author`, matching lib2inpx FB2 mode.
-- `--prefer-fb2 MODE`: how FB2 sequence metadata is used relative to database
-  sequence metadata. Supported values are `ignore`, `merge`, `complement`, and
-  `replace`. Default is `complement`, matching the historical Flibusta script:
-  database sequence data is preferred, and FB2 sequence data fills missing values.
+- `--prefer-fb2 MODE`: how FB2 metadata is used relative to database metadata for
+  authors and sequences. Supported values are `ignore`, `merge`, `complement`,
+  and `replace`. Default is `complement`, matching the historical Flibusta script:
+  database authors and sequence data are preferred when present, and FB2 metadata
+  fills missing values. Use `replace` when FB2 author order should win.
 
 INPX-specific defaults live under the `inpx` section of the YAML configuration.
 They include MyHomeLib field length limits and the `collection.info` template.
