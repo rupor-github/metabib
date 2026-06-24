@@ -155,8 +155,20 @@ Expected library layout under `<library-root>`:
 
 The script writes a console log next to itself named like
 `flibusta_full_20260622_103000.log` or `flibusta_reindex_20260622_103000.log`.
-The default `metabib.log` file is renamed at the end of the run to a matching
-`flibusta_<mode>_metabib_<timestamp>.log` file.
+For a single combined script and `metabib` debug log, configure logging in the
+same-directory `metabib.yaml` like this:
+
+```yaml
+logging:
+  console:
+    level: debug
+  file:
+    level: none
+```
+
+With that configuration, the script log includes phase separators, `metabib`
+debug messages, and MariaDB process/client output. The script no longer manages
+or renames `metabib.log`.
 
 ### Fetch Remote Updates
 
