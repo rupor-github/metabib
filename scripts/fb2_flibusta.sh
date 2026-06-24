@@ -72,27 +72,28 @@ wdir="${adir}_${cdate}"
 # Daily update archive directory populated by `metabib fetch`.
 udir="${root}/upd_${name}"
 
-# Script-level log capturing console output from all commands.
+# Script-level log capturing console output from all commands. This script expects
+# metabib.yaml to route metabib diagnostics through console logging only:
+#
+#   logging:
+#     console:
+#       level: debug
+#     file:
+#       level: none
+#
+# With that configuration, this single per-run log contains script messages,
+# metabib debug messages, and MariaDB process/client output. Enabling metabib
+# file logging is still supported by the application, but this script no longer
+# manages or renames metabib.log.
 glog="${mydir}/${name}_${mode}_${cdate}.log"
 
 # metabib executable. It is expected to be next to this script.
 metabib="${mydir}/metabib"
 
-# Default metabib file logger target and final per-run file log name. The default
-# config writes metabib.log next to the metabib executable.
-metabib_log="${mydir}/metabib.log"
-metabib_run_log="${mydir}/${name}_${mode}_metabib_${cdate}.log"
-
 metabib_args=(--verbose)
 if [[ -f "${mydir}/metabib.yaml" ]]; then
 	metabib_args+=(--config "${mydir}/metabib.yaml")
 fi
-
-finish_logs() {
-	if [[ -f "${metabib_log}" ]]; then
-		mv "${metabib_log}" "${metabib_run_log}"
-	fi
-}
 
 detect_dump_date() {
 	local dump_dir="$1"
@@ -123,6 +124,13 @@ latest_dump_dir() {
 	printf '%s\n' "${dirs[@]}" | sort -nr | head -n 1
 }
 
+log_phase() {
+	echo
+	echo "========================================================================"
+	echo "$(date '+%Y-%m-%d %H:%M:%S')  $*"
+	echo "========================================================================"
+}
+
 build_inpx_from_existing_data() {
 	local dump_dir="$1"
 	local dump_date merge_prefix
@@ -134,7 +142,7 @@ build_inpx_from_existing_data() {
 
 	merge_prefix="${odir}/${name}_${dump_date}"
 
-	echo "Building ${name} cache manifests ..."
+	log_phase "Building ${name} cache manifests"
 
 	"${metabib}" "${metabib_args[@]}" cache \
 		--database-dumps "${dump_dir}" \
@@ -145,7 +153,7 @@ build_inpx_from_existing_data() {
 		exit 1
 	fi
 
-	echo "Merging ${name} metadata ..."
+	log_phase "Merging ${name} metadata"
 
 	"${metabib}" "${metabib_args[@]}" merge \
 		--database-dumps "${dump_dir}" \
@@ -157,7 +165,7 @@ build_inpx_from_existing_data() {
 		exit 1
 	fi
 
-	echo "Building ${name} INPX ..."
+	log_phase "Building ${name} INPX"
 
 	"${metabib}" "${metabib_args[@]}" mhl-inpx \
 		--input "${merge_prefix}" \
@@ -170,11 +178,11 @@ build_inpx_from_existing_data() {
 }
 
 exec 3>&1 4>&2
-trap 'finish_logs; exec 2>&4 1>&3' 0 1 2 3 RETURN
+trap 'exec 2>&4 1>&3' 0 1 2 3 RETURN
 exec 1>"${glog}" 2>&1
 
 if [[ "${mode}" == "reindex" ]]; then
-	echo "Selecting latest ${name} SQL dump directory ..."
+	log_phase "Selecting latest ${name} SQL dump directory"
 	if ! wdir=$(latest_dump_dir); then
 		echo "Unable to find existing SQL dump directory matching ${adir}_*"
 		exit 1
@@ -183,7 +191,7 @@ if [[ "${mode}" == "reindex" ]]; then
 	exit 0
 fi
 
-echo "Downloading ${name} ..."
+log_phase "Downloading ${name}"
 
 "${metabib}" "${metabib_args[@]}" fetch \
 	--library "${name}" \
@@ -203,12 +211,12 @@ elif (( res == 0 )); then
 	exit 0
 fi
 
-echo "Cleaning old SQL dump directories ..."
+log_phase "Cleaning old SQL dump directories"
 
 # Clean old database directories - we have at least one good download.
 find "${root}" -maxdepth 1 -type d -name "${name}_*" | sort -nr | tail -n +6 | xargs -r -I {} rm -rf {}/
 
-echo "Rolling up ${name} archives ..."
+log_phase "Rolling up ${name} archives"
 
 "${metabib}" "${metabib_args[@]}" rollup \
 	--archives "${adir}" \
@@ -221,7 +229,7 @@ if (( res == 1 )); then
 	exit 1
 fi
 
-echo "Cleaning old update archives ..."
+log_phase "Cleaning old update archives"
 
 # Clean updates leaving last ones so fetch does not download unnecessary updates next time.
 find "${udir}" -type f | sort -nr | tail -n +11 | xargs -r -I {} rm -r {}

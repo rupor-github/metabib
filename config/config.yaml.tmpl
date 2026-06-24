@@ -47,7 +47,7 @@ database:
 fetch:
   # Remote library profiles used by `metabib fetch`. Patterns must capture the
   # file name as the first regexp group. library_name is used for generated SQL
-  # dump directories when --sql-output is omitted.
+  # dump directories when --tosql is omitted.
   libraries:
     - name: flibusta
       library_name: flibusta
@@ -113,12 +113,14 @@ inpx:
     sequence: 80
 
 logging:
-  # controls terminal (stdout, stderr) output
+  # Controls terminal (stdout, stderr) output. Application debug messages and
+  # MariaDB process/client output require "debug"; "normal" shows info and above.
   console:
-    # "none" suppresses regular application and MariaDB output on console.
+    # "none" suppresses terminal logging.
     level: normal
 
-  # controls logging to a file. MariaDB server/client output goes here by default.
+  # Controls logging to a file. Application debug messages and MariaDB
+  # process/client output require "debug"; "normal" writes info and above.
   file:
     destination: '{{ joinPath .ProjectDir "metabib.log" }}'
     level: debug

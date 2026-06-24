@@ -63,6 +63,7 @@ func (conf *LoggingConfig) Prepare(appName string) (*zap.Logger, io.WriteCloser,
 
 	fileCore := zapcore.NewNopCore()
 	var file *os.File
+	var closers []io.Closer
 	var processLog io.WriteCloser = nopWriteCloser{io.Discard}
 	var err error
 	if conf.FileLogger.Level != "none" {
@@ -75,12 +76,16 @@ func (conf *LoggingConfig) Prepare(appName string) (*zap.Logger, io.WriteCloser,
 			return nil, nil, fmt.Errorf("unable to access file log destination %q: %w", conf.FileLogger.Destination, err)
 		}
 		fileCore = zapcore.NewCore(zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()), zapcore.Lock(file), level)
-		processLogger := zap.New(fileCore).Named(appName).Named("mariadb")
+		closers = append(closers, file)
+	}
+
+	processLevel := zapcore.DebugLevel
+	processCore := zapcore.NewTee(consoleCoreLP, fileCore)
+	if processCore.Enabled(processLevel) || len(closers) > 0 {
+		processLogger := zap.New(processCore).Named(appName).Named("mariadb")
 		processLog = &combinedWriteCloser{
-			Writer: &zapio.Writer{Log: processLogger, Level: zapcore.InfoLevel},
-			closers: []io.Closer{
-				file,
-			},
+			Writer:  &zapio.Writer{Log: processLogger, Level: processLevel},
+			closers: closers,
 		}
 	}
 
