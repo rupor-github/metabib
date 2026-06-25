@@ -181,10 +181,12 @@ metabib fetch --library flibusta --to upd_flibusta --tosql flibusta_20260622 --c
 
 `fetch` replaces the old `libget2` role. It reads profiles from the `fetch`
 section of the YAML configuration, discovers the last local book ID from existing
-`fb2-*.zip` or `fb2-*.merging` archives in `--to`, downloads only newer daily
+range-named ZIPs in `--to` the same way `libget2` did, downloads only newer daily
 archive updates, and decompresses downloaded `*.sql.gz` dumps into `--tosql`.
-When `--tosql` is omitted, the SQL output directory is generated from the library
-name and current UTC timestamp. Use `--nosql` to download archive updates only.
+Both rollup archives such as `fb2-000001-000100.zip` and retained daily updates
+such as `f.fb2.000101-000150.zip` count toward the local high-water mark. When
+`--tosql` is omitted, the SQL output directory is generated from the library name
+and current UTC timestamp. Use `--nosql` to download archive updates only.
 
 The command preserves the old `libget2` automation exit-code contract: exit code
 `0` means no new archive updates were downloaded, exit code `1` means an error
