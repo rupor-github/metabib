@@ -61,7 +61,17 @@ func TestGenerate(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	stats, err := Generate(context.Background(), Options{InputPrefix: prefix, OutputPrefix: filepath.Join(dir, "flibusta"), Format: Format2X, SequenceMode: SequenceAuthor, FB2Preference: PreferComplement, QuickFix: true, Limits: DefaultLimits()})
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "flibusta"),
+		Format:          Format2X,
+		SequenceMode:    SequenceAuthor,
+		FB2Preference:   PreferComplement,
+		QuickFix:        true,
+		Limits:          DefaultLimits(),
+		CommentTemplate: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -104,6 +114,35 @@ func TestGenerate(t *testing.T) {
 	}
 	if !strings.HasPrefix(entries["collection.info"], "\ufeff") {
 		t.Fatalf("collection.info missing UTF-8 BOM: %q", entries["collection.info"])
+	}
+	if !strings.Contains(entries["collection.info"], "flibusta_20260603") {
+		t.Fatalf("collection.info = %q", entries["collection.info"])
+	}
+}
+
+func TestInfoTemplates(t *testing.T) {
+	t.Parallel()
+
+	meta := model.MergeMetadata{
+		Library: "flibusta",
+		Database: model.MergeDatabaseMetadata{
+			DumpDate:    "20260603",
+			DumpDateISO: "2026-06-03",
+		},
+	}
+	got, err := collectionInfo(meta, Options{CommentTemplate: "\ufeff{{ .DatabaseName | upper }} {{ .DumpDate }} {{ .DisplayDate }}"})
+	if err != nil {
+		t.Fatalf("collectionInfo() error = %v", err)
+	}
+	if got != "\ufeffFLIBUSTA 20260603 2026-06-03" {
+		t.Fatalf("collectionInfo() = %q", got)
+	}
+	got, err = versionInfo(meta, Options{VersionTemplate: "{{ .DumpDate }} {{ .DatabaseName | upper }}\r\n"})
+	if err != nil {
+		t.Fatalf("versionInfo() error = %v", err)
+	}
+	if got != "20260603 FLIBUSTA\r\n" {
+		t.Fatalf("versionInfo() = %q", got)
 	}
 }
 

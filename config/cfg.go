@@ -15,6 +15,11 @@ import (
 //go:embed config.yaml.tmpl
 var ConfigTmpl []byte
 
+const (
+	commentTemplateFieldName = "comment_template"
+	versionTemplateFieldName = "version_template"
+)
+
 type Config struct {
 	Version    int              `yaml:"version" validate:"eq=1"`
 	Database   DatabaseConfig   `yaml:"database"`
@@ -91,6 +96,7 @@ type ManifestConfig struct {
 type INPXConfig struct {
 	QuickFix        bool       `yaml:"quick_fix"`
 	CommentTemplate string     `yaml:"comment_template"`
+	VersionTemplate string     `yaml:"version_template"`
 	Limits          INPXLimits `yaml:"limits"`
 }
 
@@ -122,7 +128,7 @@ func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {
 
 func LoadConfiguration(path string, options ...func(*gencfg.ProcessingOptions)) (*Config, error) {
 	haveFile := len(path) > 0
-	options = append(defaultProcessingOptions(), options...)
+	options = append(requiredProcessingOptions(), options...)
 
 	data, err := gencfg.Process(ConfigTmpl, options...)
 	if err != nil {
@@ -148,7 +154,7 @@ func LoadConfiguration(path string, options ...func(*gencfg.ProcessingOptions)) 
 }
 
 func Prepare() ([]byte, error) {
-	return gencfg.Process(ConfigTmpl, defaultProcessingOptions()...)
+	return gencfg.Process(ConfigTmpl, requiredProcessingOptions()...)
 }
 
 func Dump(cfg *Config) ([]byte, error) {
@@ -168,4 +174,12 @@ func defaultProcessingOptions() []func(*gencfg.ProcessingOptions) {
 		exe = resolved
 	}
 	return []func(*gencfg.ProcessingOptions){gencfg.WithRootDir(filepath.Dir(exe))}
+}
+
+func requiredProcessingOptions() []func(*gencfg.ProcessingOptions) {
+	return append(
+		defaultProcessingOptions(),
+		gencfg.WithDoNotExpandField(commentTemplateFieldName),
+		gencfg.WithDoNotExpandField(versionTemplateFieldName),
+	)
 }

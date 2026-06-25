@@ -521,6 +521,7 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 		QuickFix:        cfg.INPX.QuickFix,
 		Limits:          limits,
 		CommentTemplate: cfg.INPX.CommentTemplate,
+		VersionTemplate: cfg.INPX.VersionTemplate,
 		Log:             env.Log,
 	})
 	if err != nil {

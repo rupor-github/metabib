@@ -353,11 +353,14 @@ The default template is lib2inpx-compatible.
 ```yaml
 inpx:
   quick_fix: true
-  comment_template: "\ufeff%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
+  comment_template: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}"
+  version_template: "{{ .DumpDate }}\r\n"
 ```
 
-Template arguments are library name, display date, generated collection name,
-library name, and display date. If you replace the template and still need
+`comment_template` and `version_template` are Go `text/template` values rendered
+when `collection.info` and `version.info` are written. Available values are
+`.DatabaseName`, `.DumpDate`, and `.DisplayDate`; slim-sprig template functions
+are available. If you replace the collection template and still need
 MyHomeLib/lib2inpx compatibility, keep the leading `\ufeff` BOM.
 
 Existing INPX output is replaced only after the new archive is fully written. If

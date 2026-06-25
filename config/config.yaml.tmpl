@@ -99,10 +99,14 @@ inpx:
   # Apply MyHomeLib-compatible field length limits when generating INPX.
   quick_fix: true
 
-  # fmt-style collection.info template. Arguments are library name, display date,
-  # generated collection name, library name, display date. The default starts
-  # with UTF-8 BOM (\ufeff) for MyHomeLib/lib2inpx compatibility.
-  comment_template: "\ufeff%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
+  # Go text/template collection.info template. Available values are DatabaseName,
+  # DumpDate, and DisplayDate; slim-sprig template functions are available. The
+  # default starts with UTF-8 BOM (\ufeff) for MyHomeLib/lib2inpx compatibility.
+  comment_template: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}"
+
+  # Go text/template version.info template. Available values and functions are
+  # the same as comment_template.
+  version_template: "{{ .DumpDate }}\r\n"
 
   limits:
     author_name: 128

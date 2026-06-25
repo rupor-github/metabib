@@ -32,6 +32,12 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if _, ok := cfg.Fetch.FindLibrary("flibusta"); !ok {
 		t.Fatal("default flibusta fetch profile is missing")
 	}
+	if !strings.Contains(cfg.INPX.CommentTemplate, "{{ .DatabaseName }}") {
+		t.Fatalf("CommentTemplate = %q, want unprocessed INPX template", cfg.INPX.CommentTemplate)
+	}
+	if !strings.Contains(cfg.INPX.VersionTemplate, "{{ .DumpDate }}") {
+		t.Fatalf("VersionTemplate = %q, want unprocessed INPX template", cfg.INPX.VersionTemplate)
+	}
 }
 
 func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {

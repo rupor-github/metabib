@@ -3,6 +3,7 @@ package inpx
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -13,10 +14,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	sprig "github.com/go-task/slim-sprig/v3"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
@@ -68,6 +71,7 @@ type Options struct {
 	QuickFix        bool
 	Limits          Limits
 	CommentTemplate string
+	VersionTemplate string
 	Log             *zap.Logger
 }
 
@@ -326,12 +330,24 @@ func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archi
 		stats.FB2Records += archiveStats.FB2Records
 		stats.Dummy += archiveStats.Dummy
 	}
-	if err := writeZipText(zw, "collection.info", collectionInfo(meta, opts)); err != nil {
+	collection, err := collectionInfo(meta, opts)
+	if err != nil {
 		zw.Close()
 		f.Close()
 		return stats, err
 	}
-	if err := writeZipText(zw, "version.info", meta.Database.DumpDate+"\r\n"); err != nil {
+	if err := writeZipText(zw, "collection.info", collection); err != nil {
+		zw.Close()
+		f.Close()
+		return stats, err
+	}
+	version, err := versionInfo(meta, opts)
+	if err != nil {
+		zw.Close()
+		f.Close()
+		return stats, err
+	}
+	if err := writeZipText(zw, "version.info", version); err != nil {
 		zw.Close()
 		f.Close()
 		return stats, err
@@ -640,14 +656,41 @@ func zipComment(meta model.MergeMetadata) string {
 	return meta.Library + " - " + displayDate(meta)
 }
 
-func collectionInfo(meta model.MergeMetadata, opts Options) string {
-	name := filepath.Base(strings.TrimSuffix(inpxOutputPath(meta.Library, meta), ".inpx"))
-	date := displayDate(meta)
-	comment := opts.CommentTemplate
-	if comment == "" {
-		comment = "\ufeff%s FB2 - %s\r\n%s\r\n65536\r\nЛокальные архивы библиотеки %s (FB2) %s"
+type commentTemplateContext struct {
+	DatabaseName string
+	DumpDate     string
+	DisplayDate  string
+}
+
+func collectionInfo(meta model.MergeMetadata, opts Options) (string, error) {
+	if opts.CommentTemplate == "" {
+		return "", errors.New("collection.info comment template is empty")
 	}
-	return fmt.Sprintf(comment, meta.Library, date, name, meta.Library, date)
+	return renderInfoTemplate("comment_template", opts.CommentTemplate, meta)
+}
+
+func versionInfo(meta model.MergeMetadata, opts Options) (string, error) {
+	if opts.VersionTemplate == "" {
+		return "", errors.New("version.info template is empty")
+	}
+	return renderInfoTemplate("version_template", opts.VersionTemplate, meta)
+}
+
+func renderInfoTemplate(name string, text string, meta model.MergeMetadata) (string, error) {
+	tmpl, err := template.New(name).Funcs(sprig.FuncMap()).Parse(text)
+	if err != nil {
+		return "", fmt.Errorf("parse %s: %w", name, err)
+	}
+	values := commentTemplateContext{
+		DatabaseName: meta.Library,
+		DumpDate:     meta.Database.DumpDate,
+		DisplayDate:  displayDate(meta),
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, values); err != nil {
+		return "", fmt.Errorf("execute %s: %w", name, err)
+	}
+	return buf.String(), nil
 }
 
 func displayDate(meta model.MergeMetadata) string {

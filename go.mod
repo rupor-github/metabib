@@ -9,6 +9,7 @@ tool (
 
 require (
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/klauspost/compress v1.18.6
 	github.com/rupor-github/gencfg v1.0.14
 	github.com/urfave/cli/v3 v3.10.0
@@ -89,7 +90,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.30.3 // indirect
 	github.com/go-quicktest/qt v1.102.0 // indirect
-	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
 	github.com/go-task/task/v3 v3.51.1 // indirect
 	github.com/go-task/template v0.2.0 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
