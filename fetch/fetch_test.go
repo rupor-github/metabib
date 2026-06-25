@@ -55,6 +55,29 @@ func TestGetLastBookIDWithMergingArchive(t *testing.T) {
 	}
 }
 
+func TestGetLastBookIDWithRetainedDailyUpdates(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{
+		"fb2-000001-000100.zip",
+		"f.fb2.000101-000150.zip",
+		"000151-000200.zip",
+		"f.fb2.000201-000250.zip.tmp",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	got, err := getLastBookID(dir)
+	if err != nil {
+		t.Fatalf("getLastBookID() error = %v", err)
+	}
+	if got != 250 {
+		t.Fatalf("getLastBookID() = %d, want 250", got)
+	}
+}
+
 func TestProcessFile(t *testing.T) {
 	t.Parallel()
 

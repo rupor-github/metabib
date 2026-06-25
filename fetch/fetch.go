@@ -418,7 +418,7 @@ func getLastBookID(path string) (int, error) {
 	mergeBegin, mergeEnd, mergeCount := 0, 0, 0
 	for _, entry := range entries {
 		name := entry.Name()
-		if ok, first, second, err := dissectArchiveName(name); err != nil {
+		if ok, first, second, err := dissectRange(name); err != nil {
 			return 0, err
 		} else if ok && lastEnd < second {
 			lastBegin = first
@@ -448,14 +448,9 @@ func getLastBookID(path string) (int, error) {
 }
 
 var (
-	archiveNameRE = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.zip`)
-	mergeNameRE   = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.merging`)
-	rangeRE       = regexp.MustCompile(`(?i)\s*([0-9]+)-([0-9]+)\.zip`)
+	mergeNameRE = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.merging`)
+	rangeRE     = regexp.MustCompile(`(?i)\s*([0-9]+)-([0-9]+)\.zip`)
 )
-
-func dissectArchiveName(name string) (bool, int, int, error) {
-	return dissect(archiveNameRE, name)
-}
 
 func dissectMergeName(name string) (bool, int, int, error) {
 	return dissect(mergeNameRE, name)
