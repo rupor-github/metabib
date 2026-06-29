@@ -307,8 +307,8 @@ func (f fetcher) fetchFile(ctx context.Context, sourceURL string, tmpIn string, 
 		read, copyErr := io.CopyN(out, resp.Body, f.opts.ChunkSize)
 		size += read
 		if copyErr == nil {
-			if f.opts.Log != nil {
-				f.opts.Log.Debug("Downloaded chunk", zap.String("url", sourceURL), zap.Int64("bytes", size))
+			if f.opts.Verbose && f.opts.Log != nil {
+				f.opts.Log.Info("Downloaded chunk", zap.String("url", sourceURL), zap.Int64("bytes", size))
 			}
 			continue
 		}

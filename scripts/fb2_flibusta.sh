@@ -47,6 +47,9 @@ timeout=300
 # Download chunk size in decimal megabytes.
 chunksize=1
 
+# Set to true, or run with METABIB_VERBOSE=1, to enable detailed progress logs.
+verbose=false
+
 # -----------------------------------------------------------------------------
 # Main body
 # -----------------------------------------------------------------------------
@@ -90,7 +93,10 @@ glog="${mydir}/${name}_${mode}_${cdate}.log"
 # metabib executable. It is expected to be next to this script.
 metabib="${mydir}/metabib"
 
-metabib_args=(--verbose)
+metabib_args=()
+if [[ "${verbose}" == "true" || "${METABIB_VERBOSE:-0}" == "1" ]]; then
+	metabib_args+=(--verbose)
+fi
 if [[ -f "${mydir}/metabib.yaml" ]]; then
 	metabib_args+=(--config "${mydir}/metabib.yaml")
 fi
