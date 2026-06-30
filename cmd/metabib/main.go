@@ -81,9 +81,11 @@ func exitErrHandler(ctx context.Context, _ *cli.Command, err error) {
 		return
 	}
 	if _, ok := err.(fetchExitCode); ok {
+		errWasHandled = true
 		return
 	}
 	if _, ok := err.(rollupExitCode); ok {
+		errWasHandled = true
 		return
 	}
 	env := state.EnvFromContext(ctx)
