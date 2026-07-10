@@ -200,6 +200,9 @@ func (f fetcher) fetchString(ctx context.Context, sourceURL string) (string, err
 		if !retryable(err) {
 			break
 		}
+		if f.opts.Log != nil {
+			f.opts.Log.Warn("Downloading index failed", zap.String("url", sourceURL), zap.Int("attempt", attempt), zap.Int("attempts", f.opts.Retry), zap.Error(err))
+		}
 	}
 	return "", fmt.Errorf("download index %q: %w", sourceURL, lastErr)
 }
@@ -250,6 +253,9 @@ func (f fetcher) file(ctx context.Context, file string, baseURL string, dest str
 		lastErr = err
 		if !retryable(err) {
 			break
+		}
+		if f.opts.Log != nil {
+			f.opts.Log.Warn("Downloading file failed", zap.String("file", file), zap.Int("attempt", attempt), zap.Int("attempts", f.opts.Retry), zap.Error(err))
 		}
 	}
 	if !success {
@@ -345,7 +351,10 @@ func (f fetcher) request(ctx context.Context, method string, sourceURL string, s
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		_ = resp.Body.Close()
 		cancel()
-		return nil, fmt.Errorf("status %s", resp.Status)
+		// return nil, fmt.Errorf("status %s", resp.Status)
+		// Make all errors re-tryable - here "502 bad gateway" is often
+		// transient
+		return nil, temporaryError{err: fmt.Errorf("status %s", resp.Status)}
 	}
 	resp.Body = cancelReadCloser{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
