@@ -53,7 +53,10 @@ tools.
   by `docs/metabib.schema.json`;
 - `mhl-inpx` consumes the merged JSONL dataset and metadata sidecar to produce a
   MyHomeLib-compatible FB2 INPX without coupling the main extraction pipeline to
-  legacy output constraints.
+  legacy output constraints;
+- `flib-inpx` consumes the same merged JSONL dataset and metadata sidecar to
+  produce a FLibrary-compatible FB2 INPX with extended fields and multiple flat
+  series links.
 
 The same transformation approach can support other derived artifacts later,
 including update lineages and differential update schemes.
@@ -123,28 +126,37 @@ database:
 Run the full update workflow:
 
 ```sh
-scripts/fb2_flibusta.sh /volume4/backup/library full
+scripts/fb2_flibusta.sh /volume4/backup/library full mhl
+scripts/fb2_flibusta.sh /volume4/backup/library full flib
+scripts/fb2_flibusta.sh /volume4/backup/library full both
 ```
 
 Run indexing only from existing local archives and the latest existing SQL dump
 directory matching `<library-root>/flibusta_*`:
 
 ```sh
-scripts/fb2_flibusta.sh /volume4/backup/library reindex
+scripts/fb2_flibusta.sh /volume4/backup/library reindex both
 ```
 
-Both modes accept an optional third argument with the user account whose home
-directory should be used as the working directory. This is useful for Synology
-Task Scheduler setups:
+Both modes accept an optional user account whose home directory should be used as
+the working directory. This is useful for Synology Task Scheduler setups:
 
 ```sh
-scripts/fb2_flibusta.sh /volume4/backup/library full myuser
+scripts/fb2_flibusta.sh /volume4/backup/library full both myuser
 ```
 
-The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and `mhl-inpx`. It exits
-early when no new daily archives are downloaded or when rollup does not finalize a
-new archive. The `reindex` mode skips download and rollup and reruns `cache`,
-`merge`, and `mhl-inpx` from already available data.
+The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and the selected INPX
+exporter. It exits early when no new daily archives are downloaded or when rollup
+does not finalize a new archive. The `reindex` mode skips download and rollup and
+reruns `cache`, `merge`, and the selected INPX exporter from already available
+data.
+
+The script writes generated INPX files with non-overlapping output prefixes:
+
+- `mhl` mode writes `inpx/flibusta_mhl_<dump-date>.inpx`.
+- `flib` mode writes `inpx/flibusta_flib_<dump-date>.inpx` and passes
+  `--source-lib flibusta` so FLibrary receives the original source library name.
+- `both` mode writes both files from the same merged JSONL input.
 
 Expected library layout under `<library-root>`:
 
@@ -154,7 +166,8 @@ Expected library layout under `<library-root>`:
 - `inpx/`: generated INPX files and merged JSONL sidecars/parts.
 
 The script writes a console log next to itself named like
-`flibusta_full_20260622_103000.log` or `flibusta_reindex_20260622_103000.log`.
+`flibusta_full_mhl_20260622_103000.log` or
+`flibusta_reindex_both_20260622_103000.log`.
 For a single combined script and `metabib` debug log, configure logging in the
 same-directory `metabib.yaml` like this:
 
@@ -362,6 +375,50 @@ when `collection.info` and `version.info` are written. Available values are
 `.DatabaseName`, `.DumpDate`, and `.DisplayDate`; slim-sprig template functions
 are available. If you replace the collection template and still need
 MyHomeLib/lib2inpx compatibility, keep the leading `\ufeff` BOM.
+
+Build a FLibrary-compatible FB2 INPX from the same merged JSONL parts:
+
+```sh
+metabib flib-inpx --input all --output flibusta
+```
+
+`flib-inpx` is also FB2-only and consumes only merged JSONL plus the merge
+metadata sidecar. It does not read SQL dumps or archives directly. Unlike
+`mhl-inpx`, it emits no dummy records and always writes `structure.info` with
+FLibrary extensions such as `FOLDER`, `YEAR`, and `SOURCELIB`.
+
+When a book has multiple selected sequences, `flib-inpx` writes repeated `.inp`
+rows for the same `FOLDER + FILE + EXT`, one row per flat `SERIES`/`SERNO` link.
+FLibrary imports those rows as multiple series relations for one physical book.
+
+Available `flib-inpx` arguments:
+
+- `--input PREFIX`, `-i PREFIX`: required input prefix, discovered the same way
+  as `mhl-inpx`.
+- `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date is
+  appended automatically, so `--output flibusta` writes a file named like
+  `flibusta_20260603.inpx`.
+- `--prefer-fb2 MODE`: sequence source preference. Supported values are
+  `ignore`, `merge`, `complement`, and `replace`. Default is `complement`.
+- `--sequence MODE`: selected sequence class. Supported values are `author`,
+  `publisher`, `all`, and `ignore`. Default is `author`.
+- `--fb2-flatten MODE`: FB2 nested sequence flattening. Supported values are
+  `all`, `leaf`, `path`, and `path-leaf`. Default is `all`.
+- `--source-lib VALUE`: `SOURCELIB` field value. Default is the merge metadata
+  library name.
+
+FLibrary-specific settings that are not command-line arguments live under
+`inpx.flibrary`:
+
+```yaml
+inpx:
+  flibrary:
+    sequence_dedup: case-insensitive
+    fb2_path_separator: " / "
+```
+
+`sequence_dedup` supports `case-insensitive` and `case-sensitive`.
+`fb2_path_separator` is used by `--fb2-flatten path` and `path-leaf`.
 
 Existing INPX output is replaced only after the new archive is fully written. If
 an existing file is overwritten, `metabib` logs a warning. During generation,

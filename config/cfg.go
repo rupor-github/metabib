@@ -94,10 +94,11 @@ type ManifestConfig struct {
 }
 
 type INPXConfig struct {
-	QuickFix        bool       `yaml:"quick_fix"`
-	CommentTemplate string     `yaml:"comment_template"`
-	VersionTemplate string     `yaml:"version_template"`
-	Limits          INPXLimits `yaml:"limits"`
+	QuickFix        bool               `yaml:"quick_fix"`
+	CommentTemplate string             `yaml:"comment_template"`
+	VersionTemplate string             `yaml:"version_template"`
+	Limits          INPXLimits         `yaml:"limits"`
+	FLibrary        FLibraryINPXConfig `yaml:"flibrary"`
 }
 
 type INPXLimits struct {
@@ -107,6 +108,11 @@ type INPXLimits struct {
 	Title        int `yaml:"title" validate:"min=1"`
 	Keywords     int `yaml:"keywords" validate:"min=1"`
 	Sequence     int `yaml:"sequence" validate:"min=1"`
+}
+
+type FLibraryINPXConfig struct {
+	SequenceDedup    string `yaml:"sequence_dedup" validate:"oneof=case-insensitive case-sensitive"`
+	FB2PathSeparator string `yaml:"fb2_path_separator" validate:"required"`
 }
 
 func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {

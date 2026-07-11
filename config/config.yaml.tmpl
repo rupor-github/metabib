@@ -108,6 +108,8 @@ inpx:
   # the same as comment_template.
   version_template: "{{ .DumpDate }}\r\n"
 
+  # MyHomeLib-compatible field limits. These are enforced only by mhl-inpx;
+  # flib-inpx bypasses them because FLibrary does not enforce these limits.
   limits:
     author_name: 128
     author_middle: 128
@@ -115,6 +117,15 @@ inpx:
     title: 150
     keywords: 255
     sequence: 80
+
+  flibrary:
+    # Deduplicate repeated FLibrary sequence rows by sequence name using either
+    # case-insensitive or case-sensitive comparison.
+    sequence_dedup: case-insensitive
+
+    # Separator used when flattening nested FB2 sequences with flib-inpx
+    # --fb2-flatten path or path-leaf.
+    fb2_path_separator: " / "
 
 logging:
   # Controls terminal (stdout, stderr) output. Application debug messages and

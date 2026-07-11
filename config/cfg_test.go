@@ -38,6 +38,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if !strings.Contains(cfg.INPX.VersionTemplate, "{{ .DumpDate }}") {
 		t.Fatalf("VersionTemplate = %q, want unprocessed INPX template", cfg.INPX.VersionTemplate)
 	}
+	if cfg.INPX.FLibrary.SequenceDedup != "case-insensitive" || cfg.INPX.FLibrary.FB2PathSeparator != " / " {
+		t.Fatalf("FLibrary INPX defaults = %#v", cfg.INPX.FLibrary)
+	}
 }
 
 func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {

@@ -21,10 +21,11 @@ import (
 	"metabib/config"
 	"metabib/db"
 	"metabib/fetch"
-	"metabib/inpx"
+	"metabib/flibinpx"
 	"metabib/internal/fileutil"
 	"metabib/jsonl"
 	"metabib/library"
+	"metabib/mhlinpx"
 	"metabib/misc"
 	"metabib/model"
 	"metabib/rollup"
@@ -54,7 +55,13 @@ func initializeAppContext(ctx context.Context, cmd *cli.Command) (context.Contex
 		return ctx, fmt.Errorf("unable to prepare logs: %w", err)
 	}
 	mysql.SetLogger(mysqlDebugLogger{log: env.Log.Named("mysql")})
-	env.Log.Debug("Program started", zap.Strings("args", os.Args), zap.String("version", misc.GetVersion()), zap.String("runtime", runtime.Version()), zap.String("git", misc.GetGitHash()))
+	env.Log.Debug(
+		"Program started",
+		zap.Strings("args", os.Args),
+		zap.String("version", misc.GetVersion()),
+		zap.String("runtime", runtime.Version()),
+		zap.String("git", misc.GetGitHash()),
+	)
 	return ctx, nil
 }
 
@@ -114,7 +121,8 @@ func main() {
 			rollupCommand(),
 			cacheCommand(),
 			mergeCommand(),
-			inpxCommand(),
+			mhlINPXCommand(),
+			flibINPXCommand(),
 			{
 				Name:      "dumpconfig",
 				Usage:     "Dumps default or actual configuration (YAML)",
@@ -167,8 +175,17 @@ func rollupCommand() *cli.Command {
 		Name:  "rollup",
 		Usage: "Roll daily FB2 update archives into size-bounded archive ZIPs",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "archives", Aliases: []string{"a"}, Usage: "directory for finalized fb2-*.zip archives and active .merging archive", Required: true},
-			&cli.StringSliceFlag{Name: "updates", Aliases: []string{"u"}, Usage: "directory containing daily update ZIPs; can be repeated; defaults to --archives"},
+			&cli.StringFlag{
+				Name:     "archives",
+				Aliases:  []string{"a"},
+				Usage:    "directory for finalized fb2-*.zip archives and active .merging archive",
+				Required: true,
+			},
+			&cli.StringSliceFlag{
+				Name:    "updates",
+				Aliases: []string{"u"},
+				Usage:   "directory containing daily update ZIPs; can be repeated; defaults to --archives",
+			},
 			&cli.IntFlag{Name: "size", Value: 2000, Usage: "finalized archive target size in decimal megabytes"},
 			&cli.BoolFlag{Name: "keep-updates", Usage: "keep consumed daily update archives"},
 		},
@@ -176,18 +193,74 @@ func rollupCommand() *cli.Command {
 	}
 }
 
-func inpxCommand() *cli.Command {
+func mhlINPXCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "mhl-inpx",
 		Usage: "Build MyHomeLib-compatible INPX from merged JSONL parts",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "input", Aliases: []string{"i"}, Usage: "read merged JSONL parts and metadata using `PREFIX`", Required: true},
-			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write INPX using `PREFIX` plus dump date", Required: true},
-			&cli.StringFlag{Name: "format", Value: string(inpx.Format2X), Usage: "INPX format `MODE` (2x, ruks)"},
-			&cli.StringFlag{Name: "sequence", Value: string(inpx.SequenceAuthor), Usage: "sequence selection `MODE` (author, publisher, ignore)"},
-			&cli.StringFlag{Name: "prefer-fb2", Value: string(inpx.PreferComplement), Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)"},
+			&cli.StringFlag{
+				Name:     "input",
+				Aliases:  []string{"i"},
+				Usage:    "read merged JSONL parts and metadata using `PREFIX`",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:     "output",
+				Aliases:  []string{"o"},
+				Usage:    "write INPX using `PREFIX` plus dump date",
+				Required: true,
+			},
+			&cli.StringFlag{Name: "format", Value: string(mhlinpx.Format2X), Usage: "INPX format `MODE` (2x, ruks)"},
+			&cli.StringFlag{
+				Name:  "sequence",
+				Value: string(mhlinpx.SequenceAuthor),
+				Usage: "sequence selection `MODE` (author, publisher, ignore)",
+			},
+			&cli.StringFlag{
+				Name:  "prefer-fb2",
+				Value: string(mhlinpx.PreferComplement),
+				Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)",
+			},
 		},
-		Action: runINPX,
+		Action: runMHLINPX,
+	}
+}
+
+func flibINPXCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "flib-inpx",
+		Usage: "Build FLibrary-compatible INPX from merged JSONL parts",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "input",
+				Aliases:  []string{"i"},
+				Usage:    "read merged JSONL parts and metadata using `PREFIX`",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:     "output",
+				Aliases:  []string{"o"},
+				Usage:    "write INPX using `PREFIX` plus dump date",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:  "sequence",
+				Value: string(flibinpx.SequenceAuthor),
+				Usage: "sequence selection `MODE` (author, publisher, all, ignore)",
+			},
+			&cli.StringFlag{
+				Name:  "prefer-fb2",
+				Value: string(flibinpx.PreferComplement),
+				Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)",
+			},
+			&cli.StringFlag{
+				Name:  "fb2-flatten",
+				Value: string(flibinpx.FlattenAll),
+				Usage: "FB2 sequence flattening `MODE` (all, leaf, path, path-leaf)",
+			},
+			&cli.StringFlag{Name: "source-lib", Usage: "SOURCELIB field value; defaults to merge metadata library name"},
+		},
+		Action: runFLibINPX,
 	}
 }
 
@@ -339,7 +412,12 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 			env.Log.Warn("SQL dump dates differ; top-level dump_date will be omitted", zap.String("directory", dumpDir))
 		}
 		if env.Log != nil {
-			env.Log.Info("SQL dump date detected", zap.String("dump_date", dumpDate), zap.String("directory", dumpDir), zap.Duration("elapsed", time.Since(discoverStart)))
+			env.Log.Info(
+				"SQL dump date detected",
+				zap.String("dump_date", dumpDate),
+				zap.String("directory", dumpDir),
+				zap.Duration("elapsed", time.Since(discoverStart)),
+			)
 		}
 	}
 
@@ -490,23 +568,23 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	})
 }
 
-func runINPX(ctx context.Context, cmd *cli.Command) error {
+func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 	start := time.Now()
 	cfg := state.EnvFromContext(ctx).Cfg
 	env := state.EnvFromContext(ctx)
-	format, err := inpx.ParseFormat(cmd.String("format"))
+	format, err := mhlinpx.ParseFormat(cmd.String("format"))
 	if err != nil {
 		return err
 	}
-	sequence, err := inpx.ParseSequenceMode(cmd.String("sequence"))
+	sequence, err := mhlinpx.ParseSequenceMode(cmd.String("sequence"))
 	if err != nil {
 		return err
 	}
-	preference, err := inpx.ParseFB2Preference(cmd.String("prefer-fb2"))
+	preference, err := mhlinpx.ParseFB2Preference(cmd.String("prefer-fb2"))
 	if err != nil {
 		return err
 	}
-	limits := inpx.Limits{
+	limits := mhlinpx.Limits{
 		AuthorName:   cfg.INPX.Limits.AuthorName,
 		AuthorMiddle: cfg.INPX.Limits.AuthorMiddle,
 		AuthorFamily: cfg.INPX.Limits.AuthorFamily,
@@ -514,7 +592,7 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 		Keywords:     cfg.INPX.Limits.Keywords,
 		Sequence:     cfg.INPX.Limits.Sequence,
 	}
-	stats, err := inpx.Generate(ctx, inpx.Options{
+	stats, err := mhlinpx.Generate(ctx, mhlinpx.Options{
 		InputPrefix:     cmd.String("input"),
 		OutputPrefix:    cmd.String("output"),
 		Format:          format,
@@ -540,6 +618,58 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 			zap.Int64("db_records", stats.DBRecords),
 			zap.Int64("fb2_records", stats.FB2Records),
 			zap.Int64("dummy_records", stats.Dummy),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	}
+	return nil
+}
+
+func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
+	start := time.Now()
+	cfg := state.EnvFromContext(ctx).Cfg
+	env := state.EnvFromContext(ctx)
+	sequence, err := flibinpx.ParseSequenceMode(cmd.String("sequence"))
+	if err != nil {
+		return err
+	}
+	preference, err := flibinpx.ParseFB2Preference(cmd.String("prefer-fb2"))
+	if err != nil {
+		return err
+	}
+	flatten, err := flibinpx.ParseFlattenMode(cmd.String("fb2-flatten"))
+	if err != nil {
+		return err
+	}
+	dedup, err := flibinpx.ParseDedupMode(cfg.INPX.FLibrary.SequenceDedup)
+	if err != nil {
+		return err
+	}
+	stats, err := flibinpx.Generate(ctx, flibinpx.Options{
+		InputPrefix:      cmd.String("input"),
+		OutputPrefix:     cmd.String("output"),
+		SequenceMode:     sequence,
+		FB2Preference:    preference,
+		FlattenMode:      flatten,
+		DedupMode:        dedup,
+		FB2PathSeparator: cfg.INPX.FLibrary.FB2PathSeparator,
+		SourceLib:        cmd.String("source-lib"),
+		CommentTemplate:  cfg.INPX.CommentTemplate,
+		VersionTemplate:  cfg.INPX.VersionTemplate,
+		Log:              env.Log,
+	})
+	if err != nil {
+		return err
+	}
+	if env.Log != nil {
+		env.Log.Info(
+			"FLibrary INPX created",
+			zap.String("file", stats.OutputPath),
+			zap.String("dump_date", stats.DumpDate),
+			zap.Int("archives", stats.Archives),
+			zap.Int("files", stats.Files),
+			zap.Int64("records", stats.Records),
+			zap.Int64("db_records", stats.DBRecords),
+			zap.Int64("fb2_records", stats.FB2Records),
 			zap.Duration("elapsed", time.Since(start)),
 		)
 	}
@@ -608,7 +738,14 @@ func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
 	return false
 }
 
-func writeOutput(ctx context.Context, path string, partSizeValue string, compressionValue string, log *zap.Logger, write func(*jsonl.Writer) error) error {
+func writeOutput(
+	ctx context.Context,
+	path string,
+	partSizeValue string,
+	compressionValue string,
+	log *zap.Logger,
+	write func(*jsonl.Writer) error,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -708,7 +845,12 @@ func mergeArchiveManifests(
 		records += count
 	}
 	if log != nil {
-		log.Info("Archive manifests merged", zap.Int("manifests", len(archivePlan)), zap.Int64("records", records), zap.Duration("elapsed", time.Since(start)))
+		log.Info(
+			"Archive manifests merged",
+			zap.Int("manifests", len(archivePlan)),
+			zap.Int64("records", records),
+			zap.Duration("elapsed", time.Since(start)),
+		)
 	}
 	return nil
 }

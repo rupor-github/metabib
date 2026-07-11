@@ -1,4 +1,4 @@
-package inpx
+package mhlinpx
 
 import (
 	"archive/zip"
@@ -62,14 +62,19 @@ func TestGenerate(t *testing.T) {
 	}
 
 	stats, err := Generate(context.Background(), Options{
-		InputPrefix:     prefix,
-		OutputPrefix:    filepath.Join(dir, "flibusta"),
-		Format:          Format2X,
-		SequenceMode:    SequenceAuthor,
-		FB2Preference:   PreferComplement,
-		QuickFix:        true,
-		Limits:          DefaultLimits(),
-		CommentTemplate: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}",
+		InputPrefix:   prefix,
+		OutputPrefix:  filepath.Join(dir, "flibusta"),
+		Format:        Format2X,
+		SequenceMode:  SequenceAuthor,
+		FB2Preference: PreferComplement,
+		QuickFix:      true,
+		Limits:        DefaultLimits(),
+		CommentTemplate: strings.Join([]string{
+			"\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}",
+			"{{ .DatabaseName }}_{{ .DumpDate }}",
+			"65536",
+			"Локальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}",
+		}, "\r\n"),
 		VersionTemplate: "{{ .DumpDate }}\r\n",
 	})
 	if err != nil {
@@ -78,7 +83,8 @@ func TestGenerate(t *testing.T) {
 	if filepath.Base(stats.OutputPath) != "flibusta_20260603.inpx" {
 		t.Fatalf("output = %q", stats.OutputPath)
 	}
-	if stats.Archives != 1 || stats.Files != 2 || stats.Records != 1 || stats.DBRecords != 1 || stats.FB2Records != 0 || stats.Dummy != 1 || stats.DumpDate != "20260603" {
+	if stats.Archives != 1 || stats.Files != 2 || stats.Records != 1 || stats.DBRecords != 1 ||
+		stats.FB2Records != 0 || stats.Dummy != 1 || stats.DumpDate != "20260603" {
 		t.Fatalf("stats = %#v", stats)
 	}
 	zr, err := zip.OpenReader(stats.OutputPath)

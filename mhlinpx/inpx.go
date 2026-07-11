@@ -1,4 +1,4 @@
-package inpx
+package mhlinpx
 
 import (
 	"archive/zip"
@@ -172,7 +172,12 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 		return stats, err
 	}
 	if opts.Log != nil {
-		opts.Log.Info("INPX input parts selected", zap.Int("parts", len(parts)), zap.Int("archives", len(meta.Archives)), zap.String("dump_date", meta.Database.DumpDate))
+		opts.Log.Info(
+			"INPX input parts selected",
+			zap.Int("parts", len(parts)),
+			zap.Int("archives", len(meta.Archives)),
+			zap.String("dump_date", meta.Database.DumpDate),
+		)
 	}
 	archives := make(map[string]*archiveRows, len(meta.Archives))
 	for _, archive := range meta.Archives {
@@ -286,7 +291,10 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 			}
 			archive := archives[rec.ID.Archive.Path]
 			if archive == nil {
-				archive = &archiveRows{Meta: model.MergeArchiveMetadata{Path: rec.ID.Archive.Path, Name: filepath.Base(rec.ID.Archive.Path)}, Records: make(map[int]model.Record)}
+				archive = &archiveRows{
+					Meta:    model.MergeArchiveMetadata{Path: rec.ID.Archive.Path, Name: filepath.Base(rec.ID.Archive.Path)},
+					Records: make(map[int]model.Record),
+				}
 				archives[rec.ID.Archive.Path] = archive
 			}
 			archive.Records[rec.ID.Archive.Index] = rec
@@ -631,7 +639,8 @@ func fb2Sequence(titleInfo *model.FB2TitleInfo) (string, string) {
 }
 
 func dummyLine(index int) string {
-	return "dummy:" + fieldSep + "other:" + fieldSep + "dummy record" + fieldSep + fieldSep + fieldSep + fieldSep + "1" + fieldSep + strconv.Itoa(index) + fieldSep + "1" + fieldSep + "EXT" + fieldSep + "2000-01-01" + fieldSep + "en" + fieldSep + "0" + fieldSep + fieldSep + "\r\n"
+	fields := []string{"dummy:", "other:", "dummy record", "", "", "", "1", strconv.Itoa(index), "1", "EXT", "2000-01-01", "en", "0", ""}
+	return strings.Join(fields, fieldSep) + fieldSep + "\r\n"
 }
 
 func inRanges(ranges []model.IndexRange, idx int) bool {

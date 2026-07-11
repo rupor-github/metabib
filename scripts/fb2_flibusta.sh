@@ -2,8 +2,8 @@
 
 # Synology task scheduler has a problem running scripts under non-root user.
 
-if [[ -z "${1:-}" || -z "${2:-}" ]]; then
-	echo "Usage: $0 <library-root> <full|reindex> [run-as-user]"
+if [[ -z "${1:-}" || -z "${2:-}" || -z "${3:-}" ]]; then
+	echo "Usage: $0 <library-root> <full|reindex> <mhl|flib|both> [run-as-user]"
 	exit 1
 fi
 
@@ -16,12 +16,23 @@ case "$2" in
 		;;
 	*)
 		echo "Unknown mode: $2"
-		echo "Usage: $0 <library-root> <full|reindex> [run-as-user]"
+		echo "Usage: $0 <library-root> <full|reindex> <mhl|flib|both> [run-as-user]"
 		exit 1
 		;;
 esac
 
-run_as_user="${3:-}"
+case "$3" in
+	mhl|flib|both)
+		inpx_mode="$3"
+		;;
+	*)
+		echo "Unknown INPX mode: $3"
+		echo "Usage: $0 <library-root> <full|reindex> <mhl|flib|both> [run-as-user]"
+		exit 1
+		;;
+esac
+
+run_as_user="${4:-}"
 
 if [[ -n "${run_as_user}" ]]; then
 	user_dir=$(eval echo "~${run_as_user}")
@@ -88,7 +99,7 @@ udir="${root}/upd_${name}"
 # metabib debug messages, and MariaDB process/client output. Enabling metabib
 # file logging is still supported by the application, but this script no longer
 # manages or renames metabib.log.
-glog="${mydir}/${name}_${mode}_${cdate}.log"
+glog="${mydir}/${name}_${mode}_${inpx_mode}_${cdate}.log"
 
 # metabib executable. It is expected to be next to this script.
 metabib="${mydir}/metabib"
@@ -137,9 +148,59 @@ log_phase() {
 	echo "========================================================================"
 }
 
+build_mhl_inpx() {
+	local merge_prefix="$1" res
+
+	log_phase "Building MyHomeLib INPX"
+
+	"${metabib}" "${metabib_args[@]}" mhl-inpx \
+		--input "${merge_prefix}" \
+		--output "${odir}/${name}_mhl"
+
+	res=$?
+	if (( res != 0 )); then
+		echo "Unable to build MyHomeLib INPX - ${res}"
+		exit 1
+	fi
+}
+
+build_flib_inpx() {
+	local merge_prefix="$1" res
+
+	log_phase "Building FLibrary INPX"
+
+	"${metabib}" "${metabib_args[@]}" flib-inpx \
+		--input "${merge_prefix}" \
+		--output "${odir}/${name}_flib" \
+		--source-lib "${name}"
+
+	res=$?
+	if (( res != 0 )); then
+		echo "Unable to build FLibrary INPX - ${res}"
+		exit 1
+	fi
+}
+
+build_selected_inpx() {
+	local merge_prefix="$1"
+
+	case "${inpx_mode}" in
+		mhl)
+			build_mhl_inpx "${merge_prefix}"
+			;;
+		flib)
+			build_flib_inpx "${merge_prefix}"
+			;;
+		both)
+			build_mhl_inpx "${merge_prefix}"
+			build_flib_inpx "${merge_prefix}"
+			;;
+	esac
+}
+
 build_inpx_from_existing_data() {
 	local dump_dir="$1"
-	local dump_date merge_prefix
+	local dump_date merge_prefix res
 
 	if ! dump_date=$(detect_dump_date "${dump_dir}"); then
 		echo "Unable to detect SQL dump date in ${dump_dir}"
@@ -154,8 +215,9 @@ build_inpx_from_existing_data() {
 		--database-dumps "${dump_dir}" \
 		--archives "${adir}"
 
-	if (( $? != 0 )); then
-		echo "Unable to build cache manifests - $?"
+	res=$?
+	if (( res != 0 )); then
+		echo "Unable to build cache manifests - ${res}"
 		exit 1
 	fi
 
@@ -166,21 +228,13 @@ build_inpx_from_existing_data() {
 		--archives "${adir}" \
 		--output "${merge_prefix}"
 
-	if (( $? != 0 )); then
-		echo "Unable to merge metadata - $?"
+	res=$?
+	if (( res != 0 )); then
+		echo "Unable to merge metadata - ${res}"
 		exit 1
 	fi
 
-	log_phase "Building ${name} INPX"
-
-	"${metabib}" "${metabib_args[@]}" mhl-inpx \
-		--input "${merge_prefix}" \
-		--output "${odir}/${name}"
-
-	if (( $? != 0 )); then
-		echo "Unable to build INPX - $?"
-		exit 1
-	fi
+	build_selected_inpx "${merge_prefix}"
 }
 
 exec 3>&1 4>&2
