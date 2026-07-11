@@ -546,7 +546,7 @@ func recordSequences(rec model.Record, opts Options) []sequence {
 			selected = fb2Seqs
 		}
 	}
-	return dedupSequences(selected, opts)
+	return dedupSequences(rec, selected, opts)
 }
 
 func dbSequences(sequences []model.DBSequence, mode SequenceMode) []sequence {
@@ -641,7 +641,7 @@ func fb2SequenceNumber(value string) string {
 	return value
 }
 
-func dedupSequences(sequences []sequence, opts Options) []sequence {
+func dedupSequences(rec model.Record, sequences []sequence, opts Options) []sequence {
 	seen := make(map[string]sequence, len(sequences))
 	result := make([]sequence, 0, len(sequences))
 	for _, seq := range sequences {
@@ -655,15 +655,26 @@ func dedupSequences(sequences []sequence, opts Options) []sequence {
 		}
 		if kept, ok := seen[key]; ok {
 			if opts.Log != nil {
-				opts.Log.Debug(
-					"Dropped duplicate FLibrary sequence",
+				fields := []zap.Field{
+					zap.Int64("book_id", rec.ID.BookID),
+					zap.String("file", rec.ID.FileName),
+					zap.String("ext", rec.ID.Extension),
 					zap.String("name", seq.Name),
 					zap.String("number", seq.Number),
 					zap.String("source", seq.Source),
 					zap.String("kept_name", kept.Name),
 					zap.String("kept_number", kept.Number),
 					zap.String("kept_source", kept.Source),
-				)
+				}
+				if rec.ID.Archive != nil {
+					fields = append(
+						fields,
+						zap.String("archive", rec.ID.Archive.Path),
+						zap.String("archive_entry", rec.ID.Archive.Entry),
+						zap.Int("archive_index", rec.ID.Archive.Index),
+					)
+				}
+				opts.Log.Debug("Dropped duplicate FLibrary sequence", fields...)
 			}
 			continue
 		}
