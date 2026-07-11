@@ -14,7 +14,7 @@ a modern replacement for the outdated and cross-platform maintenance-heavy
 embedded MySQL library that was dropped by both MySQL and MariaDB many versions
 ago.
 
-`metabib` is not trying to reproduce the full `lib2inpx`/InpxCreator feature
+`metabib` is not trying to reproduce the full `lib2inpx`/`InpxCreator` feature
 set. The intentionally unported areas include:
 
 - library content formats other than FB2;
