@@ -145,7 +145,13 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	start := time.Now()
 	var manifestOut *manifestWriter
 	if manifest.Create {
-		var err error
+		provenance, err := repo.ImportProvenance(ctx)
+		if err != nil {
+			return fmt.Errorf("read database import provenance: %w", err)
+		}
+		manifest.DumpDir = provenance.DumpDir
+		manifest.DumpDate = provenance.DumpDate
+		manifest.Dumps = dumpManifestSourcesFromImportProvenance(provenance.Dumps)
 		manifestOut, err = newManifestWriter(manifest.ManifestPath)
 		if err != nil {
 			return err
@@ -323,6 +329,21 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		log.Info("Database processed", zap.Int64("records", processed), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
 	}
 	return nil
+}
+
+func dumpManifestSourcesFromImportProvenance(dumps []db.ImportDumpProvenance) []DumpManifestSource {
+	sources := make([]DumpManifestSource, 0, len(dumps))
+	for _, dump := range dumps {
+		sources = append(sources, DumpManifestSource{
+			Path:          dump.Path,
+			Name:          dump.Name,
+			DumpDate:      dump.DumpDate,
+			DumpCompleted: dump.DumpCompleted,
+			Modified:      dump.Modified,
+			MD5:           dump.MD5,
+		})
+	}
+	return sources
 }
 
 func processArchive(

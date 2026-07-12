@@ -70,6 +70,75 @@ func TestFileIdentityFallback(t *testing.T) {
 	}
 }
 
+func TestImportProvenanceRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dsn := "provenance-round-trip"
+	var payload string
+	testDriverMu.Lock()
+	testDriverHandlers[dsn] = func(query string, args []driver.NamedValue) (testRows, error) {
+		query = strings.Join(strings.Fields(query), " ")
+		switch {
+		case strings.HasPrefix(query, "CREATE TABLE IF NOT EXISTS"):
+			return testRows{}, nil
+		case strings.HasPrefix(query, "REPLACE INTO"):
+			payload, _ = args[0].Value.(string)
+			return testRows{}, nil
+		case strings.Contains(query, "SELECT payload FROM"):
+			return rows([]string{"payload"}, []driver.Value{payload}), nil
+		default:
+			return testRows{}, fmt.Errorf("unexpected query: %s", query)
+		}
+	}
+	testDriverMu.Unlock()
+	t.Cleanup(func() {
+		testDriverMu.Lock()
+		delete(testDriverHandlers, dsn)
+		testDriverMu.Unlock()
+	})
+	sqldb, err := sql.Open(testDriverName, dsn)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = sqldb.Close() })
+	repo := &Repository{db: sqldb, tables: make(map[string]bool), cols: make(map[string]map[string]bool)}
+	want := ImportProvenance{
+		DumpDir:  "/dumps",
+		DumpDate: "2026-06-20",
+		Dumps: []ImportDumpProvenance{{
+			Path:          "/dumps/libbook.sql",
+			Name:          "libbook.sql",
+			DumpDate:      "2026-06-20",
+			DumpCompleted: "2026-06-20T02:19:33",
+			Modified:      "2026-06-20T02:19:34Z",
+			MD5:           "abc123",
+		}},
+	}
+
+	if err := repo.WriteImportProvenance(ctx, want); err != nil {
+		t.Fatalf("WriteImportProvenance() error = %v", err)
+	}
+	got, err := repo.ImportProvenance(ctx)
+	if err != nil {
+		t.Fatalf("ImportProvenance() error = %v", err)
+	}
+	if got.Schema != importProvenanceSchema || got.DumpDir != want.DumpDir || got.Dumps[0].MD5 != want.Dumps[0].MD5 {
+		t.Fatalf("ImportProvenance() = %#v, want %#v", got, want)
+	}
+}
+
+func TestImportProvenanceMissing(t *testing.T) {
+	t.Parallel()
+
+	repo := newTestRepository(t)
+	repo.tables[importProvenanceTable] = false
+	_, err := repo.ImportProvenance(context.Background())
+	if !errors.Is(err, ErrImportProvenanceNotFound) {
+		t.Fatalf("ImportProvenance() error = %v, want ErrImportProvenanceNotFound", err)
+	}
+}
+
 func TestContributorFromClause(t *testing.T) {
 	t.Parallel()
 
@@ -304,6 +373,13 @@ func (c testConn) QueryContext(_ context.Context, query string, args []driver.Na
 		return nil, err
 	}
 	return &rows, nil
+}
+
+func (c testConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if _, err := c.handler(query, args); err != nil {
+		return nil, err
+	}
+	return driver.RowsAffected(1), nil
 }
 
 type testRows struct {

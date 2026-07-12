@@ -470,6 +470,11 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 				return err
 			}
 			defer repo.Close()
+			if importDumps {
+				if err := repo.WriteImportProvenance(ctx, importProvenanceFromDatabaseManifest(databaseManifest)); err != nil {
+					return err
+				}
+			}
 			if err := library.ProcessDatabase(ctx, repo, cfg, nil, env.Log, env.Verbose, databaseManifest); err != nil {
 				return err
 			}
@@ -481,6 +486,25 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 		reports = append(reports, report)
 	}
 	return failIfReportsNotReady(reports, false)
+}
+
+func importProvenanceFromDatabaseManifest(manifest library.DatabaseManifestDecision) db.ImportProvenance {
+	dumps := make([]db.ImportDumpProvenance, 0, len(manifest.Dumps))
+	for _, dump := range manifest.Dumps {
+		dumps = append(dumps, db.ImportDumpProvenance{
+			Path:          dump.Path,
+			Name:          dump.Name,
+			DumpDate:      dump.DumpDate,
+			DumpCompleted: dump.DumpCompleted,
+			Modified:      dump.Modified,
+			MD5:           dump.MD5,
+		})
+	}
+	return db.ImportProvenance{
+		DumpDir:  manifest.DumpDir,
+		DumpDate: manifest.DumpDate,
+		Dumps:    dumps,
+	}
 }
 
 func runMerge(ctx context.Context, cmd *cli.Command) error {

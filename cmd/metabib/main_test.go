@@ -84,6 +84,27 @@ func TestDumpDirDatesDiffer(t *testing.T) {
 	}
 }
 
+func TestImportProvenanceFromDatabaseManifest(t *testing.T) {
+	t.Parallel()
+
+	manifest := library.DatabaseManifestDecision{
+		DumpDir:  "/dumps",
+		DumpDate: "2026-06-20",
+		Dumps: []library.DumpManifestSource{{
+			Path:          "/dumps/libbook.sql",
+			Name:          "libbook.sql",
+			DumpDate:      "2026-06-20",
+			DumpCompleted: "2026-06-20T02:19:33",
+			Modified:      "2026-06-20T02:19:34Z",
+			MD5:           "abc123",
+		}},
+	}
+	got := importProvenanceFromDatabaseManifest(manifest)
+	if got.DumpDir != manifest.DumpDir || got.DumpDate != manifest.DumpDate || len(got.Dumps) != 1 || got.Dumps[0].MD5 != manifest.Dumps[0].MD5 {
+		t.Fatalf("importProvenanceFromDatabaseManifest() = %#v", got)
+	}
+}
+
 func TestWriteOutput(t *testing.T) {
 	t.Parallel()
 
