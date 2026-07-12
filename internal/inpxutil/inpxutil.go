@@ -76,7 +76,7 @@ func LoadInput(ctx context.Context, inputPrefix string, log *zap.Logger) (model.
 		archives[archive.Path] = &ArchiveRows{Meta: archive, Records: make(map[int]model.Record)}
 	}
 	loadStart := time.Now()
-	loaded, err := ReadRecords(ctx, parts, archives)
+	loaded, err := ReadRecords(ctx, parts, archives, log)
 	if err != nil {
 		return meta, nil, loaded, err
 	}
@@ -164,7 +164,7 @@ func ReadMetadata(path string) (model.MergeMetadata, error) {
 	return meta, nil
 }
 
-func ReadRecords(ctx context.Context, parts []string, archives map[string]*ArchiveRows) (int64, error) {
+func ReadRecords(ctx context.Context, parts []string, archives map[string]*ArchiveRows, log *zap.Logger) (int64, error) {
 	var records int64
 	for _, part := range parts {
 		if err := ctx.Err(); err != nil {
@@ -196,6 +196,10 @@ func ReadRecords(ctx context.Context, parts []string, archives map[string]*Archi
 				}
 				archives[rec.ID.Archive.Path] = archive
 			}
+			if existing, ok := archive.Records[rec.ID.Archive.Index]; ok {
+				logDuplicateArchiveIndex(log, part, rec.ID.Archive.Path, rec.ID.Archive.Index, existing, rec)
+				continue
+			}
 			archive.Records[rec.ID.Archive.Index] = rec
 		}
 		if err := r.Close(); err != nil {
@@ -203,6 +207,26 @@ func ReadRecords(ctx context.Context, parts []string, archives map[string]*Archi
 		}
 	}
 	return records, nil
+}
+
+func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, index int, existing model.Record, duplicate model.Record) {
+	if log == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("part", part),
+		zap.String("archive", archivePath),
+		zap.Int("archive_index", index),
+		zap.Int64("existing_book_id", existing.ID.BookID),
+		zap.Int64("duplicate_book_id", duplicate.ID.BookID),
+	}
+	if existing.ID.Archive != nil {
+		fields = append(fields, zap.String("existing_archive_entry", existing.ID.Archive.Entry))
+	}
+	if duplicate.ID.Archive != nil {
+		fields = append(fields, zap.String("duplicate_archive_entry", duplicate.ID.Archive.Entry))
+	}
+	log.Warn("Duplicate archive index in INPX input; keeping first record", fields...)
 }
 
 func ArchiveList(archives map[string]*ArchiveRows) []*ArchiveRows {

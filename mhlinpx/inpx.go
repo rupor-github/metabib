@@ -184,7 +184,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 		archives[archive.Path] = &archiveRows{Meta: archive, Records: make(map[int]model.Record)}
 	}
 	loadStart := time.Now()
-	loaded, err := readRecords(ctx, parts, archives)
+	loaded, err := readRecords(ctx, parts, archives, opts.Log)
 	if err != nil {
 		return stats, err
 	}
@@ -302,7 +302,7 @@ func readMetadata(path string) (model.MergeMetadata, error) {
 	return meta, nil
 }
 
-func readRecords(ctx context.Context, parts []string, archives map[string]*archiveRows) (int64, error) {
+func readRecords(ctx context.Context, parts []string, archives map[string]*archiveRows, log *zap.Logger) (int64, error) {
 	var records int64
 	for _, part := range parts {
 		if err := ctx.Err(); err != nil {
@@ -334,6 +334,10 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 				}
 				archives[rec.ID.Archive.Path] = archive
 			}
+			if existing, ok := archive.Records[rec.ID.Archive.Index]; ok {
+				logDuplicateArchiveIndex(log, part, rec.ID.Archive.Path, rec.ID.Archive.Index, existing, rec)
+				continue
+			}
 			archive.Records[rec.ID.Archive.Index] = rec
 		}
 		if err := r.Close(); err != nil {
@@ -341,6 +345,26 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 		}
 	}
 	return records, nil
+}
+
+func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, index int, existing model.Record, duplicate model.Record) {
+	if log == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("part", part),
+		zap.String("archive", archivePath),
+		zap.Int("archive_index", index),
+		zap.Int64("existing_book_id", existing.ID.BookID),
+		zap.Int64("duplicate_book_id", duplicate.ID.BookID),
+	}
+	if existing.ID.Archive != nil {
+		fields = append(fields, zap.String("existing_archive_entry", existing.ID.Archive.Entry))
+	}
+	if duplicate.ID.Archive != nil {
+		fields = append(fields, zap.String("duplicate_archive_entry", duplicate.ID.Archive.Entry))
+	}
+	log.Warn("Duplicate archive index in INPX input; keeping first record", fields...)
 }
 
 func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archives map[string]*archiveRows, opts Options) (Stats, error) {

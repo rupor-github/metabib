@@ -1,6 +1,7 @@
 package inpxutil
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"metabib/jsonl"
 	"metabib/model"
 )
 
@@ -48,5 +50,63 @@ func TestDiscoverInputPartsRequiresMetadataParts(t *testing.T) {
 	_, err := DiscoverInputParts("all", "all.meta.json.zst", model.MergeMetadata{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "does not list JSONL parts") {
 		t.Fatalf("DiscoverInputParts() error = %v, want missing parts error", err)
+	}
+}
+
+func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	archivePath := filepath.Join(dir, "books.zip")
+	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	for _, rec := range []model.Record{
+		testRecord(archivePath, "1.fb2", 0, 1),
+		testRecord(archivePath, "2.fb2", 0, 2),
+		testRecord(archivePath, "3.fb2", 2, 3),
+		testRecord(archivePath, "4.fb2", 2, 4),
+	} {
+		if err := w.Write(rec); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	part := filepath.Join(dir, "all.0000000001-0000000004.jsonl")
+	archives := map[string]*ArchiveRows{
+		archivePath: {Meta: model.MergeArchiveMetadata{Path: archivePath, Name: filepath.Base(archivePath)}, Records: make(map[int]model.Record)},
+	}
+	core, logs := observer.New(zap.WarnLevel)
+
+	loaded, err := ReadRecords(context.Background(), []string{part}, archives, zap.New(core))
+	if err != nil {
+		t.Fatalf("ReadRecords() error = %v", err)
+	}
+	if loaded != 4 {
+		t.Fatalf("loaded = %d, want 4", loaded)
+	}
+	if archives[archivePath].Records[0].ID.BookID != 1 || archives[archivePath].Records[2].ID.BookID != 3 {
+		t.Fatalf("records = %#v, want first record for each duplicate index", archives[archivePath].Records)
+	}
+	if logs.FilterMessage("Duplicate archive index in INPX input; keeping first record").Len() != 2 {
+		t.Fatalf("logs = %#v, want two duplicate warnings", logs.All())
+	}
+}
+
+func testRecord(archivePath string, entry string, index int, bookID int64) model.Record {
+	return model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			BookID: bookID,
+			Archive: &model.ArchiveInfo{
+				Path:  archivePath,
+				Entry: entry,
+				Index: index,
+			},
+		},
 	}
 }
