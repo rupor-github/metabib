@@ -116,6 +116,17 @@ func (w *Writer) Stage() error {
 	return w.closePart()
 }
 
+func (w *Writer) StagedFinalPaths() []string {
+	if w == nil || len(w.stagedParts) == 0 {
+		return nil
+	}
+	paths := make([]string, len(w.stagedParts))
+	for idx, part := range w.stagedParts {
+		paths[idx] = part.finalPath
+	}
+	return paths
+}
+
 func (w *Writer) Commit() error {
 	if w == nil {
 		return nil

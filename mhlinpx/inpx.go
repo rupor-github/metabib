@@ -167,7 +167,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 		return stats, err
 	}
 	stats.DumpDate = meta.Database.DumpDate
-	parts, err := discoverInputParts(opts.InputPrefix)
+	parts, err := discoverInputParts(opts.InputPrefix, metaPath, meta, opts.Log)
 	if err != nil {
 		return stats, err
 	}
@@ -236,20 +236,57 @@ func discoverMetadata(prefix string) (string, error) {
 	return matches[0], nil
 }
 
-func discoverInputParts(prefix string) ([]string, error) {
+func discoverInputParts(prefix string, metaPath string, meta model.MergeMetadata, log *zap.Logger) ([]string, error) {
+	if len(meta.Parts) == 0 {
+		return nil, fmt.Errorf("merge metadata %q does not list JSONL parts; rerun metabib merge", metaPath)
+	}
+	baseDir := filepath.Dir(metaPath)
+	parts := make([]string, 0, len(meta.Parts))
+	listed := make(map[string]struct{}, len(meta.Parts))
+	for _, part := range meta.Parts {
+		if strings.TrimSpace(part) == "" {
+			return nil, fmt.Errorf("merge metadata %q contains an empty JSONL part path", metaPath)
+		}
+		path := part
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(baseDir, path)
+		}
+		path = filepath.Clean(path)
+		parts = append(parts, path)
+		listed[comparablePath(path)] = struct{}{}
+	}
+	warnUnlistedInputParts(prefix, listed, log)
+	return parts, nil
+}
+
+func warnUnlistedInputParts(prefix string, listed map[string]struct{}, log *zap.Logger) {
+	if log == nil {
+		return
+	}
 	matches, err := filepath.Glob(prefix + ".*.jsonl*")
 	if err != nil {
-		return nil, err
+		log.Warn("Unable to scan for unlisted JSONL input parts", zap.String("prefix", prefix), zap.Error(err))
+		return
 	}
 	matches = slices.DeleteFunc(matches, func(path string) bool {
 		base := filepath.Base(path)
 		return strings.Contains(base, ".meta.json") || strings.HasSuffix(base, ".tmp")
 	})
 	sort.Strings(matches)
-	if len(matches) == 0 {
-		return nil, fmt.Errorf("no JSONL input parts found for %q", prefix)
+	for _, match := range matches {
+		if _, ok := listed[comparablePath(match)]; ok {
+			continue
+		}
+		log.Warn("Ignoring JSONL input part not listed in merge metadata", zap.String("file", match))
 	}
-	return matches, nil
+}
+
+func comparablePath(path string) string {
+	path = filepath.Clean(path)
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 func readMetadata(path string) (model.MergeMetadata, error) {

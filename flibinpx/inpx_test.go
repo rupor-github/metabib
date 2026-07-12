@@ -36,6 +36,7 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 			Entries: 2,
 			Ignored: []model.IndexRange{{Start: 1, End: 1}},
 		}},
+		Parts: []string{"all.0000000001-0000000002.jsonl"},
 	})
 	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
 	if err != nil {

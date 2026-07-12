@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -537,10 +538,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	metadata, err := stageMergeMetadata(outputPrefix, compression, meta, env.Log)
-	if err != nil {
-		return err
-	}
+	var metadata *stagedMergeMetadata
 	err = writeOutput(ctx, outputPrefix, cmd.String("output-part-size"), compressionValue, env.Log, func(out *jsonl.Writer) error {
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
@@ -550,6 +548,13 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 			return mergeArchiveManifests(ctx, archivePlan, dbIndex, out, env.Log)
 		}
 		_, err := library.CopyManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
+		return err
+	}, func(parts []string) error {
+		meta.Parts, err = mergeMetadataPartPaths(outputPrefix, compression, parts)
+		if err != nil {
+			return err
+		}
+		metadata, err = stageMergeMetadata(outputPrefix, compression, meta, env.Log)
 		return err
 	})
 	if err != nil {
@@ -763,6 +768,7 @@ func writeOutput(
 	compressionValue string,
 	log *zap.Logger,
 	write func(*jsonl.Writer) error,
+	beforeCommit func([]string) error,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -784,10 +790,35 @@ func writeOutput(
 	if writeErr != nil {
 		return errors.Join(writeErr, out.Abort())
 	}
+	if err := out.Stage(); err != nil {
+		return errors.Join(err, out.Abort())
+	}
+	parts := out.StagedFinalPaths()
+	if len(parts) == 0 {
+		return errors.Join(errors.New("JSONL output did not produce any parts"), out.Abort())
+	}
+	if beforeCommit != nil {
+		if err := beforeCommit(parts); err != nil {
+			return errors.Join(err, out.Abort())
+		}
+	}
 	if err := out.Commit(); err != nil {
 		return errors.Join(err, out.Abort())
 	}
 	return nil
+}
+
+func mergeMetadataPartPaths(prefix string, compression jsonl.Compression, parts []string) ([]string, error) {
+	metadataDir := filepath.Dir(jsonl.CompressedPath(prefix+".meta.json", compression))
+	out := make([]string, len(parts))
+	for idx, part := range parts {
+		rel, err := filepath.Rel(metadataDir, part)
+		if err != nil {
+			return nil, fmt.Errorf("make JSONL part path relative to metadata: %w", err)
+		}
+		out[idx] = rel
+	}
+	return out, nil
 }
 
 func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger) (databaseIndex, error) {

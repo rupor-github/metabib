@@ -90,7 +90,7 @@ func TestWriteOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out")
 	err := writeOutput(context.Background(), path, "", "", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out")
 	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
@@ -119,6 +119,26 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("matches = %#v", matches)
+	}
+}
+
+func TestWriteOutputWithPartsReportsCommittedParts(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "out")
+	var metadataParts []string
+	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
+		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
+	}, func(parts []string) error {
+		var err error
+		metadataParts, err = mergeMetadataPartPaths(path, jsonl.CompressionNone, parts)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("writeOutput() error = %v", err)
+	}
+	if len(metadataParts) != 1 || metadataParts[0] != "out.0000000042-0000000042.jsonl" {
+		t.Fatalf("metadata parts = %#v", metadataParts)
 	}
 }
 
@@ -136,7 +156,7 @@ func TestWriteOutputReturnsCloseError(t *testing.T) {
 			return err
 		}
 		return nil
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("writeOutput() error = nil, want close rename error")
 	}
@@ -154,7 +174,7 @@ func TestWriteOutputAbortsOnWriteError(t *testing.T) {
 			}
 		}
 		return writeErr
-	})
+	}, nil)
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("writeOutput() error = %v, want write error", err)
 	}

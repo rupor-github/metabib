@@ -30,6 +30,7 @@ type MergeMetadata struct {
 	Library     string                 `json:"library"`
 	Database    MergeDatabaseMetadata  `json:"database"`
 	Archives    []MergeArchiveMetadata `json:"archives,omitempty"`
+	Parts       []string               `json:"parts"`
 	Compression string                 `json:"compression,omitempty"`
 	Created     string                 `json:"created,omitempty"`
 }

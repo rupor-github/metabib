@@ -34,6 +34,7 @@ func TestGenerate(t *testing.T) {
 			Entries: 3,
 			Ignored: []model.IndexRange{{Start: 1, End: 1}},
 		}},
+		Parts: []string{"all.0000000001-0000000001.jsonl"},
 	})
 	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
 	if err != nil {
