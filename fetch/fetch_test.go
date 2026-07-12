@@ -2,9 +2,14 @@ package fetch
 
 import (
 	"archive/zip"
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetLastBookID(t *testing.T) {
@@ -109,4 +114,111 @@ func TestProcessFile(t *testing.T) {
 	if _, err := os.Stat(out); err != nil {
 		t.Fatalf("stat output: %v", err)
 	}
+}
+
+func TestFetchFileResumeValidatesContentRange(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") != "bytes=3-" {
+			http.Error(w, "bad range", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Range", "bytes 3-5/6")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("def"))
+	}))
+	defer server.Close()
+
+	tmp := filepath.Join(t.TempDir(), "download.tmp")
+	if err := os.WriteFile(tmp, []byte("abc"), 0o644); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	f := testFetcher(server)
+	_, size, err := f.fetchFile(context.Background(), server.URL, tmp, 3)
+	if err != nil {
+		t.Fatalf("fetchFile() error = %v", err)
+	}
+	if size != 6 {
+		t.Fatalf("size = %d, want 6", size)
+	}
+	if got := readString(t, tmp); got != "abcdef" {
+		t.Fatalf("temp content = %q, want abcdef", got)
+	}
+}
+
+func TestFetchFileRestartsWhenResumeRangeIgnored(t *testing.T) {
+	t.Parallel()
+
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("abcdef"))
+	}))
+	defer server.Close()
+
+	tmp := filepath.Join(t.TempDir(), "download.tmp")
+	if err := os.WriteFile(tmp, []byte("abc"), 0o644); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	f := testFetcher(server)
+	_, size, err := f.fetchFile(context.Background(), server.URL, tmp, 3)
+	if err != nil {
+		t.Fatalf("fetchFile() error = %v", err)
+	}
+	if size != 6 {
+		t.Fatalf("size = %d, want 6", size)
+	}
+	if requests != 2 {
+		t.Fatalf("requests = %d, want resume plus restart", requests)
+	}
+	if got := readString(t, tmp); got != "abcdef" {
+		t.Fatalf("temp content = %q, want restarted file", got)
+	}
+}
+
+func TestFetchFileRejectsMismatchedContentRange(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", "bytes 0-2/6")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("abc"))
+	}))
+	defer server.Close()
+
+	tmp := filepath.Join(t.TempDir(), "download.tmp")
+	if err := os.WriteFile(tmp, []byte("abc"), 0o644); err != nil {
+		t.Fatalf("write temp: %v", err)
+	}
+	f := testFetcher(server)
+	_, _, err := f.fetchFile(context.Background(), server.URL, tmp, 3)
+	if err == nil || !strings.Contains(err.Error(), "Content-Range starting at byte 0") {
+		t.Fatalf("fetchFile() error = %v, want Content-Range mismatch", err)
+	}
+	if got := readString(t, tmp); got != "abc" {
+		t.Fatalf("temp content after failed resume = %q, want unchanged partial", got)
+	}
+}
+
+func testFetcher(server *httptest.Server) fetcher {
+	return fetcher{
+		opts: Options{
+			Continue:  true,
+			Timeout:   time.Second,
+			ChunkSize: 1024,
+		},
+		client:    server.Client(),
+		userAgent: "metabib-test",
+	}
+}
+
+func readString(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	return string(data)
 }

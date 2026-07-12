@@ -299,11 +299,34 @@ func (f fetcher) fetchFile(ctx context.Context, sourceURL string, tmpIn string, 
 	if err != nil {
 		return tmpOut, size, fmt.Errorf("prepare temporary file: %w", err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	resp, err := f.request(ctx, http.MethodGet, sourceURL, start)
 	if err != nil {
 		return tmpOut, size, err
+	}
+	if start > 0 {
+		restart, err := validateResumeResponse(resp, start)
+		if err != nil {
+			_ = resp.Body.Close()
+			return tmpOut, size, err
+		}
+		if restart {
+			_ = resp.Body.Close()
+			if err := out.Close(); err != nil {
+				return tmpOut, size, fmt.Errorf("close temporary file before restart: %w", err)
+			}
+			out, err = os.Create(tmpOut)
+			if err != nil {
+				return tmpOut, 0, fmt.Errorf("restart temporary file: %w", err)
+			}
+			size = 0
+			start = 0
+			resp, err = f.request(ctx, http.MethodGet, sourceURL, 0)
+			if err != nil {
+				return tmpOut, size, err
+			}
+		}
 	}
 	defer resp.Body.Close()
 	timer := time.AfterFunc(f.opts.Timeout, func() { _ = resp.Body.Close() })
@@ -324,6 +347,43 @@ func (f fetcher) fetchFile(ctx context.Context, sourceURL string, tmpIn string, 
 		return tmpOut, size, temporaryError{err: fmt.Errorf("read response body: %w", copyErr)}
 	}
 	return tmpOut, size, nil
+}
+
+func validateResumeResponse(resp *http.Response, start int64) (bool, error) {
+	if resp.StatusCode == http.StatusOK {
+		return true, nil
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return false, fmt.Errorf("resume request from byte %d returned status %s", start, resp.Status)
+	}
+	rangeStart, err := parseContentRangeStart(resp.Header.Get("Content-Range"))
+	if err != nil {
+		return false, err
+	}
+	if rangeStart != start {
+		return false, fmt.Errorf("resume request from byte %d returned Content-Range starting at byte %d", start, rangeStart)
+	}
+	return false, nil
+}
+
+func parseContentRangeStart(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("resume response missing Content-Range")
+	}
+	if !strings.HasPrefix(strings.ToLower(value), "bytes ") {
+		return 0, fmt.Errorf("unsupported Content-Range %q", value)
+	}
+	rangePart := strings.TrimSpace(value[len("bytes "):])
+	dash := strings.IndexByte(rangePart, '-')
+	if dash <= 0 {
+		return 0, fmt.Errorf("invalid Content-Range %q", value)
+	}
+	start, err := strconv.ParseInt(rangePart[:dash], 10, 64)
+	if err != nil || start < 0 {
+		return 0, fmt.Errorf("invalid Content-Range %q", value)
+	}
+	return start, nil
 }
 
 func (f fetcher) request(ctx context.Context, method string, sourceURL string, start int64) (*http.Response, error) {
