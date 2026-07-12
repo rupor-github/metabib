@@ -53,6 +53,21 @@ func TestDiscoverInputPartsRequiresMetadataParts(t *testing.T) {
 	}
 }
 
+func TestCleanse(t *testing.T) {
+	t.Parallel()
+
+	if got := Cleanse("plain text"); got != "plain text" {
+		t.Fatalf("Cleanse(no-op) = %q", got)
+	}
+	got := Cleanse("a" + FieldSep + "b\rc\r\nd\ne\u00a0f")
+	if strings.Contains(got, FieldSep) || strings.Contains(got, "\r") || strings.Contains(got, "\n") || strings.Contains(got, "\u00a0") {
+		t.Fatalf("Cleanse() = %q, still contains layout characters", got)
+	}
+	if got != "a b c de f" {
+		t.Fatalf("Cleanse() = %q, want %q", got, "a b c de f")
+	}
+}
+
 func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
 	t.Parallel()
 

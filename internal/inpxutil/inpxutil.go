@@ -26,6 +26,14 @@ import (
 
 const FieldSep = "\x04"
 
+var cleanseReplacer = strings.NewReplacer(
+	"\r\n", " ",
+	"\r", " ",
+	"\n", "",
+	FieldSep, " ",
+	"\u00a0", " ",
+)
+
 type Stats struct {
 	OutputPath string
 	DumpDate   string
@@ -305,12 +313,7 @@ func InRanges(ranges []model.IndexRange, idx int) bool {
 }
 
 func Cleanse(value string) string {
-	value = strings.ReplaceAll(value, "\r\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\n", "")
-	value = strings.ReplaceAll(value, FieldSep, " ")
-	value = strings.ReplaceAll(value, "\u00a0", " ")
-	return value
+	return cleanseReplacer.Replace(value)
 }
 
 func DateOnly(value string) string {

@@ -23,6 +23,7 @@ import (
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
+	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
 )
@@ -558,7 +559,7 @@ func recordLine(rec model.Record, opts Options) string {
 		fix(title, opts.QuickFix, opts.Limits.Title),
 		fix(sequence, opts.QuickFix, opts.Limits.Sequence),
 		seqNum,
-		cleanse(fileName),
+		fileName,
 		strconv.FormatInt(size, 10),
 		strconv.FormatInt(rec.ID.BookID, 10),
 		deleted,
@@ -571,7 +572,7 @@ func recordLine(rec model.Record, opts Options) string {
 	if opts.Format == FormatRUKS {
 		fields = append(fields, md5, replaced)
 	}
-	return strings.Join(fields, fieldSep) + fieldSep + "\r\n"
+	return joinINPFields(fields)
 }
 
 func fb2TitleInfo(src model.FB2Source) *model.FB2TitleInfo {
@@ -596,11 +597,11 @@ func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model
 	}
 	var b strings.Builder
 	for _, author := range authors {
-		b.WriteString(fix(cleanse(author.LastName), opts.QuickFix, opts.Limits.AuthorFamily))
+		b.WriteString(fix(author.LastName, opts.QuickFix, opts.Limits.AuthorFamily))
 		b.WriteByte(',')
-		b.WriteString(fix(cleanse(author.FirstName), opts.QuickFix, opts.Limits.AuthorName))
+		b.WriteString(fix(author.FirstName, opts.QuickFix, opts.Limits.AuthorName))
 		b.WriteByte(',')
-		b.WriteString(fix(cleanse(author.MiddleName), opts.QuickFix, opts.Limits.AuthorMiddle))
+		b.WriteString(fix(author.MiddleName, opts.QuickFix, opts.Limits.AuthorMiddle))
 		b.WriteByte(':')
 	}
 	return b.String()
@@ -609,11 +610,11 @@ func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model
 func fb2AuthorsString(authors []model.FB2Person, opts Options) string {
 	var b strings.Builder
 	for _, author := range authors {
-		b.WriteString(fix(cleanse(author.LastName), opts.QuickFix, opts.Limits.AuthorFamily))
+		b.WriteString(fix(author.LastName, opts.QuickFix, opts.Limits.AuthorFamily))
 		b.WriteByte(',')
-		b.WriteString(fix(cleanse(author.FirstName), opts.QuickFix, opts.Limits.AuthorName))
+		b.WriteString(fix(author.FirstName, opts.QuickFix, opts.Limits.AuthorName))
 		b.WriteByte(',')
-		b.WriteString(fix(cleanse(author.MiddleName), opts.QuickFix, opts.Limits.AuthorMiddle))
+		b.WriteString(fix(author.MiddleName, opts.QuickFix, opts.Limits.AuthorMiddle))
 		b.WriteByte(':')
 	}
 	if b.Len() == 0 {
@@ -626,7 +627,7 @@ func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string 
 	if len(genres) > 0 {
 		var b strings.Builder
 		for _, genre := range genres {
-			b.WriteString(cleanse(genre.Code))
+			b.WriteString(genre.Code)
 			b.WriteByte(':')
 		}
 		return b.String()
@@ -634,7 +635,7 @@ func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string 
 	if titleInfo != nil && len(titleInfo.Genres) > 0 {
 		var b strings.Builder
 		for _, genre := range titleInfo.Genres {
-			b.WriteString(cleanse(genre.Code))
+			b.WriteString(genre.Code)
 			b.WriteByte(':')
 		}
 		return b.String()
@@ -701,6 +702,13 @@ func fb2Sequence(titleInfo *model.FB2TitleInfo) (string, string) {
 
 func dummyLine(index int) string {
 	fields := []string{"dummy:", "other:", "dummy record", "", "", "", "1", strconv.Itoa(index), "1", "EXT", "2000-01-01", "en", "0", ""}
+	return joinINPFields(fields)
+}
+
+func joinINPFields(fields []string) string {
+	for i := range fields {
+		fields[i] = inpxutil.Cleanse(fields[i])
+	}
 	return strings.Join(fields, fieldSep) + fieldSep + "\r\n"
 }
 
@@ -774,17 +782,8 @@ func displayDate(meta model.MergeMetadata) string {
 	return date
 }
 
-func cleanse(value string) string {
-	value = strings.ReplaceAll(value, "\r\n", " ")
-	value = strings.ReplaceAll(value, "\r", " ")
-	value = strings.ReplaceAll(value, "\n", "")
-	value = strings.ReplaceAll(value, fieldSep, " ")
-	value = strings.ReplaceAll(value, "\u00a0", " ")
-	return value
-}
-
 func fix(value string, enabled bool, maxLen int) string {
-	value = cleanse(value)
+	value = inpxutil.Cleanse(value)
 	if !enabled || maxLen <= 0 {
 		return value
 	}

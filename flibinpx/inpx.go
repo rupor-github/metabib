@@ -407,19 +407,19 @@ func buildRecordFields(rec model.Record, archive model.MergeArchiveMetadata, opt
 	return recordFields{
 		Authors:  authorsString(db.Present, db.Authors, titleInfo, opts),
 		Genres:   genresString(db.Genres, titleInfo),
-		Title:    clean(title),
-		File:     clean(fileName),
+		Title:    inpxutil.Cleanse(title),
+		File:     inpxutil.Cleanse(fileName),
 		Size:     strconv.FormatInt(size, 10),
 		LibID:    strconv.FormatInt(rec.ID.BookID, 10),
-		Deleted:  clean(deleted),
-		Ext:      clean(strings.TrimPrefix(ext, ".")),
-		Date:     clean(date),
-		Folder:   clean(folder),
-		Lang:     clean(strings.TrimSpace(lang)),
+		Deleted:  inpxutil.Cleanse(deleted),
+		Ext:      inpxutil.Cleanse(strings.TrimPrefix(ext, ".")),
+		Date:     inpxutil.Cleanse(date),
+		Folder:   inpxutil.Cleanse(folder),
+		Lang:     inpxutil.Cleanse(strings.TrimSpace(lang)),
 		Rate:     rate,
 		Keywords: keywordsString(keywords),
-		Year:     clean(year),
-		Source:   clean(opts.SourceLib),
+		Year:     inpxutil.Cleanse(year),
+		Source:   inpxutil.Cleanse(opts.SourceLib),
 	}, true
 }
 
@@ -428,8 +428,8 @@ func recordLine(fields recordFields, seq sequence, insNo int) string {
 		fields.Authors,
 		fields.Genres,
 		fields.Title,
-		clean(seq.Name),
-		clean(seq.Number),
+		inpxutil.Cleanse(seq.Name),
+		inpxutil.Cleanse(seq.Number),
 		fields.File,
 		fields.Size,
 		fields.LibID,
@@ -476,11 +476,11 @@ func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model
 	}
 	var b strings.Builder
 	for _, author := range authors {
-		b.WriteString(clean(author.LastName))
+		b.WriteString(inpxutil.Cleanse(author.LastName))
 		b.WriteByte(',')
-		b.WriteString(clean(author.FirstName))
+		b.WriteString(inpxutil.Cleanse(author.FirstName))
 		b.WriteByte(',')
-		b.WriteString(clean(author.MiddleName))
+		b.WriteString(inpxutil.Cleanse(author.MiddleName))
 		b.WriteByte(':')
 	}
 	return b.String()
@@ -489,11 +489,11 @@ func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model
 func fb2AuthorsString(authors []model.FB2Person) string {
 	var b strings.Builder
 	for _, author := range authors {
-		b.WriteString(clean(author.LastName))
+		b.WriteString(inpxutil.Cleanse(author.LastName))
 		b.WriteByte(',')
-		b.WriteString(clean(author.FirstName))
+		b.WriteString(inpxutil.Cleanse(author.FirstName))
 		b.WriteByte(',')
-		b.WriteString(clean(author.MiddleName))
+		b.WriteString(inpxutil.Cleanse(author.MiddleName))
 		b.WriteByte(':')
 	}
 	if b.Len() == 0 {
@@ -506,7 +506,7 @@ func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string 
 	if len(genres) > 0 {
 		var b strings.Builder
 		for _, genre := range genres {
-			b.WriteString(clean(genre.Code))
+			b.WriteString(inpxutil.Cleanse(genre.Code))
 			b.WriteByte(':')
 		}
 		return b.String()
@@ -514,7 +514,7 @@ func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string 
 	if titleInfo != nil && len(titleInfo.Genres) > 0 {
 		var b strings.Builder
 		for _, genre := range titleInfo.Genres {
-			b.WriteString(clean(genre.Code))
+			b.WriteString(inpxutil.Cleanse(genre.Code))
 			b.WriteByte(':')
 		}
 		return b.String()
@@ -695,7 +695,7 @@ func keywordsString(value string) string {
 	})
 	var b strings.Builder
 	for _, part := range parts {
-		part = strings.TrimSpace(clean(part))
+		part = strings.TrimSpace(inpxutil.Cleanse(part))
 		if part == "" {
 			continue
 		}
@@ -703,8 +703,4 @@ func keywordsString(value string) string {
 		b.WriteByte(':')
 	}
 	return b.String()
-}
-
-func clean(value string) string {
-	return inpxutil.Cleanse(value)
 }

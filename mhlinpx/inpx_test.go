@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
 )
@@ -206,12 +207,12 @@ func TestRecordLineRUKSAppendsMD5AndReplacement(t *testing.T) {
 func TestCleanseRemovesINPLayoutCharacters(t *testing.T) {
 	t.Parallel()
 
-	got := cleanse("a" + fieldSep + "b\rc\r\nd\ne\u00a0f")
+	got := inpxutil.Cleanse("a" + fieldSep + "b\rc\r\nd\ne\u00a0f")
 	if strings.Contains(got, fieldSep) || strings.Contains(got, "\r") || strings.Contains(got, "\n") {
-		t.Fatalf("cleanse() = %q, still contains layout characters", got)
+		t.Fatalf("Cleanse() = %q, still contains layout characters", got)
 	}
 	if got != "a b c de f" {
-		t.Fatalf("cleanse() = %q", got)
+		t.Fatalf("Cleanse() = %q", got)
 	}
 }
 
@@ -219,21 +220,33 @@ func TestRecordLineSanitizesFieldSeparators(t *testing.T) {
 	t.Parallel()
 
 	rec := model.Record{
-		ID: model.RecordID{BookID: 1, FileName: "file" + fieldSep + "name", Extension: "fb2"},
+		ID: model.RecordID{BookID: 1, FileName: "file" + fieldSep + "name", Extension: "fb2" + fieldSep + "bad"},
 		Source: model.RecordSources{Database: model.DatabaseSource{
 			Present: true,
-			Book:    &model.DBBook{BookID: 1, Title: "bad" + fieldSep + "title", FileType: "fb2", Keywords: "bad\rkeywords"},
+			Book: &model.DBBook{
+				BookID:   1,
+				Title:    "bad" + fieldSep + "title",
+				Time:     "bad" + fieldSep + "date",
+				Lang:     "en" + fieldSep + "ru",
+				Deleted:  "bad\rdelete",
+				Keywords: "bad\rkeywords",
+				MD5:      "md5" + fieldSep + "bad",
+			},
 			Authors: []model.Contributor{{FirstName: "First" + fieldSep + "Name", LastName: "Last\rName"}},
 			Genres:  []model.DBGenre{{Code: "sf" + fieldSep + "bad"}},
+			Sequences: []model.DBSequence{{
+				Name:   "seq" + fieldSep + "bad",
+				Number: 7,
+			}},
 		}},
 	}
-	line := recordLine(rec, Options{Format: Format2X, QuickFix: true, Limits: DefaultLimits()})
+	line := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
 	fields := strings.Split(strings.TrimSuffix(line, "\r\n"), fieldSep)
-	if len(fields) != 15 {
+	if len(fields) != 17 {
 		t.Fatalf("field count = %d fields=%#v line=%q", len(fields), fields, line)
 	}
 	for idx, field := range fields[:len(fields)-1] {
-		if strings.Contains(field, fieldSep) || strings.Contains(field, "\r") {
+		if strings.Contains(field, fieldSep) || strings.Contains(field, "\r") || strings.Contains(field, "\n") {
 			t.Fatalf("field %d = %q contains unsanitized layout character", idx, field)
 		}
 	}
