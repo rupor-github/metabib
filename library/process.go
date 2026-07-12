@@ -29,6 +29,24 @@ const recordSchema = "metabib.record/1"
 
 const progressInterval = 3000
 
+func resultWindow(workers int) int {
+	return max(workers*2, 1)
+}
+
+func pendingWorkerErr(errs <-chan error, fallback error) error {
+	select {
+	case err := <-errs:
+		if err != nil {
+			return err
+		}
+	default:
+	}
+	if fallback != nil {
+		return fallback
+	}
+	return fmt.Errorf("workers stopped before all results were processed")
+}
+
 type dbBatch struct {
 	Index int
 	IDs   []int64
@@ -228,21 +246,46 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		})
 	}
 
-	go func() {
-		defer close(jobs)
-		for idx, start := 0, 0; start < len(ids); idx, start = idx+1, start+batchSize {
+	jobsClosed := false
+	closeJobs := func() {
+		if !jobsClosed {
+			close(jobs)
+			jobsClosed = true
+		}
+	}
+	totalBatches := (len(ids) + batchSize - 1) / batchSize
+	nextSubmit := 0
+	submitBatches := func(nextWrite int) error {
+		for nextSubmit < totalBatches && nextSubmit-nextWrite < resultWindow(workers) {
+			start := nextSubmit * batchSize
 			end := min(start+batchSize, len(ids))
 			select {
-			case jobs <- dbBatch{Index: idx, IDs: ids[start:end]}:
+			case jobs <- dbBatch{Index: nextSubmit, IDs: ids[start:end]}:
+				nextSubmit++
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			}
 		}
-	}()
+		if nextSubmit == totalBatches {
+			closeJobs()
+		}
+		return nil
+	}
+	resultsDone := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(results)
+		close(resultsDone)
 	}()
+	defer func() {
+		cancel()
+		closeJobs()
+		<-resultsDone
+	}()
+	if err := submitBatches(0); err != nil {
+		cancel()
+		return err
+	}
 
 	var processed int64
 	nextBatch := 0
@@ -283,10 +326,20 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		}
 		return nil
 	}
-	for batch := range results {
-		if err := ctx.Err(); err != nil {
+	for nextBatch < totalBatches {
+		var batch dbBatchResult
+		select {
+		case err := <-errs:
 			cancel()
 			return err
+		case <-ctx.Done():
+			cancel()
+			return pendingWorkerErr(errs, ctx.Err())
+		case ready, ok := <-results:
+			if !ok {
+				return pendingWorkerErr(errs, nil)
+			}
+			batch = ready
 		}
 		pending[batch.Index] = batch
 		for {
@@ -300,6 +353,10 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 			}
 			delete(pending, nextBatch)
 			nextBatch++
+		}
+		if err := submitBatches(nextBatch); err != nil {
+			cancel()
+			return pendingWorkerErr(errs, err)
 		}
 	}
 	select {
@@ -455,23 +512,48 @@ func processArchive(
 			}
 		})
 	}
-	go func() {
-		defer close(jobs)
-		for idx, start := 0, 0; start < len(entries); idx, start = idx+1, start+batchSize {
+	jobsClosed := false
+	closeJobs := func() {
+		if !jobsClosed {
+			close(jobs)
+			jobsClosed = true
+		}
+	}
+	totalBatches := (len(entries) + batchSize - 1) / batchSize
+	nextSubmit := 0
+	submitBatches := func(nextWrite int) error {
+		for nextSubmit < totalBatches && nextSubmit-nextWrite < resultWindow(workers) {
+			start := nextSubmit * batchSize
 			end := min(start+batchSize, len(entries))
 			select {
-			case jobs <- archiveBatch{Index: idx, Entries: entries[start:end]}:
+			case jobs <- archiveBatch{Index: nextSubmit, Entries: entries[start:end]}:
+				nextSubmit++
 			case <-ctx.Done():
-				return
+				return ctx.Err()
 			}
 		}
-	}()
+		if nextSubmit == totalBatches {
+			closeJobs()
+		}
+		return nil
+	}
+	resultsDone := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(results)
+		close(resultsDone)
 	}()
-
+	defer func() {
+		cancel()
+		closeJobs()
+		<-resultsDone
+	}()
 	var records int64
+	if err := submitBatches(0); err != nil {
+		cancel()
+		return records, err
+	}
+
 	nextBatch := 0
 	pending := make(map[int]dbBatchResult)
 	var dbLoadElapsed, fb2ParseElapsed, md5Elapsed, fallbackLookupElapsed, outputWaitElapsed, writeElapsed time.Duration
@@ -514,10 +596,20 @@ func processArchive(
 		}
 		return nil
 	}
-	for batch := range results {
-		if err := ctx.Err(); err != nil {
+	for nextBatch < totalBatches {
+		var batch dbBatchResult
+		select {
+		case err := <-errs:
 			cancel()
 			return records, err
+		case <-ctx.Done():
+			cancel()
+			return records, pendingWorkerErr(errs, ctx.Err())
+		case ready, ok := <-results:
+			if !ok {
+				return records, pendingWorkerErr(errs, nil)
+			}
+			batch = ready
 		}
 		pending[batch.Index] = batch
 		for {
@@ -531,6 +623,10 @@ func processArchive(
 			}
 			delete(pending, nextBatch)
 			nextBatch++
+		}
+		if err := submitBatches(nextBatch); err != nil {
+			cancel()
+			return records, pendingWorkerErr(errs, err)
 		}
 	}
 	select {
