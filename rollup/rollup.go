@@ -182,6 +182,7 @@ func processUpdates(
 	lastBook := work.lastBook
 	existingEnd := merge.end
 	copiedNewEntry := false
+	activeWorkIDs := make(map[int]struct{})
 	for updateIndex, update := range updates {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
@@ -224,6 +225,19 @@ func processUpdates(
 				}
 				continue
 			}
+			if !updateIsExisting {
+				if _, ok := activeWorkIDs[id]; ok {
+					if opts.Log != nil {
+						opts.Log.Warn(
+							"Skipping duplicate archive entry from overlapping update",
+							zap.String("file", updatePath),
+							zap.String("entry", file.Name),
+							zap.Int("book_id", id),
+						)
+					}
+					continue
+				}
+			}
 			if opts.ValidateCRC {
 				if err := validateEntryCRC(file); err != nil {
 					return Result{}, errors.Join(
@@ -245,6 +259,7 @@ func processUpdates(
 				lastBook = id
 			}
 			if !updateIsExisting {
+				activeWorkIDs[id] = struct{}{}
 				copiedNewEntry = true
 				leftBytes -= int64(file.CompressedSize64)
 			}
@@ -275,6 +290,7 @@ func processUpdates(
 				firstBook = 0
 				lastBook = 0
 				copiedNewEntry = false
+				activeWorkIDs = make(map[int]struct{})
 			}
 		}
 		if err := rc.Close(); err != nil {

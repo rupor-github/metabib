@@ -229,6 +229,49 @@ func TestRunKeepsNewEntriesFromOverlappingUpdates(t *testing.T) {
 	}
 }
 
+func TestRunSkipsDuplicatesWithinActiveWorkArchive(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	oldArchive := filepath.Join(archives, "fb2-0000000001-0000000100.zip")
+	writeZip(t, oldArchive, map[string]string{"1.fb2": "one", "100.fb2": "hundred"})
+	writeZip(t, filepath.Join(updates, "f.fb2.0000000101-0000000150.zip"), map[string]string{
+		"101.fb2": "one hundred one",
+		"120.fb2": "first copy",
+		"150.fb2": "one hundred fifty",
+	})
+	writeZip(t, filepath.Join(updates, "f.fb2.0000000120-0000000160.zip"), map[string]string{
+		"120.fb2": "second copy",
+		"151.fb2": "one hundred fifty one",
+		"160.fb2": "one hundred sixty",
+	})
+	core, logs := observer.New(zap.WarnLevel)
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir: archives,
+		UpdateDirs: []string{updates},
+		SizeBytes:  1_000_000,
+		Log:        zap.New(core),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000160.merging" {
+		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
+	}
+	counts := countZipEntryNames(t, res.ActiveMerge)
+	if counts["120.fb2"] != 1 {
+		t.Fatalf("120.fb2 count = %d, want 1", counts["120.fb2"])
+	}
+	if len(counts) != 7 {
+		t.Fatalf("entry counts = %#v, want 7 unique entries", counts)
+	}
+	if logs.FilterMessage("Skipping duplicate archive entry from overlapping update").Len() != 1 {
+		t.Fatalf("logs = %#v, want active-work duplicate warning", logs.All())
+	}
+}
+
 func TestRunUsesMinMaxRangeForOutOfOrderEntries(t *testing.T) {
 	t.Parallel()
 
@@ -467,6 +510,20 @@ func readRawZipEntry(t *testing.T, path string, name string) (uint16, []byte) {
 	}
 	t.Fatalf("entry %s not found in %s", name, path)
 	return 0, nil
+}
+
+func countZipEntryNames(t *testing.T, path string) map[string]int {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open zip %s: %v", path, err)
+	}
+	defer zr.Close()
+	counts := make(map[string]int, len(zr.File))
+	for _, file := range zr.File {
+		counts[file.Name]++
+	}
+	return counts
 }
 
 type zipEntry struct {
