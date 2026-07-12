@@ -274,7 +274,6 @@ func cacheCommand() *cli.Command {
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in existing manifests"},
 			&cli.BoolFlag{Name: "rebuild", Usage: "rebuild stale or invalid existing manifests after checksum verification"},
 			&cli.BoolFlag{Name: "no-import", Usage: "skip SQL dump import and use existing database"},
-			&cli.BoolFlag{Name: "db-overwrite", Usage: "overwrite managed data directory and drop database before import"},
 		},
 		Action: runCache,
 	}
@@ -394,7 +393,6 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 	archives := cmd.StringSlice("archives")
 	selectedArchives := len(archives) > 0
 	importDumps := !cmd.Bool("no-import")
-	overwriteDB := cmd.Bool("db-overwrite")
 	if !selectedDatabase && !selectedArchives {
 		return errors.New("nothing to cache: specify --database-dumps, --archives, or both")
 	}
@@ -447,7 +445,7 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 			if env.LogIO != nil {
 				logOut = env.LogIO
 			}
-			runtime, err := db.PrepareRuntime(ctx, cfg.Database, importDumps, overwriteDB, env.Log, logOut)
+			runtime, err := db.PrepareRuntime(ctx, cfg.Database, importDumps, env.Log, logOut)
 			if err != nil {
 				return err
 			}
@@ -457,8 +455,7 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 			cfg.Database = runtime.Config
 
 			if importDumps {
-				dropBeforeImport := shouldDropDatabaseBeforeImport(overwriteDB, runtime.Managed(), env.Log)
-				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose, true, dropBeforeImport)
+				importer := db.NewImporter(cfg.Database, runtime.Client, env.Log, logOut, env.Verbose, true)
 				if err := importer.PrepareDatabase(ctx); err != nil {
 					return err
 				}
@@ -483,19 +480,6 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 		reports = append(reports, report)
 	}
 	return failIfReportsNotReady(reports, false)
-}
-
-func shouldDropDatabaseBeforeImport(overwriteDB bool, managed bool, log *zap.Logger) bool {
-	if !overwriteDB {
-		return false
-	}
-	if managed {
-		return true
-	}
-	if log != nil {
-		log.Warn("Ignoring --db-overwrite database drop for external database runtime")
-	}
-	return false
 }
 
 func runMerge(ctx context.Context, cmd *cli.Command) error {

@@ -30,13 +30,12 @@ type DumpFile struct {
 }
 
 type Importer struct {
-	cfg              config.DatabaseConfig
-	client           string
-	log              *zap.Logger
-	logOut           io.Writer
-	verbose          bool
-	create           bool
-	dropBeforeImport bool
+	cfg     config.DatabaseConfig
+	client  string
+	log     *zap.Logger
+	logOut  io.Writer
+	verbose bool
+	create  bool
 }
 
 func NewImporter(
@@ -46,19 +45,17 @@ func NewImporter(
 	logOut io.Writer,
 	verbose bool,
 	create bool,
-	dropBeforeImport bool,
 ) *Importer {
 	if logOut == nil {
 		logOut = io.Discard
 	}
 	return &Importer{
-		cfg:              cfg,
-		client:           client,
-		log:              log,
-		logOut:           logOut,
-		verbose:          verbose,
-		create:           create,
-		dropBeforeImport: dropBeforeImport,
+		cfg:     cfg,
+		client:  client,
+		log:     log,
+		logOut:  logOut,
+		verbose: verbose,
+		create:  create,
 	}
 }
 
@@ -105,7 +102,7 @@ func DiscoverDumps(dir string, allowDateMismatch bool) ([]DumpFile, string, erro
 
 func (i *Importer) PrepareDatabase(ctx context.Context) error {
 	start := time.Now()
-	if !i.create && !i.dropBeforeImport {
+	if !i.create {
 		return nil
 	}
 	defer func() {
@@ -113,7 +110,6 @@ func (i *Importer) PrepareDatabase(ctx context.Context) error {
 			i.log.Info(
 				"Database prepared",
 				zap.String("database", i.cfg.Name),
-				zap.Bool("drop_before_import", i.dropBeforeImport),
 				zap.Bool("create", i.create),
 				zap.Duration("elapsed", time.Since(start)),
 			)
@@ -130,11 +126,6 @@ func (i *Importer) PrepareDatabase(ctx context.Context) error {
 	defer db.Close()
 	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping MariaDB admin connection: %w", err)
-	}
-	if i.dropBeforeImport {
-		if _, err := db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quoteIdentifier(i.cfg.Name)); err != nil {
-			return fmt.Errorf("drop database %q: %w", i.cfg.Name, err)
-		}
 	}
 	if i.create {
 		if _, err := db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+quoteIdentifier(i.cfg.Name)+" CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); err != nil {

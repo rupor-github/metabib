@@ -12,7 +12,6 @@ import (
 	jsonv2 "encoding/json/v2"
 	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zaptest/observer"
 
 	"metabib/db"
 	"metabib/jsonl"
@@ -205,24 +204,6 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	}
 	if !strings.Contains(string(data), currentPath) || strings.Contains(string(data), oldPath) {
 		t.Fatalf("merged output = %s, want current path %q only", data, currentPath)
-	}
-}
-
-func TestShouldDropDatabaseBeforeImport(t *testing.T) {
-	t.Parallel()
-
-	if shouldDropDatabaseBeforeImport(false, true, nil) {
-		t.Fatal("shouldDropDatabaseBeforeImport(false, managed) = true")
-	}
-	if !shouldDropDatabaseBeforeImport(true, true, nil) {
-		t.Fatal("shouldDropDatabaseBeforeImport(true, managed) = false")
-	}
-	core, logs := observer.New(zap.WarnLevel)
-	if shouldDropDatabaseBeforeImport(true, false, zap.New(core)) {
-		t.Fatal("shouldDropDatabaseBeforeImport(true, external) = true")
-	}
-	if logs.FilterMessage("Ignoring --db-overwrite database drop for external database runtime").Len() != 1 {
-		t.Fatalf("logs = %#v, want external overwrite warning", logs.All())
 	}
 }
 

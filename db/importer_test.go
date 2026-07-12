@@ -79,7 +79,7 @@ func TestClientArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args, err := NewImporter(tt.cfg, "", nil, nil, false, true, false).clientArgs()
+			args, err := NewImporter(tt.cfg, "", nil, nil, false, true).clientArgs()
 			if err != nil {
 				t.Fatalf("clientArgs() error = %v", err)
 			}

@@ -19,7 +19,7 @@
 ## Runtime Behavior
 - Default DB mode is managed MariaDB: the app discovers `mariadbd`/`mysqld`, `mariadb-install-db`/`mysql_install_db`, `mariadb`/`mysql`, and optionally `mariadb-admin`/`mysqladmin`; it starts a private socket-only server and stores data under the executable directory (`build/data/mariadb` when running `build/metabib`).
 - Use database config (`database.dsn` or `database.managed: false`) to target an existing MariaDB service instead of managed mode.
-- `--db-overwrite` removes/recreates the managed datadir and drops the DB; without it, dump import still recreates tables present in the dumps, but unrelated stale tables can remain.
+- `database.temporary: true` is the default and uses a fresh managed datadir for each run, removing it on shutdown; persistent managed datadirs are reused only when it is set to false.
 
 ## Output And Performance
 - JSONL files are range-renamed on close as `<base>.<bookid_start>-<bookid_end>.jsonl` with 10-digit zero padding, even when not split.

@@ -42,7 +42,6 @@ func PrepareRuntime(
 	ctx context.Context,
 	cfg config.DatabaseConfig,
 	needClient bool,
-	overwriteDataDir bool,
 	log *zap.Logger,
 	logOut io.Writer,
 ) (*Runtime, error) {
@@ -89,7 +88,7 @@ func PrepareRuntime(
 	if err := rt.prepareManagedPaths(); err != nil {
 		return nil, err
 	}
-	if err := rt.initializeDataDir(ctx, installDB, overwriteDataDir); err != nil {
+	if err := rt.initializeDataDir(ctx, installDB); err != nil {
 		return nil, errors.Join(err, rt.Close())
 	}
 	if err := rt.startServer(ctx, server); err != nil {
@@ -236,6 +235,9 @@ func (r *Runtime) prepareManagedPaths() error {
 		}
 		r.Config.Host = r.Config.Socket
 		r.Config.Port = 0
+		if err := os.MkdirAll(filepath.Dir(r.Config.Socket), 0o755); err != nil {
+			return fmt.Errorf("create MariaDB socket directory %q: %w", filepath.Dir(r.Config.Socket), err)
+		}
 	} else {
 		r.Config.Protocol = "tcp"
 		r.Config.Host = defaultString(r.Config.Host, "127.0.0.1")
@@ -245,6 +247,12 @@ func (r *Runtime) prepareManagedPaths() error {
 		if r.Config.Port == 0 {
 			return errors.New("managed TCP MariaDB requires database.port to be set")
 		}
+	}
+	if err := os.MkdirAll(filepath.Dir(r.Config.PIDFile), 0o755); err != nil {
+		return fmt.Errorf("create MariaDB PID file directory %q: %w", filepath.Dir(r.Config.PIDFile), err)
+	}
+	if err := os.MkdirAll(filepath.Dir(r.Config.LogFile), 0o755); err != nil {
+		return fmt.Errorf("create MariaDB log file directory %q: %w", filepath.Dir(r.Config.LogFile), err)
 	}
 	r.Config.User = defaultString(r.Config.User, "root")
 	return nil
@@ -258,16 +266,8 @@ func isLoopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (r *Runtime) initializeDataDir(ctx context.Context, installDB string, overwrite bool) error {
+func (r *Runtime) initializeDataDir(ctx context.Context, installDB string) error {
 	start := time.Now()
-	if overwrite {
-		if err := validateManagedDataDirOverwrite(r.Config.DataDir, r.tmpDir); err != nil {
-			return err
-		}
-		if err := os.RemoveAll(r.Config.DataDir); err != nil {
-			return fmt.Errorf("remove MariaDB data directory %q: %w", r.Config.DataDir, err)
-		}
-	}
 	initialized, err := dataDirInitialized(r.Config.DataDir)
 	if err != nil {
 		return err
@@ -298,78 +298,6 @@ func (r *Runtime) initializeDataDir(ctx context.Context, installDB string, overw
 		r.Log.Info("MariaDB data directory initialized", zap.String("dir", r.Config.DataDir), zap.Duration("elapsed", time.Since(start)))
 	}
 	return nil
-}
-
-func validateManagedDataDirOverwrite(dataDir string, tmpDir string) error {
-	if dataDir == "" {
-		return errors.New("refusing to overwrite empty MariaDB data directory")
-	}
-	abs, err := filepath.Abs(dataDir)
-	if err != nil {
-		return fmt.Errorf("resolve MariaDB data directory for overwrite: %w", err)
-	}
-	clean := filepath.Clean(abs)
-	volume := filepath.VolumeName(clean)
-	if clean == volume+string(os.PathSeparator) {
-		return fmt.Errorf("refusing to overwrite filesystem root %q", clean)
-	}
-	if tmpDir != "" {
-		tmpDataDir := filepath.Join(tmpDir, "data")
-		if sameCleanPath(clean, tmpDataDir) {
-			return nil
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil && home != "" && sameCleanPath(clean, home) {
-		return fmt.Errorf("refusing to overwrite home directory %q", clean)
-	}
-	if wd, err := os.Getwd(); err == nil && wd != "" && sameCleanPath(clean, wd) {
-		return fmt.Errorf("refusing to overwrite current directory %q", clean)
-	}
-	if filepath.Base(clean) != "mariadb" {
-		return fmt.Errorf("refusing to overwrite MariaDB data directory without mariadb basename: %q", clean)
-	}
-	if looksLikeMariaDBDataDir(clean) {
-		return nil
-	}
-	if empty, err := isEmptyDir(clean); err != nil {
-		return err
-	} else if empty {
-		return nil
-	}
-	if _, err := os.Stat(clean); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("stat MariaDB data directory %q before overwrite: %w", clean, err)
-	}
-	return fmt.Errorf("refusing to overwrite %q because it does not look like a MariaDB data directory", clean)
-}
-
-func sameCleanPath(left string, right string) bool {
-	return filepath.Clean(left) == filepath.Clean(right)
-}
-
-func looksLikeMariaDBDataDir(path string) bool {
-	if initialized, err := dataDirInitialized(path); err == nil && initialized {
-		return true
-	}
-	for _, name := range []string{"ibdata1", "aria_log_control", "ib_logfile0"} {
-		if _, err := os.Stat(filepath.Join(path, name)); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-func isEmptyDir(path string) (bool, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, nil
-		}
-		return false, fmt.Errorf("read MariaDB data directory %q before overwrite: %w", path, err)
-	}
-	return len(entries) == 0, nil
 }
 
 func installDBArgs(dataDir string) []string {

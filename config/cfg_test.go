@@ -23,6 +23,17 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Database.DataDir != filepath.Join(root, "data", "mariadb") {
 		t.Fatalf("DataDir = %q", cfg.Database.DataDir)
 	}
+	if !cfg.Database.Temporary {
+		t.Fatal("Database.Temporary = false, want true")
+	}
+	if cfg.Database.Socket != "" || cfg.Database.PIDFile != "" || cfg.Database.LogFile != "" {
+		t.Fatalf(
+			"managed support paths = socket %q pid %q log %q, want empty defaults",
+			cfg.Database.Socket,
+			cfg.Database.PIDFile,
+			cfg.Database.LogFile,
+		)
+	}
 	if cfg.Processing.DatabaseWorkers < 1 || cfg.Processing.ArchiveWorkers < 1 {
 		t.Fatalf("workers were not expanded: database=%d archive=%d", cfg.Processing.DatabaseWorkers, cfg.Processing.ArchiveWorkers)
 	}

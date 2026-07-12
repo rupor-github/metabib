@@ -17,20 +17,23 @@ database:
   password: ""
   name: "flibusta"
 
-  # Managed local MariaDB instance. When enabled, metabib uses a private datadir
-  # and does not require a system database service.
+  # Managed local MariaDB instance. When true and dsn is empty, metabib starts
+  # and stops a private MariaDB server. When false, or when dsn is set, metabib
+  # connects to an existing service and ignores the managed-only options below.
   managed: true
+
+  # Managed datadir policy. temporary is only meaningful for managed mode:
+  # when true, metabib creates a fresh OS temp datadir and removes it on
+  # shutdown; when false, metabib reuses data_dir across runs.
+  temporary: true
   data_dir: '{{ joinPath .ProjectDir "data" "mariadb" }}'
 
-  # Use a temporary managed datadir under the OS temp directory and remove it on
-  # shutdown. When false, data_dir is reused across runs.
-  temporary: false
-
-  # Managed-server support files. socket is used only with Unix managed mode.
-  # pid_file and log_file are used by the managed MariaDB server on all OSes.
-  socket: '{{ if eq .OS "windows" }}""{{ else }}{{ joinPath .ProjectDir "data" "metabib.sock" }}{{ end }}'
-  pid_file: '{{ joinPath .ProjectDir "data" "metabib.pid" }}'
-  log_file: '{{ joinPath .ProjectDir "data" "metabib-mariadb.log" }}'
+  # Managed-server support files. Leave these empty to place them next to the
+  # effective managed datadir: under the OS temp directory when temporary is
+  # true, or next to data_dir when temporary is false.
+  socket: ""
+  pid_file: ""
+  log_file: ""
 
   # Optional full paths to MariaDB binaries. If empty, metabib first searches
   # ./mariadb recursively under the startup directory, then PATH. The admin

@@ -281,11 +281,17 @@ To use an already imported database:
 metabib cache --rebuild --no-import --database-dumps /path/to/sql-dumps
 ```
 
-Force a clean managed database rebuild:
+By default, managed mode uses a fresh database for every run:
 
-```sh
-metabib cache --rebuild --database-dumps /path/to/sql-dumps --db-overwrite
+```yaml
+database:
+  managed: true
+  temporary: true
 ```
+
+With `temporary: true`, metabib initializes a new managed MariaDB datadir under
+the OS temp directory and removes it on shutdown. Persistent managed datadirs are
+reused between runs when `temporary` is set to `false`.
 
 Use an existing MariaDB service instead of a managed one:
 

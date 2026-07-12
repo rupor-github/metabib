@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,6 +89,11 @@ func TestPrepareManagedPathsUnixAndTCP(t *testing.T) {
 	if rt.Config.Protocol != "unix" || rt.Config.Port != 0 || rt.Config.Socket == "" || rt.Config.Host != rt.Config.Socket {
 		t.Fatalf("unix config = %#v", rt.Config)
 	}
+	if rt.Config.Socket != filepath.Join(base, "metabib.sock") ||
+		rt.Config.PIDFile != filepath.Join(base, "metabib.pid") ||
+		rt.Config.LogFile != filepath.Join(base, "metabib-mariadb.log") {
+		t.Fatalf("unix support paths = socket %q pid %q log %q", rt.Config.Socket, rt.Config.PIDFile, rt.Config.LogFile)
+	}
 
 	rt = &Runtime{Config: config.DatabaseConfig{
 		Protocol: "tcp",
@@ -103,6 +109,68 @@ func TestPrepareManagedPathsUnixAndTCP(t *testing.T) {
 	}
 }
 
+func TestPrepareManagedPathsTemporaryDerivesSupportPaths(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{Config: config.DatabaseConfig{
+		Protocol:  "unix",
+		Temporary: true,
+		DataDir:   filepath.Join(t.TempDir(), "ignored"),
+	}}
+	t.Cleanup(func() {
+		if rt.tmpDir != "" {
+			if err := os.RemoveAll(rt.tmpDir); err != nil {
+				t.Fatalf("remove temp dir: %v", err)
+			}
+		}
+	})
+
+	if err := rt.prepareManagedPaths(); err != nil {
+		t.Fatalf("prepareManagedPaths() error = %v", err)
+	}
+	base := filepath.Join(rt.tmpDir, "data")
+	if rt.Config.DataDir != base {
+		t.Fatalf("DataDir = %q, want %q", rt.Config.DataDir, base)
+	}
+	if rt.Config.Socket != filepath.Join(rt.tmpDir, "metabib.sock") ||
+		rt.Config.PIDFile != filepath.Join(rt.tmpDir, "metabib.pid") ||
+		rt.Config.LogFile != filepath.Join(rt.tmpDir, "metabib-mariadb.log") {
+		t.Fatalf("temporary support paths = socket %q pid %q log %q", rt.Config.Socket, rt.Config.PIDFile, rt.Config.LogFile)
+	}
+}
+
+func TestPrepareManagedPathsTemporaryCreatesSupportDirs(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	rt := &Runtime{Config: config.DatabaseConfig{
+		Protocol:  "unix",
+		Temporary: true,
+		Socket:    filepath.Join(base, "socket", "metabib.sock"),
+		PIDFile:   filepath.Join(base, "pid", "metabib.pid"),
+		LogFile:   filepath.Join(base, "log", "metabib-mariadb.log"),
+	}}
+	t.Cleanup(func() {
+		if rt.tmpDir != "" {
+			if err := os.RemoveAll(rt.tmpDir); err != nil {
+				t.Fatalf("remove temp dir: %v", err)
+			}
+		}
+	})
+
+	if err := rt.prepareManagedPaths(); err != nil {
+		t.Fatalf("prepareManagedPaths() error = %v", err)
+	}
+	for _, path := range []string{rt.Config.Socket, rt.Config.PIDFile, rt.Config.LogFile} {
+		if info, err := os.Stat(filepath.Dir(path)); err != nil || !info.IsDir() {
+			t.Fatalf("support directory for %q not ready: info=%v err=%v", path, info, err)
+		}
+	}
+	if !strings.HasPrefix(rt.Config.DataDir, rt.tmpDir+string(os.PathSeparator)) {
+		t.Fatalf("DataDir = %q, want under %q", rt.Config.DataDir, rt.tmpDir)
+	}
+}
+
 func TestPrepareManagedPathsRejectsNonLoopbackTCP(t *testing.T) {
 	t.Parallel()
 
@@ -114,52 +182,6 @@ func TestPrepareManagedPathsRejectsNonLoopbackTCP(t *testing.T) {
 	}}
 	if err := rt.prepareManagedPaths(); err == nil {
 		t.Fatal("prepareManagedPaths() error = nil, want non-loopback host rejection")
-	}
-}
-
-func TestValidateManagedDataDirOverwrite(t *testing.T) {
-	t.Parallel()
-
-	base := t.TempDir()
-	safeMissing := filepath.Join(base, "data", "mariadb")
-	if err := validateManagedDataDirOverwrite(safeMissing, ""); err != nil {
-		t.Fatalf("validateManagedDataDirOverwrite(safe missing) error = %v", err)
-	}
-
-	safeExisting := filepath.Join(base, "existing", "mariadb")
-	if err := os.MkdirAll(filepath.Join(safeExisting, "mysql"), 0o755); err != nil {
-		t.Fatalf("mkdir mysql marker: %v", err)
-	}
-	if err := validateManagedDataDirOverwrite(safeExisting, ""); err != nil {
-		t.Fatalf("validateManagedDataDirOverwrite(safe existing) error = %v", err)
-	}
-
-	tmpDir := filepath.Join(base, "tmp")
-	if err := validateManagedDataDirOverwrite(filepath.Join(tmpDir, "data"), tmpDir); err != nil {
-		t.Fatalf("validateManagedDataDirOverwrite(temp data) error = %v", err)
-	}
-
-	unsafeExisting := filepath.Join(base, "data", "mariadb")
-	if err := os.MkdirAll(unsafeExisting, 0o755); err != nil {
-		t.Fatalf("mkdir unsafe existing: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(unsafeExisting, "notes.txt"), []byte("keep"), 0o644); err != nil {
-		t.Fatalf("write unsafe marker: %v", err)
-	}
-	if err := validateManagedDataDirOverwrite(unsafeExisting, ""); err == nil {
-		t.Fatal("validateManagedDataDirOverwrite(non-MariaDB existing) error = nil")
-	}
-}
-
-func TestValidateManagedDataDirOverwriteRejectsDangerousPaths(t *testing.T) {
-	t.Parallel()
-
-	for _, path := range []string{"", string(os.PathSeparator), t.TempDir()} {
-		t.Run(path, func(t *testing.T) {
-			if err := validateManagedDataDirOverwrite(path, ""); err == nil {
-				t.Fatalf("validateManagedDataDirOverwrite(%q) error = nil", path)
-			}
-		})
 	}
 }
 
