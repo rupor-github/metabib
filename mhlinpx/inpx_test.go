@@ -64,6 +64,10 @@ func TestGenerate(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	fixedTmp := filepath.Join(dir, "flibusta_20260603.inpx.tmp")
+	if err := os.WriteFile(fixedTmp, []byte("stale fixed tmp"), 0o644); err != nil {
+		t.Fatalf("write fixed temp file: %v", err)
+	}
 
 	stats, err := Generate(context.Background(), Options{
 		InputPrefix:   prefix,
@@ -86,6 +90,9 @@ func TestGenerate(t *testing.T) {
 	}
 	if filepath.Base(stats.OutputPath) != "flibusta_20260603.inpx" {
 		t.Fatalf("output = %q", stats.OutputPath)
+	}
+	if data, err := os.ReadFile(fixedTmp); err != nil || string(data) != "stale fixed tmp" {
+		t.Fatalf("fixed temp file = %q, %v", data, err)
 	}
 	if stats.Archives != 1 || stats.Files != 2 || stats.Records != 1 || stats.DBRecords != 1 ||
 		stats.FB2Records != 0 || stats.Dummy != 1 || stats.DumpDate != "20260603" {

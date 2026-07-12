@@ -191,8 +191,21 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return stats, fmt.Errorf("create FLibrary INPX output directory: %w", err)
 	}
-	tmpPath := outputPath + ".tmp"
-	_ = os.Remove(tmpPath)
+	tmpFile, err := os.CreateTemp(filepath.Dir(outputPath), filepath.Base(outputPath)+"-*.tmp")
+	if err != nil {
+		return stats, fmt.Errorf("create temporary FLibrary INPX output: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return stats, fmt.Errorf("close temporary FLibrary INPX output %q: %w", tmpPath, err)
+	}
+	cleanupTemp := true
+	defer func() {
+		if cleanupTemp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 	if _, err := os.Stat(outputPath); err == nil && opts.Log != nil {
 		opts.Log.Warn("Overwriting existing FLibrary INPX output", zap.String("file", outputPath))
 	} else if err != nil && !os.IsNotExist(err) {
@@ -203,7 +216,6 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	}
 	writeStats, err := writeINPX(ctx, tmpPath, meta, archives, opts)
 	if err != nil {
-		_ = os.Remove(tmpPath)
 		return stats, err
 	}
 	stats.Archives = writeStats.Archives
@@ -213,9 +225,9 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	stats.FB2Records = writeStats.FB2Records
 	stats.Dummy = writeStats.Dummy
 	if err := fileutil.ReplaceOutputFile(tmpPath, outputPath); err != nil {
-		_ = os.Remove(tmpPath)
 		return stats, fmt.Errorf("replace FLibrary INPX output %q: %w", outputPath, err)
 	}
+	cleanupTemp = false
 	return stats, nil
 }
 
