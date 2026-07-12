@@ -13,10 +13,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 
 	"metabib/config"
 	"metabib/db"
@@ -31,20 +31,6 @@ const progressInterval = 3000
 
 func resultWindow(workers int) int {
 	return max(workers*2, 1)
-}
-
-func pendingWorkerErr(errs <-chan error, fallback error) error {
-	select {
-	case err := <-errs:
-		if err != nil {
-			return err
-		}
-	default:
-	}
-	if fallback != nil {
-		return fallback
-	}
-	return fmt.Errorf("workers stopped before all results were processed")
 }
 
 type dbBatch struct {
@@ -200,32 +186,31 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	}
 	jobs := make(chan dbBatch, workers*2)
 	results := make(chan dbBatchResult, workers*2)
-	errs := make(chan error, 1)
-	ctx, cancel := context.WithCancel(ctx)
+	processCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	g, workerCtx := errgroup.WithContext(processCtx)
 
-	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
-		wg.Go(func() {
-			for batch := range jobs {
-				batchStart := time.Now()
-				sources, err := repo.BookSourcesByIDs(ctx, batch.IDs)
-				if err != nil {
-					select {
-					case errs <- err:
-					default:
+		g.Go(func() error {
+			for {
+				var batch dbBatch
+				select {
+				case ready, ok := <-jobs:
+					if !ok {
+						return nil
 					}
-					cancel()
-					return
+					batch = ready
+				case <-workerCtx.Done():
+					return workerCtx.Err()
 				}
-				identities, err := repo.FileIdentitiesByIDs(ctx, batch.IDs)
+				batchStart := time.Now()
+				sources, err := repo.BookSourcesByIDs(workerCtx, batch.IDs)
 				if err != nil {
-					select {
-					case errs <- err:
-					default:
-					}
-					cancel()
-					return
+					return err
+				}
+				identities, err := repo.FileIdentitiesByIDs(workerCtx, batch.IDs)
+				if err != nil {
+					return err
 				}
 				dbLoadElapsed := time.Since(batchStart)
 				records := make([]model.Record, 0, len(batch.IDs))
@@ -239,8 +224,8 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 				}
 				select {
 				case results <- dbBatchResult{Index: batch.Index, Records: records, ReadyAt: time.Now(), DBLoadElapsed: dbLoadElapsed}:
-				case <-ctx.Done():
-					return
+				case <-workerCtx.Done():
+					return workerCtx.Err()
 				}
 			}
 		})
@@ -262,8 +247,10 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 			select {
 			case jobs <- dbBatch{Index: nextSubmit, IDs: ids[start:end]}:
 				nextSubmit++
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-workerCtx.Done():
+				return workerCtx.Err()
+			case <-processCtx.Done():
+				return processCtx.Err()
 			}
 		}
 		if nextSubmit == totalBatches {
@@ -271,19 +258,32 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		}
 		return nil
 	}
-	resultsDone := make(chan struct{})
+	resultsDone := make(chan error, 1)
 	go func() {
-		wg.Wait()
+		err := g.Wait()
 		close(results)
-		close(resultsDone)
+		resultsDone <- err
 	}()
+	workerDone := false
+	var workerErr error
+	waitWorkers := func() error {
+		if !workerDone {
+			workerErr = <-resultsDone
+			workerDone = true
+		}
+		return workerErr
+	}
 	defer func() {
 		cancel()
 		closeJobs()
-		<-resultsDone
+		_ = waitWorkers()
 	}()
 	if err := submitBatches(0); err != nil {
 		cancel()
+		closeJobs()
+		if workerErr := waitWorkers(); workerErr != nil {
+			return workerErr
+		}
 		return err
 	}
 
@@ -296,7 +296,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		outputWaitElapsed += time.Since(batch.ReadyAt)
 		dbLoadElapsed += batch.DBLoadElapsed
 		for _, rec := range batch.Records {
-			if err := ctx.Err(); err != nil {
+			if err := processCtx.Err(); err != nil {
 				return err
 			}
 			writeStart := time.Now()
@@ -329,15 +329,19 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	for nextBatch < totalBatches {
 		var batch dbBatchResult
 		select {
-		case err := <-errs:
+		case <-processCtx.Done():
 			cancel()
-			return err
-		case <-ctx.Done():
-			cancel()
-			return pendingWorkerErr(errs, ctx.Err())
+			closeJobs()
+			if workerErr := waitWorkers(); workerErr != nil {
+				return workerErr
+			}
+			return processCtx.Err()
 		case ready, ok := <-results:
 			if !ok {
-				return pendingWorkerErr(errs, nil)
+				if workerErr := waitWorkers(); workerErr != nil {
+					return workerErr
+				}
+				return fmt.Errorf("workers stopped before all database results were processed")
 			}
 			batch = ready
 		}
@@ -356,13 +360,15 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		}
 		if err := submitBatches(nextBatch); err != nil {
 			cancel()
-			return pendingWorkerErr(errs, err)
+			closeJobs()
+			if workerErr := waitWorkers(); workerErr != nil {
+				return workerErr
+			}
+			return err
 		}
 	}
-	select {
-	case err := <-errs:
+	if err := waitWorkers(); err != nil {
 		return err
-	default:
 	}
 	if manifestOut != nil {
 		manifestStart := time.Now()
@@ -480,34 +486,38 @@ func processArchive(
 
 	jobs := make(chan archiveBatch, workers*2)
 	results := make(chan dbBatchResult, workers*2)
-	errs := make(chan error, 1)
-	ctx, cancel := context.WithCancel(ctx)
+	processCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	g, workerCtx := errgroup.WithContext(processCtx)
 
-	var wg sync.WaitGroup
 	var archiveRepo archiveRepository
 	if repo != nil {
 		archiveRepo = repo
 	}
 	for worker := 0; worker < workers; worker++ {
-		wg.Go(func() {
-			for batch := range jobs {
-				records, timing, err := processArchiveBatch(ctx, archiveRepo, cfg, path, batch.Entries)
-				if err != nil {
-					select {
-					case errs <- err:
-					default:
+		g.Go(func() error {
+			for {
+				var batch archiveBatch
+				select {
+				case ready, ok := <-jobs:
+					if !ok {
+						return nil
 					}
-					cancel()
-					return
+					batch = ready
+				case <-workerCtx.Done():
+					return workerCtx.Err()
+				}
+				records, timing, err := processArchiveBatch(workerCtx, archiveRepo, cfg, path, batch.Entries)
+				if err != nil {
+					return err
 				}
 				timing.Index = batch.Index
 				timing.Records = records
 				timing.ReadyAt = time.Now()
 				select {
 				case results <- timing:
-				case <-ctx.Done():
-					return
+				case <-workerCtx.Done():
+					return workerCtx.Err()
 				}
 			}
 		})
@@ -528,8 +538,10 @@ func processArchive(
 			select {
 			case jobs <- archiveBatch{Index: nextSubmit, Entries: entries[start:end]}:
 				nextSubmit++
-			case <-ctx.Done():
-				return ctx.Err()
+			case <-workerCtx.Done():
+				return workerCtx.Err()
+			case <-processCtx.Done():
+				return processCtx.Err()
 			}
 		}
 		if nextSubmit == totalBatches {
@@ -537,20 +549,33 @@ func processArchive(
 		}
 		return nil
 	}
-	resultsDone := make(chan struct{})
+	resultsDone := make(chan error, 1)
 	go func() {
-		wg.Wait()
+		err := g.Wait()
 		close(results)
-		close(resultsDone)
+		resultsDone <- err
 	}()
+	workerDone := false
+	var workerErr error
+	waitWorkers := func() error {
+		if !workerDone {
+			workerErr = <-resultsDone
+			workerDone = true
+		}
+		return workerErr
+	}
 	defer func() {
 		cancel()
 		closeJobs()
-		<-resultsDone
+		_ = waitWorkers()
 	}()
 	var records int64
 	if err := submitBatches(0); err != nil {
 		cancel()
+		closeJobs()
+		if workerErr := waitWorkers(); workerErr != nil {
+			return records, workerErr
+		}
 		return records, err
 	}
 
@@ -565,7 +590,7 @@ func processArchive(
 		md5Elapsed += batch.MD5Elapsed
 		fallbackLookupElapsed += batch.FallbackLookupElapsed
 		for _, rec := range batch.Records {
-			if err := ctx.Err(); err != nil {
+			if err := processCtx.Err(); err != nil {
 				return err
 			}
 			writeStart := time.Now()
@@ -599,15 +624,19 @@ func processArchive(
 	for nextBatch < totalBatches {
 		var batch dbBatchResult
 		select {
-		case err := <-errs:
+		case <-processCtx.Done():
 			cancel()
-			return records, err
-		case <-ctx.Done():
-			cancel()
-			return records, pendingWorkerErr(errs, ctx.Err())
+			closeJobs()
+			if workerErr := waitWorkers(); workerErr != nil {
+				return records, workerErr
+			}
+			return records, processCtx.Err()
 		case ready, ok := <-results:
 			if !ok {
-				return records, pendingWorkerErr(errs, nil)
+				if workerErr := waitWorkers(); workerErr != nil {
+					return records, workerErr
+				}
+				return records, fmt.Errorf("workers stopped before all archive results were processed")
 			}
 			batch = ready
 		}
@@ -626,13 +655,15 @@ func processArchive(
 		}
 		if err := submitBatches(nextBatch); err != nil {
 			cancel()
-			return records, pendingWorkerErr(errs, err)
+			closeJobs()
+			if workerErr := waitWorkers(); workerErr != nil {
+				return records, workerErr
+			}
+			return records, err
 		}
 	}
-	select {
-	case err := <-errs:
+	if err := waitWorkers(); err != nil {
 		return records, err
-	default:
 	}
 	if manifestOut != nil {
 		manifestStart := time.Now()
