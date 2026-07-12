@@ -83,6 +83,29 @@ func TestGetLastBookIDWithRetainedDailyUpdates(t *testing.T) {
 	}
 }
 
+func TestLinksIncludesPartiallyOverlappingUpdates(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`<a href="f.fb2.000001-000100.zip">old</a>`,
+			`<a href="f.fb2.000050-000150.zip">overlap</a>`,
+			`<a href="f.fb2.000151-000200.zip">new</a>`,
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	f := testFetcher(server)
+	got, err := f.links(context.Background(), server.URL, `href="([^"]+)"`, 100, true)
+	if err != nil {
+		t.Fatalf("links() error = %v", err)
+	}
+	want := []string{"f.fb2.000050-000150.zip", "f.fb2.000151-000200.zip"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("links() = %v, want %v", got, want)
+	}
+}
+
 func TestProcessFile(t *testing.T) {
 	t.Parallel()
 
@@ -208,6 +231,7 @@ func testFetcher(server *httptest.Server) fetcher {
 			Continue:  true,
 			Timeout:   time.Second,
 			ChunkSize: 1024,
+			Retry:     1,
 		},
 		client:    server.Client(),
 		userAgent: "metabib-test",

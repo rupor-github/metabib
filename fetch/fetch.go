@@ -162,11 +162,11 @@ func (f fetcher) links(ctx context.Context, baseURL string, pattern string, last
 			continue
 		}
 		if onlyNew {
-			ok, first, _, err := dissectRange(match[1])
+			ok, _, second, err := dissectRange(match[1])
 			if err != nil {
 				return nil, err
 			}
-			if !ok || lastBook >= first {
+			if !ok || lastBook >= second {
 				continue
 			}
 		}
