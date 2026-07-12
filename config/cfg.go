@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	yaml "gopkg.in/yaml.v3"
 
@@ -18,6 +20,9 @@ var ConfigTmpl []byte
 const (
 	commentTemplateFieldName = "comment_template"
 	versionTemplateFieldName = "version_template"
+
+	commentTemplatePlaceholder = "__METABIB_DUMPCONFIG_COMMENT_TEMPLATE_8D4F1F06__"
+	versionTemplatePlaceholder = "__METABIB_DUMPCONFIG_VERSION_TEMPLATE_6B0186F8__"
 )
 
 type Config struct {
@@ -170,11 +175,35 @@ func Prepare() ([]byte, error) {
 }
 
 func Dump(cfg *Config) ([]byte, error) {
-	data, err := yaml.Marshal(*cfg)
+	dumpCfg := *cfg
+	dumpCfg.INPX.CommentTemplate = commentTemplatePlaceholder
+	dumpCfg.INPX.VersionTemplate = versionTemplatePlaceholder
+
+	data, err := yaml.Marshal(dumpCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal config to yaml: %w", err)
 	}
-	return data, nil
+	out := string(data)
+	if out, err = replaceDumpPlaceholder(out, commentTemplateFieldName, commentTemplatePlaceholder, cfg.INPX.CommentTemplate); err != nil {
+		return nil, err
+	}
+	if out, err = replaceDumpPlaceholder(out, versionTemplateFieldName, versionTemplatePlaceholder, cfg.INPX.VersionTemplate); err != nil {
+		return nil, err
+	}
+	return []byte(out), nil
+}
+
+func replaceDumpPlaceholder(data string, field string, placeholder string, value string) (string, error) {
+	needle := field + ": " + placeholder
+	replacement := field + ": " + readableYAMLQuotedString(value)
+	if count := strings.Count(data, needle); count != 1 {
+		return "", fmt.Errorf("failed to find %s placeholder in dumped config", field)
+	}
+	return strings.Replace(data, needle, replacement, 1), nil
+}
+
+func readableYAMLQuotedString(value string) string {
+	return strings.ReplaceAll(strconv.Quote(value), `\ufeff`, `\uFEFF`)
 }
 
 func defaultProcessingOptions() []func(*gencfg.ProcessingOptions) {

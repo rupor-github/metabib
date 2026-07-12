@@ -130,3 +130,43 @@ func TestDump(t *testing.T) {
 		t.Fatalf("Dump() = %q, want version", data)
 	}
 }
+
+func TestDumpKeepsINPXTemplatesReadable(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := LoadConfiguration("", gencfg.WithRootDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("LoadConfiguration() error = %v", err)
+	}
+	data, err := Dump(cfg)
+	if err != nil {
+		t.Fatalf("Dump() error = %v", err)
+	}
+	dumped := string(data)
+	for _, want := range []string{
+		`comment_template: "\uFEFF{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n`,
+		`version_template: "{{ .DumpDate }}\r\n"`,
+		"{{ .DatabaseName }} FB2 - {{ .DisplayDate }}",
+		"Локальные архивы библиотеки {{ .DatabaseName }}",
+	} {
+		if !strings.Contains(dumped, want) {
+			t.Fatalf("Dump() missing %q:\n%s", want, dumped)
+		}
+	}
+	for _, escaped := range []string{"\\x7B", "\\x20"} {
+		if strings.Contains(dumped, escaped) {
+			t.Fatalf("Dump() contains escaped template bytes %q:\n%s", escaped, dumped)
+		}
+	}
+
+	roundTrip, err := unmarshalConfig(data, &Config{}, false)
+	if err != nil {
+		t.Fatalf("unmarshal dumped config: %v", err)
+	}
+	if roundTrip.INPX.CommentTemplate != cfg.INPX.CommentTemplate {
+		t.Fatalf("CommentTemplate round trip mismatch:\n got %q\nwant %q", roundTrip.INPX.CommentTemplate, cfg.INPX.CommentTemplate)
+	}
+	if roundTrip.INPX.VersionTemplate != cfg.INPX.VersionTemplate {
+		t.Fatalf("VersionTemplate round trip mismatch: got %q want %q", roundTrip.INPX.VersionTemplate, cfg.INPX.VersionTemplate)
+	}
+}
