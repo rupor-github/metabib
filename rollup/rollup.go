@@ -25,7 +25,7 @@ type Options struct {
 	ArchiveDir  string
 	UpdateDirs  []string
 	SizeBytes   int64
-	KeepUpdates bool
+	ValidateCRC bool
 	Log         *zap.Logger
 }
 
@@ -51,7 +51,13 @@ func (a byName) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
 func (a byName) Less(i, j int) bool { return a[i].info.Name() < a[j].info.Name() }
 
+type copyEntryFunc func(*zip.Writer, *zip.File) error
+
 func Run(ctx context.Context, opts Options) (Result, error) {
+	return run(ctx, opts, (*zip.Writer).Copy)
+}
+
+func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, error) {
 	if opts.ArchiveDir == "" {
 		return Result{}, errors.New("archive directory is required")
 	}
@@ -146,10 +152,18 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	return processUpdates(ctx, opts, last, merge, updates, archiveNameWidth(last, merge))
+	return processUpdates(ctx, opts, last, merge, updates, archiveNameWidth(last, merge), copyEntry)
 }
 
-func processUpdates(ctx context.Context, opts Options, last archive, merge archive, updates []archive, nameWidth int) (Result, error) {
+func processUpdates(
+	ctx context.Context,
+	opts Options,
+	last archive,
+	merge archive,
+	updates []archive,
+	nameWidth int,
+	copyEntry copyEntryFunc,
+) (Result, error) {
 	format := fmt.Sprintf("fb2-%%0%dd-%%0%dd", nameWidth, nameWidth)
 	res := Result{Updates: len(updates)}
 	work, err := openWorkArchive(opts, last, merge, &updates)
@@ -161,7 +175,7 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 			work.cleanup()
 		}
 	}()
-	skipFirstUpdateRemoval := work.skipFirstUpdateRemoval
+	firstUpdateIsExisting := work.firstUpdateIsExisting
 
 	leftBytes := opts.SizeBytes - work.existingSize
 	firstBook := work.firstBook
@@ -173,13 +187,10 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 			return Result{}, err
 		}
 		updatePath := filepath.Join(update.dir, update.info.Name())
-		updateIsExisting := updateIndex == 0 && skipFirstUpdateRemoval
+		updateIsExisting := updateIndex == 0 && firstUpdateIsExisting
 		rc, err := zip.OpenReader(updatePath)
 		if err != nil {
-			if opts.Log != nil {
-				opts.Log.Warn("Skipping unreadable update archive", zap.String("file", updatePath), zap.Error(err))
-			}
-			continue
+			return Result{}, fmt.Errorf("open update archive %q: %w", updatePath, err)
 		}
 		if opts.Log != nil {
 			opts.Log.Info("Processing update archive", zap.String("file", updatePath))
@@ -213,11 +224,19 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 				}
 				continue
 			}
-			if err := work.writer.Copy(file); err != nil {
-				if opts.Log != nil {
-					opts.Log.Warn("Error copying archive entry", zap.String("file", updatePath), zap.String("entry", file.Name), zap.Error(err))
+			if opts.ValidateCRC {
+				if err := validateEntryCRC(file); err != nil {
+					return Result{}, errors.Join(
+						fmt.Errorf("validate CRC for update archive entry %q from %q: %w", file.Name, updatePath, err),
+						closeUpdateArchive(rc, updatePath),
+					)
 				}
-				continue
+			}
+			if err := copyEntry(work.writer, file); err != nil {
+				return Result{}, errors.Join(
+					fmt.Errorf("copy update archive entry %q from %q: %w", file.Name, updatePath, err),
+					closeUpdateArchive(rc, updatePath),
+				)
 			}
 			if firstBook == 0 || id < firstBook {
 				firstBook = id
@@ -277,35 +296,37 @@ func processUpdates(ctx context.Context, opts Options, last archive, merge archi
 			opts.Log.Info("Merge archive updated", zap.String("file", mergeName), zap.Int("begin", firstBook), zap.Int("end", lastBook))
 		}
 	}
-	if !opts.KeepUpdates {
-		for i, update := range updates {
-			if i == 0 && skipFirstUpdateRemoval {
-				continue
-			}
-			path := filepath.Join(update.dir, update.info.Name())
-			if err := os.Remove(path); err != nil {
-				return Result{}, fmt.Errorf("remove update archive %q: %w", path, err)
-			}
-			if opts.Log != nil {
-				opts.Log.Info("Update archive removed", zap.String("file", path))
-			}
-		}
-	}
 	return res, nil
 }
 
+func validateEntryCRC(file *zip.File) error {
+	r, err := file.Open()
+	if err != nil {
+		return err
+	}
+	_, readErr := io.Copy(io.Discard, r)
+	return errors.Join(readErr, r.Close())
+}
+
+func closeUpdateArchive(rc *zip.ReadCloser, path string) error {
+	if err := rc.Close(); err != nil {
+		return fmt.Errorf("close update archive %q: %w", path, err)
+	}
+	return nil
+}
+
 type workArchive struct {
-	file                   *os.File
-	writer                 *zip.Writer
-	path                   string
-	closed                 bool
-	cleanupTemp            bool
-	removeOnCleanup        bool
-	existingSize           int64
-	firstBook              int
-	lastBook               int
-	oldPath                string
-	skipFirstUpdateRemoval bool
+	file                  *os.File
+	writer                *zip.Writer
+	path                  string
+	closed                bool
+	cleanupTemp           bool
+	removeOnCleanup       bool
+	existingSize          int64
+	firstBook             int
+	lastBook              int
+	oldPath               string
+	firstUpdateIsExisting bool
 }
 
 func openWorkArchive(opts Options, last archive, merge archive, updates *[]archive) (*workArchive, error) {
@@ -328,7 +349,7 @@ func openWorkArchive(opts Options, last archive, merge archive, updates *[]archi
 		work.oldPath = lastPath
 		work.firstBook = last.begin
 		work.lastBook = last.end
-		work.skipFirstUpdateRemoval = true
+		work.firstUpdateIsExisting = true
 	}
 	return work, nil
 }

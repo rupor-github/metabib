@@ -49,6 +49,16 @@ func TestParseSize(t *testing.T) {
 	}
 }
 
+func TestRollupCommandHasNoKeepUpdatesFlag(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range rollupCommand().Flags {
+		if slices.Contains(flag.Names(), "keep-updates") {
+			t.Fatal("rollup command still exposes --keep-updates")
+		}
+	}
+}
+
 func TestRecordFileKeys(t *testing.T) {
 	t.Parallel()
 

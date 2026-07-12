@@ -2,9 +2,13 @@ package rollup
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,7 +98,7 @@ func TestRunCreatesMergeArchive(t *testing.T) {
 		"2.fb2": "two",
 	})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: true})
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -123,7 +127,7 @@ func TestRunFinalizesArchive(t *testing.T) {
 		"2.fb2": "two",
 	})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1, KeepUpdates: true})
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -144,7 +148,7 @@ func TestRunRemovesSupersededLastArchive(t *testing.T) {
 	writeZip(t, oldArchive, map[string]string{"1.fb2": "one"})
 	writeZip(t, filepath.Join(updates, "f.fb2.0000000002-0000000002.zip"), map[string]string{"2.fb2": "two"})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: true})
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -163,7 +167,7 @@ func TestRunRemovesSupersededLastArchive(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotRemoveTempLikeUpdateNames(t *testing.T) {
+func TestRunPreservesUpdateArchives(t *testing.T) {
 	t.Parallel()
 
 	archives := t.TempDir()
@@ -173,15 +177,15 @@ func TestRunDoesNotRemoveTempLikeUpdateNames(t *testing.T) {
 	validUpdate := filepath.Join(updates, "f.fb2.0000000002-0000000002.zip")
 	writeZip(t, validUpdate, map[string]string{"2.fb2": "two"})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: false})
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if _, err := os.Stat(bogusUpdate); err != nil {
 		t.Fatalf("bogus update stat error = %v, want preserved", err)
 	}
-	if _, err := os.Stat(validUpdate); !os.IsNotExist(err) {
-		t.Fatalf("valid update stat error = %v, want removed", err)
+	if _, err := os.Stat(validUpdate); err != nil {
+		t.Fatalf("valid update stat error = %v, want preserved", err)
 	}
 	if filepath.Base(res.ActiveMerge) != "fb2-0000000002-0000000002.merging" {
 		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
@@ -203,11 +207,10 @@ func TestRunKeepsNewEntriesFromOverlappingUpdates(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 
 	res, err := Run(context.Background(), Options{
-		ArchiveDir:  archives,
-		UpdateDirs:  []string{updates},
-		SizeBytes:   1_000_000,
-		KeepUpdates: true,
-		Log:         zap.New(core),
+		ArchiveDir: archives,
+		UpdateDirs: []string{updates},
+		SizeBytes:  1_000_000,
+		Log:        zap.New(core),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -236,12 +239,147 @@ func TestRunUsesMinMaxRangeForOutOfOrderEntries(t *testing.T) {
 		{Name: "1.fb2", Content: "one"},
 	})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000, KeepUpdates: true})
+	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000002.merging" {
 		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
+	}
+}
+
+func TestRunFailsWhenUpdateCannotBeOpened(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	updatePath := filepath.Join(updates, "f.fb2.0000000001-0000000001.zip")
+	if err := os.WriteFile(updatePath, []byte("not a zip"), 0o644); err != nil {
+		t.Fatalf("write update: %v", err)
+	}
+
+	_, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
+	if err == nil || !strings.Contains(err.Error(), "open update archive") {
+		t.Fatalf("Run() error = %v, want open update archive error", err)
+	}
+	if _, err := os.Stat(updatePath); err != nil {
+		t.Fatalf("update stat error = %v, want preserved", err)
+	}
+}
+
+func TestRunFailsWhenEntryCopyFailsAndKeepsCommittedOutput(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	firstUpdate := filepath.Join(updates, "f.fb2.0000000001-0000000001.zip")
+	secondUpdate := filepath.Join(updates, "f.fb2.0000000002-0000000002.zip")
+	writeZip(t, firstUpdate, map[string]string{"1.fb2": "one"})
+	writeZip(t, secondUpdate, map[string]string{"2.fb2": "two"})
+	copyErr := errors.New("copy failed")
+	copies := 0
+
+	_, err := run(
+		context.Background(),
+		Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1},
+		func(writer *zip.Writer, file *zip.File) error {
+			copies++
+			if copies == 2 {
+				return copyErr
+			}
+			return writer.Copy(file)
+		},
+	)
+	if !errors.Is(err, copyErr) {
+		t.Fatalf("run() error = %v, want copy failure", err)
+	}
+	for _, path := range []string{firstUpdate, secondUpdate} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("update %q stat error = %v, want preserved", path, err)
+		}
+	}
+	outputs, err := filepath.Glob(filepath.Join(archives, "fb2-*.zip"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(outputs) != 1 {
+		t.Fatalf("committed outputs = %#v, want one", outputs)
+	}
+	if entries, err := countZipEntries(outputs[0]); err != nil || entries != 1 {
+		t.Fatalf("committed output entries=%d err=%v, want one", entries, err)
+	}
+}
+
+func TestRunWarnsAndIgnoresEmptyAndNonNumericEntries(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	updatePath := filepath.Join(updates, "f.fb2.0000000001-0000000003.zip")
+	writeZipOrdered(t, updatePath, []zipEntry{
+		{Name: "1.fb2", Content: "one"},
+		{Name: "2.fb2"},
+		{Name: "notes.txt", Content: "ignored"},
+	})
+	core, logs := observer.New(zap.WarnLevel)
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir:  archives,
+		UpdateDirs:  []string{updates},
+		SizeBytes:   1_000_000,
+		ValidateCRC: true,
+		Log:         zap.New(core),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if logs.FilterMessage("Skipping empty archive entry").Len() != 1 {
+		t.Fatalf("empty entry warnings = %d, want one", logs.FilterMessage("Skipping empty archive entry").Len())
+	}
+	if logs.FilterMessage("Skipping entry with non-numeric name").Len() != 1 {
+		t.Fatalf("non-numeric entry warnings = %d, want one", logs.FilterMessage("Skipping entry with non-numeric name").Len())
+	}
+	if entries, err := countZipEntries(res.ActiveMerge); err != nil || entries != 1 {
+		t.Fatalf("active merge entries=%d err=%v, want one", entries, err)
+	}
+	if _, err := os.Stat(updatePath); err != nil {
+		t.Fatalf("update stat error = %v, want preserved", err)
+	}
+}
+
+func TestRunOptionalCRCValidation(t *testing.T) {
+	t.Parallel()
+
+	fastArchives := t.TempDir()
+	fastUpdates := t.TempDir()
+	fastUpdate := filepath.Join(fastUpdates, "f.fb2.0000000001-0000000001.zip")
+	writeCorruptStoredZip(t, fastUpdate, "1.fb2", "one")
+	sourceMethod, sourceRaw := readRawZipEntry(t, fastUpdate, "1.fb2")
+
+	res, err := Run(context.Background(), Options{ArchiveDir: fastArchives, UpdateDirs: []string{fastUpdates}, SizeBytes: 1_000_000})
+	if err != nil {
+		t.Fatalf("Run(validate_crc=false) error = %v", err)
+	}
+	outputMethod, outputRaw := readRawZipEntry(t, res.ActiveMerge, "1.fb2")
+	if outputMethod != sourceMethod || !bytes.Equal(outputRaw, sourceRaw) {
+		t.Fatalf("direct copy changed compressed entry: method=%d/%d bytes_equal=%v", outputMethod, sourceMethod, bytes.Equal(outputRaw, sourceRaw))
+	}
+
+	checkedArchives := t.TempDir()
+	checkedUpdates := t.TempDir()
+	checkedUpdate := filepath.Join(checkedUpdates, "f.fb2.0000000001-0000000001.zip")
+	writeCorruptStoredZip(t, checkedUpdate, "1.fb2", "one")
+	_, err = Run(context.Background(), Options{
+		ArchiveDir:  checkedArchives,
+		UpdateDirs:  []string{checkedUpdates},
+		SizeBytes:   1_000_000,
+		ValidateCRC: true,
+	})
+	if !errors.Is(err, zip.ErrChecksum) {
+		t.Fatalf("Run(validate_crc=true) error = %v, want zip.ErrChecksum", err)
+	}
+	if _, err := os.Stat(checkedUpdate); err != nil {
+		t.Fatalf("checked update stat error = %v, want preserved", err)
 	}
 }
 
@@ -252,6 +390,83 @@ func writeZip(t *testing.T, path string, files map[string]string) {
 		entries = append(entries, zipEntry{Name: name, Content: content})
 	}
 	writeZipOrdered(t, path, entries)
+}
+
+func writeCorruptStoredZip(t *testing.T, path string, name string, content string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	zw := zip.NewWriter(f)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Store})
+	if err != nil {
+		t.Fatalf("create stored entry %s: %v", name, err)
+	}
+	if _, err := io.WriteString(w, content); err != nil {
+		t.Fatalf("write stored entry %s: %v", name, err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close zip file: %v", err)
+	}
+
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open zip for corruption: %v", err)
+	}
+	offset, err := zr.File[0].DataOffset()
+	if err != nil {
+		zr.Close()
+		t.Fatalf("entry data offset: %v", err)
+	}
+	if err := zr.Close(); err != nil {
+		t.Fatalf("close zip reader: %v", err)
+	}
+	f, err = os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("open zip for corruption: %v", err)
+	}
+	b := []byte{0}
+	if _, err := f.ReadAt(b, offset); err != nil {
+		f.Close()
+		t.Fatalf("read entry byte: %v", err)
+	}
+	b[0] ^= 0xff
+	if _, err := f.WriteAt(b, offset); err != nil {
+		f.Close()
+		t.Fatalf("corrupt entry byte: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close corrupted zip: %v", err)
+	}
+}
+
+func readRawZipEntry(t *testing.T, path string, name string) (uint16, []byte) {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("open zip %s: %v", path, err)
+	}
+	defer zr.Close()
+	for _, file := range zr.File {
+		if file.Name != name {
+			continue
+		}
+		r, err := file.OpenRaw()
+		if err != nil {
+			t.Fatalf("open raw entry %s: %v", name, err)
+		}
+		data, err := io.ReadAll(r)
+		if err != nil {
+			t.Fatalf("read raw entry %s: %v", name, err)
+		}
+		return file.Method, data
+	}
+	t.Fatalf("entry %s not found in %s", name, path)
+	return 0, nil
 }
 
 type zipEntry struct {

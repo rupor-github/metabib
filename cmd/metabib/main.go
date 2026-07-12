@@ -187,7 +187,6 @@ func rollupCommand() *cli.Command {
 				Usage:   "directory containing daily update ZIPs; can be repeated; defaults to --archives",
 			},
 			&cli.IntFlag{Name: "size", Value: 2000, Usage: "finalized archive target size in decimal megabytes"},
-			&cli.BoolFlag{Name: "keep-updates", Usage: "keep consumed daily update archives"},
 		},
 		Action: runRollup,
 	}
@@ -354,7 +353,7 @@ func runRollup(ctx context.Context, cmd *cli.Command) error {
 		ArchiveDir:  cmd.String("archives"),
 		UpdateDirs:  cmd.StringSlice("updates"),
 		SizeBytes:   int64(cmd.Int("size")) * 1000 * 1000,
-		KeepUpdates: cmd.Bool("keep-updates"),
+		ValidateCRC: env.Cfg.Rollup.ValidateCRC,
 		Log:         env.Log,
 	})
 	if err != nil {

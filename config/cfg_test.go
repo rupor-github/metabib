@@ -32,6 +32,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if _, ok := cfg.Fetch.FindLibrary("flibusta"); !ok {
 		t.Fatal("default flibusta fetch profile is missing")
 	}
+	if cfg.Rollup.ValidateCRC {
+		t.Fatal("Rollup.ValidateCRC = true, want false")
+	}
 	if !strings.Contains(cfg.INPX.CommentTemplate, "{{ .DatabaseName }}") {
 		t.Fatalf("CommentTemplate = %q, want unprocessed INPX template", cfg.INPX.CommentTemplate)
 	}
@@ -52,6 +55,8 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"database:",
 		"  name: custom",
 		"  managed: false",
+		"rollup:",
+		"  validate_crc: true",
 		"processing:",
 		"  parse_fb2: false",
 		"logging:",
@@ -74,6 +79,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Processing.ParseFB2 {
 		t.Fatal("Processing.ParseFB2 = true, want false")
+	}
+	if !cfg.Rollup.ValidateCRC {
+		t.Fatal("Rollup.ValidateCRC = false, want true")
 	}
 	if cfg.Database.User != "root" {
 		t.Fatalf("default Database.User was not preserved: %q", cfg.Database.User)

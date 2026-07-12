@@ -226,7 +226,7 @@ Available `fetch` arguments:
 Roll downloaded daily update ZIPs into local size-bounded FB2 archives:
 
 ```sh
-metabib rollup --archives flibusta --updates upd_flibusta --keep-updates
+metabib rollup --archives flibusta --updates upd_flibusta
 ```
 
 `rollup` replaces the old `libmerge` role. It keeps finalized archives and the
@@ -235,6 +235,14 @@ active `.merging` archive in `--archives`, reads daily update ZIPs from each
 `--updates` directory is provided, `rollup` scans `--archives` for update ZIPs as
 well. Generated archive names use the ID width of the existing `.merging` archive
 or latest finalized `fb2-*.zip`; new archive directories default to 10-digit IDs.
+Daily update ZIPs are always preserved; retention and cleanup are separate
+operational concerns.
+
+By default, direct compressed copying does not validate entry payload CRCs. Set
+`rollup.validate_crc: true` in the configuration to decompress each non-empty
+numeric entry for CRC-32 validation before copying it. Validation can significantly
+reduce performance, but entries are still copied in their original compressed form
+without recompression.
 
 The command preserves the old `libmerge` automation exit-code contract: exit code
 `0` means no finalized archive was produced, exit code `1` means an error
@@ -249,7 +257,6 @@ Available `rollup` arguments:
   repeated. Defaults to `--archives` when omitted.
 - `--size MB`: finalized archive target size in decimal megabytes. Default is
   `2000`.
-- `--keep-updates`: keep consumed daily update ZIPs instead of removing them.
 
 ### Build Cache Manifests
 

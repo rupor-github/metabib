@@ -24,6 +24,7 @@ type Config struct {
 	Version    int              `yaml:"version" validate:"eq=1"`
 	Database   DatabaseConfig   `yaml:"database"`
 	Fetch      FetchConfig      `yaml:"fetch"`
+	Rollup     RollupConfig     `yaml:"rollup"`
 	Processing ProcessingConfig `yaml:"processing"`
 	INPX       INPXConfig       `yaml:"inpx"`
 	Logging    LoggingConfig    `yaml:"logging"`
@@ -66,6 +67,10 @@ type ProcessingConfig struct {
 
 type FetchConfig struct {
 	Libraries []FetchLibraryConfig `yaml:"libraries" validate:"dive"`
+}
+
+type RollupConfig struct {
+	ValidateCRC bool `yaml:"validate_crc"`
 }
 
 type FetchLibraryConfig struct {

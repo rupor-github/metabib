@@ -280,8 +280,7 @@ log_phase "Rolling up ${name} archives"
 
 "${metabib}" "${metabib_args[@]}" rollup \
 	--archives "${adir}" \
-	--updates "${udir}" \
-	--keep-updates
+	--updates "${udir}"
 
 res=$?
 if (( res == 1 )); then

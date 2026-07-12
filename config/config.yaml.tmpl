@@ -57,6 +57,13 @@ fetch:
       sql_url: http://flibusta.is/sql/
       proxy: ""
 
+rollup:
+  # Validate CRC-32 for each non-empty numeric ZIP entry before copying it.
+  # Enabling this requires fully decompressing every copied entry and can
+  # significantly reduce rollup performance. Entries are still copied in their
+  # original compressed form without recompression.
+  validate_crc: false
+
 processing:
   # Parse FB2 description metadata from archive entries.
   parse_fb2: true
