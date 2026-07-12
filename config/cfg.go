@@ -47,6 +47,7 @@ type DatabaseConfig struct {
 	ServerPath      string `yaml:"server_path,omitempty"`
 	InstallDBPath   string `yaml:"install_db_path,omitempty"`
 	ClientPath      string `yaml:"client_path,omitempty"`
+	AdminPath       string `yaml:"admin_path,omitempty"`
 	MaxOpenConns    int    `yaml:"max_open_connections" validate:"min=0"`
 	MaxIdleConns    int    `yaml:"max_idle_connections" validate:"min=0"`
 	ConnMaxLifetime int    `yaml:"connection_max_lifetime_seconds" validate:"min=0"`

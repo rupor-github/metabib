@@ -35,6 +35,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Rollup.ValidateCRC {
 		t.Fatal("Rollup.ValidateCRC = true, want false")
 	}
+	if cfg.Database.AdminPath != "" {
+		t.Fatalf("Database.AdminPath = %q, want empty", cfg.Database.AdminPath)
+	}
 	if !strings.Contains(cfg.INPX.CommentTemplate, "{{ .DatabaseName }}") {
 		t.Fatalf("CommentTemplate = %q, want unprocessed INPX template", cfg.INPX.CommentTemplate)
 	}
@@ -55,6 +58,7 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"database:",
 		"  name: custom",
 		"  managed: false",
+		"  admin_path: /custom/mariadb-admin",
 		"rollup:",
 		"  validate_crc: true",
 		"processing:",
@@ -76,6 +80,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Database.Managed {
 		t.Fatal("Database.Managed = true, want false")
+	}
+	if cfg.Database.AdminPath != "/custom/mariadb-admin" {
+		t.Fatalf("Database.AdminPath = %q", cfg.Database.AdminPath)
 	}
 	if cfg.Processing.ParseFB2 {
 		t.Fatal("Processing.ParseFB2 = true, want false")

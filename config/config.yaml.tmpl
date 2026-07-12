@@ -33,10 +33,13 @@ database:
   log_file: '{{ joinPath .ProjectDir "data" "metabib-mariadb.log" }}'
 
   # Optional full paths to MariaDB binaries. If empty, metabib first searches
-  # ./mariadb recursively under the startup directory, then PATH.
+  # ./mariadb recursively under the startup directory, then PATH. The admin
+  # client is optional but enables graceful managed-server shutdown; when it is
+  # unavailable, metabib falls back to signaling the managed process.
   server_path: ""
   install_db_path: ""
   client_path: ""
+  admin_path: ""
 
   # Connection pool used by metabib while reading metadata. 0 lets database/sql
   # use its default for that particular setting.

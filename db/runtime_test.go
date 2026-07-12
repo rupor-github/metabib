@@ -1,11 +1,17 @@
 package db
 
 import (
+	"context"
+	"errors"
+	"io"
 	"net"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"metabib/config"
 )
@@ -34,6 +40,19 @@ func TestBinaryHelpers(t *testing.T) {
 	}
 	if runtime.GOOS == "windows" && !contains(names, "mariadb.exe") {
 		t.Fatalf("binaryFileNames() on windows = %#v", names)
+	}
+}
+
+func TestFindAdminBinaryUsesPreparedPath(t *testing.T) {
+	t.Parallel()
+
+	rt := &Runtime{Admin: "/custom/mariadb-admin"}
+	path, err := rt.findAdminBinary()
+	if err != nil {
+		t.Fatalf("findAdminBinary() error = %v", err)
+	}
+	if path != rt.Admin {
+		t.Fatalf("findAdminBinary() = %q, want %q", path, rt.Admin)
 	}
 }
 
@@ -180,4 +199,151 @@ func TestRemoveStaleSocket(t *testing.T) {
 	if _, err := os.Stat(socket); !os.IsNotExist(err) {
 		t.Fatalf("socket stat error = %v, want not exist", err)
 	}
+}
+
+func TestStartManagedProcessRejectsCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	cmd, _ := managedRuntimeHelperCommand(t, "graceful")
+	rt := &Runtime{}
+	if err := rt.startManagedProcess(ctx, cmd); !errors.Is(err, context.Canceled) {
+		t.Fatalf("startManagedProcess() error = %v, want context.Canceled", err)
+	}
+	if cmd.Process != nil {
+		t.Fatal("startManagedProcess() started process for canceled context")
+	}
+}
+
+func TestManagedProcessSurvivesCancellationAndClosesGracefully(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Interrupt is not supported for child processes on Windows")
+	}
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	rt, ready := managedTestRuntime(t, "graceful", 2*time.Second)
+	if err := rt.startManagedProcess(ctx, rt.cmd); err != nil {
+		t.Fatalf("startManagedProcess() error = %v", err)
+	}
+	waitManagedRuntimeHelper(t, ready)
+	cancel()
+	select {
+	case err := <-rt.waitCh:
+		t.Fatalf("managed process exited on context cancellation: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if rt.cmd.ProcessState == nil || !rt.cmd.ProcessState.Exited() {
+		t.Fatal("managed process was not reaped")
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestManagedProcessTimeoutKillsAndReaps(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal behavior differs on Windows")
+	}
+	t.Parallel()
+
+	rt, ready := managedTestRuntime(t, "ignore", 100*time.Millisecond)
+	if err := rt.startManagedProcess(context.Background(), rt.cmd); err != nil {
+		t.Fatalf("startManagedProcess() error = %v", err)
+	}
+	waitManagedRuntimeHelper(t, ready)
+	err := rt.Close()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Close() error = %v, want context.DeadlineExceeded", err)
+	}
+	if rt.cmd.ProcessState == nil {
+		t.Fatal("timed-out managed process was not reaped")
+	}
+}
+
+func TestUnmanagedRuntimeDoesNotStopProcess(t *testing.T) {
+	t.Parallel()
+
+	cmd, ready := managedRuntimeHelperCommand(t, "ignore")
+	rt := &Runtime{cmd: cmd, LogOut: io.Discard}
+	if err := rt.startManagedProcess(context.Background(), cmd); err != nil {
+		t.Fatalf("startManagedProcess() error = %v", err)
+	}
+	waitManagedRuntimeHelper(t, ready)
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	select {
+	case err := <-rt.waitCh:
+		t.Fatalf("unmanaged process exited during Close: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatalf("kill unmanaged test process: %v", err)
+	}
+	<-rt.waitCh
+	if cmd.ProcessState == nil {
+		t.Fatal("unmanaged test process was not reaped")
+	}
+}
+
+func TestManagedRuntimeHelperProcess(t *testing.T) {
+	mode := os.Getenv("METABIB_MANAGED_RUNTIME_HELPER")
+	if mode == "" {
+		return
+	}
+	if err := os.WriteFile(os.Getenv("METABIB_MANAGED_RUNTIME_READY"), nil, 0o644); err != nil {
+		t.Fatalf("write helper readiness marker: %v", err)
+	}
+	if mode == "ignore" {
+		signal.Ignore(os.Interrupt)
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt)
+	defer signal.Stop(signals)
+	<-signals
+}
+
+func managedTestRuntime(t *testing.T, mode string, timeout time.Duration) (*Runtime, string) {
+	t.Helper()
+	cmd, ready := managedRuntimeHelperCommand(t, mode)
+	return &Runtime{
+		Config:          config.DatabaseConfig{Protocol: "unix", User: "root"},
+		LogOut:          io.Discard,
+		managed:         true,
+		cmd:             cmd,
+		findAdmin:       func() (string, error) { return "", errors.New("admin unavailable") },
+		shutdownTimeout: timeout,
+	}, ready
+}
+
+func managedRuntimeHelperCommand(t *testing.T, mode string) (*exec.Cmd, string) {
+	t.Helper()
+	ready := filepath.Join(t.TempDir(), "ready")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestManagedRuntimeHelperProcess$")
+	cmd.Env = append(
+		os.Environ(),
+		"METABIB_MANAGED_RUNTIME_HELPER="+mode,
+		"METABIB_MANAGED_RUNTIME_READY="+ready,
+	)
+	return cmd, ready
+}
+
+func waitManagedRuntimeHelper(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("managed runtime helper did not become ready")
 }

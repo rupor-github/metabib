@@ -384,7 +384,7 @@ func (c rollupExitCode) ExitCode() int {
 	return int(c)
 }
 
-func runCache(ctx context.Context, cmd *cli.Command) error {
+func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 	cfg := state.EnvFromContext(ctx).Cfg
 	applyCacheOverrides(cfg, cmd)
 	env := state.EnvFromContext(ctx)
@@ -451,7 +451,9 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 			if err != nil {
 				return err
 			}
-			defer runtime.Close()
+			defer func() {
+				retErr = errors.Join(retErr, runtime.Close())
+			}()
 			cfg.Database = runtime.Config
 
 			if importDumps {

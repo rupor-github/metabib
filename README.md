@@ -66,8 +66,10 @@ including update lineages and differential update schemes.
 When the cache pass processes SQL dumps in the default managed mode, `metabib`
 discovers MariaDB binaries recursively in `./mariadb` first, then in `PATH`,
 starts a private local MariaDB server, imports `*.sql` dumps with the discovered
-`mariadb` or `mysql` client, and stops the server when processing is done. It
-does not require a system database service.
+`mariadb` or `mysql` client, and stops the server with `mariadb-admin` or
+`mysqladmin` when processing is done. It does not require a system database
+service. If the optional admin client is unavailable, managed shutdown falls
+back to signaling the private server process.
 
 To use an existing MariaDB service instead of the managed local instance, set
 `database.dsn` or `database.managed: false` in the configuration file.
@@ -84,7 +86,8 @@ user's responsibility.
 On Windows, download MariaDB from <https://mariadb.org/download/>, select the
 ZIP archive package, and unzip it into a `mariadb` directory inside the `metabib`
 directory. `metabib` will discover binaries such as `mariadbd.exe`,
-`mariadb-install-db.exe`, and `mariadb.exe` from that tree automatically.
+`mariadb-install-db.exe`, `mariadb.exe`, and `mariadb-admin.exe` from that tree
+automatically.
 
 The same ZIP/tarball approach also works on Linux. On Linux it is often simpler
 to install the distribution package instead, for example:
@@ -113,6 +116,7 @@ database:
   server_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadbd"
   install_db_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb-install-db"
   client_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb"
+  admin_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb-admin"
 ```
 
 ## Usage

@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -22,13 +23,19 @@ import (
 )
 
 type Runtime struct {
-	Config  config.DatabaseConfig
-	Client  string
-	LogOut  io.Writer
-	Log     *zap.Logger
-	managed bool
-	cmd     *exec.Cmd
-	tmpDir  string
+	Config          config.DatabaseConfig
+	Client          string
+	Admin           string
+	LogOut          io.Writer
+	Log             *zap.Logger
+	managed         bool
+	cmd             *exec.Cmd
+	waitCh          chan error
+	tmpDir          string
+	closeOnce       sync.Once
+	closeErr        error
+	findAdmin       func() (string, error)
+	shutdownTimeout time.Duration
 }
 
 func PrepareRuntime(
@@ -73,85 +80,123 @@ func PrepareRuntime(
 	if err != nil {
 		return nil, err
 	}
+	admin, err := findBinary(cfg.AdminPath, "mariadb-admin", "mysqladmin")
+	if err != nil && cfg.AdminPath != "" {
+		return nil, err
+	}
 
-	rt := &Runtime{Config: cfg, Client: client, LogOut: logOut, Log: log, managed: true}
+	rt := &Runtime{Config: cfg, Client: client, Admin: admin, LogOut: logOut, Log: log, managed: true}
 	if err := rt.prepareManagedPaths(); err != nil {
 		return nil, err
 	}
 	if err := rt.initializeDataDir(ctx, installDB, overwriteDataDir); err != nil {
-		rt.Close()
-		return nil, err
+		return nil, errors.Join(err, rt.Close())
 	}
 	if err := rt.startServer(ctx, server); err != nil {
-		rt.Close()
-		return nil, err
+		return nil, errors.Join(err, rt.Close())
 	}
 	return rt, nil
 }
 
 func (r *Runtime) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.closeOnce.Do(func() {
+		r.closeErr = r.close()
+	})
+	return r.closeErr
+}
+
+func (r *Runtime) close() error {
 	start := time.Now()
 	var errs []error
 	defer func() {
-		if r != nil && r.Log != nil {
+		if r.Log != nil {
 			r.Log.Info("Database runtime closed", zap.Bool("managed", r.managed), zap.Duration("elapsed", time.Since(start)))
 		}
 	}()
-	if r != nil && r.managed && r.cmd != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	if r.managed && r.cmd != nil && r.waitCh != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), r.managedShutdownTimeout())
 		defer cancel()
-		admin, err := findBinary("", "mariadb-admin", "mysqladmin")
-		if err == nil {
-			args := []string{"--user", r.Config.User}
-			if r.Config.Protocol == "unix" {
-				args = append(args, "--protocol", "socket", "--socket", r.Config.Socket)
-			} else {
-				args = append(args, "--protocol", "tcp", "--host", r.Config.Host, "--port", fmt.Sprintf("%d", r.Config.Port))
+		select {
+		case err := <-r.waitCh:
+			if err != nil {
+				errs = append(errs, fmt.Errorf("managed MariaDB exited before shutdown: %w", err))
 			}
-			if r.Config.Password != "" {
-				args = append(args, "--password="+r.Config.Password)
-			} else {
-				args = append(args, "--skip-ssl")
-			}
-			args = append(args, "shutdown")
-			cmd := exec.CommandContext(ctx, admin, args...)
-			cmd.Stdout = r.LogOut
-			cmd.Stderr = r.LogOut
-			if err := cmd.Run(); err != nil {
-				errs = append(errs, fmt.Errorf("shutdown managed MariaDB: %w", err))
-			}
-		} else if r.cmd.Process != nil {
-			if err := r.cmd.Process.Signal(os.Interrupt); err != nil {
-				errs = append(errs, fmt.Errorf("signal managed MariaDB: %w", err))
-			}
-		}
-		if r.cmd.Process != nil {
-			done := make(chan error, 1)
-			go func() {
-				if r.cmd.ProcessState != nil {
-					done <- nil
-					return
-				}
-				done <- r.cmd.Wait()
-			}()
-			select {
-			case err := <-done:
-				if err != nil && !strings.Contains(err.Error(), "signal") {
-					errs = append(errs, fmt.Errorf("wait managed MariaDB: %w", err))
-				}
-			case <-ctx.Done():
-				if err := r.cmd.Process.Kill(); err != nil {
-					errs = append(errs, fmt.Errorf("kill managed MariaDB: %w", err))
-				}
-			}
+		default:
+			errs = append(errs, r.stopManagedServer(ctx)...)
 		}
 	}
-	if r != nil && r.tmpDir != "" {
+	if r.tmpDir != "" {
 		if err := os.RemoveAll(r.tmpDir); err != nil {
 			errs = append(errs, fmt.Errorf("remove temporary MariaDB directory: %w", err))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (r *Runtime) stopManagedServer(ctx context.Context) []error {
+	var errs []error
+	admin, findErr := r.findAdminBinary()
+	adminStopped := false
+	if findErr == nil {
+		args := []string{"--user", r.Config.User}
+		if r.Config.Protocol == "unix" {
+			args = append(args, "--protocol", "socket", "--socket", r.Config.Socket)
+		} else {
+			args = append(args, "--protocol", "tcp", "--host", r.Config.Host, "--port", fmt.Sprintf("%d", r.Config.Port))
+		}
+		if r.Config.Password != "" {
+			args = append(args, "--password="+r.Config.Password)
+		} else {
+			args = append(args, "--skip-ssl")
+		}
+		args = append(args, "shutdown")
+		cmd := exec.CommandContext(ctx, admin, args...)
+		cmd.Stdout = r.LogOut
+		cmd.Stderr = r.LogOut
+		if err := cmd.Run(); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown managed MariaDB: %w", err))
+		} else {
+			adminStopped = true
+		}
+	}
+	if !adminStopped && r.cmd.Process != nil {
+		if err := r.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			errs = append(errs, fmt.Errorf("signal managed MariaDB: %w", err))
+		}
+	}
+	select {
+	case <-r.waitCh:
+		return errs
+	case <-ctx.Done():
+		errs = append(errs, fmt.Errorf("managed MariaDB did not stop before timeout: %w", ctx.Err()))
+	}
+	if r.cmd.Process != nil {
+		if err := r.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			errs = append(errs, fmt.Errorf("kill managed MariaDB: %w", err))
+		}
+	}
+	<-r.waitCh
+	return errs
+}
+
+func (r *Runtime) findAdminBinary() (string, error) {
+	if r.findAdmin != nil {
+		return r.findAdmin()
+	}
+	if r.Admin == "" {
+		return "", errors.New("managed MariaDB admin client is unavailable")
+	}
+	return r.Admin, nil
+}
+
+func (r *Runtime) managedShutdownTimeout() time.Duration {
+	if r.shutdownTimeout > 0 {
+		return r.shutdownTimeout
+	}
+	return 15 * time.Second
 }
 
 func (r *Runtime) Managed() bool {
@@ -353,10 +398,10 @@ func (r *Runtime) startServer(ctx context.Context, server string) error {
 	} else {
 		args = append(args, "--bind-address="+r.Config.Host, fmt.Sprintf("--port=%d", r.Config.Port))
 	}
-	r.cmd = exec.CommandContext(ctx, server, args...)
-	r.cmd.Stdout = r.LogOut
-	r.cmd.Stderr = r.LogOut
-	if err := r.cmd.Start(); err != nil {
+	cmd := exec.Command(server, args...)
+	cmd.Stdout = r.LogOut
+	cmd.Stderr = r.LogOut
+	if err := r.startManagedProcess(ctx, cmd); err != nil {
 		return fmt.Errorf("start managed MariaDB with %q: %w", server, err)
 	}
 	if err := r.waitReady(ctx); err != nil {
@@ -371,6 +416,23 @@ func (r *Runtime) startServer(ctx context.Context, server string) error {
 		}
 		r.Log.Info("Managed MariaDB started", fields...)
 	}
+	return nil
+}
+
+func (r *Runtime) startManagedProcess(ctx context.Context, cmd *exec.Cmd) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	r.cmd = cmd
+	waitCh := make(chan error, 1)
+	r.waitCh = waitCh
+	go func() {
+		waitCh <- cmd.Wait()
+		close(waitCh)
+	}()
 	return nil
 }
 

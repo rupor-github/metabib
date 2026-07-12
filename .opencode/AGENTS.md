@@ -17,7 +17,7 @@
 - `go tool task` regenerates `misc/version.go`; direct `go build` requires it to already exist.
 
 ## Runtime Behavior
-- Default DB mode is managed MariaDB: the app discovers `mariadbd`/`mysqld`, `mariadb-install-db`/`mysql_install_db`, and `mariadb`/`mysql`, starts a private socket-only server, and stores data under the executable directory (`build/data/mariadb` when running `build/metabib`).
+- Default DB mode is managed MariaDB: the app discovers `mariadbd`/`mysqld`, `mariadb-install-db`/`mysql_install_db`, `mariadb`/`mysql`, and optionally `mariadb-admin`/`mysqladmin`; it starts a private socket-only server and stores data under the executable directory (`build/data/mariadb` when running `build/metabib`).
 - Use database config (`database.dsn` or `database.managed: false`) to target an existing MariaDB service instead of managed mode.
 - `--db-overwrite` removes/recreates the managed datadir and drops the DB; without it, dump import still recreates tables present in the dumps, but unrelated stale tables can remain.
 
