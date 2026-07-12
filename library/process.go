@@ -776,7 +776,8 @@ func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *co
 		if err != nil {
 			rec.Errors = append(rec.Errors, fmt.Sprintf("open FB2 entry: %v", err))
 		} else {
-			reader := bufferedContextReader(ctx, r, cfg.Processing.ArchiveReadBuffer)
+			limited := &fb2LimitReader{reader: r, remaining: fb2.MaxDecompressedBytes}
+			reader := bufferedContextReader(ctx, limited, cfg.Processing.ArchiveReadBuffer)
 			var parser io.Reader = reader
 			var hash hashWriter
 			if cfg.Processing.ArchiveContentMD5 {
@@ -831,6 +832,11 @@ type contextReader struct {
 	reader io.Reader
 }
 
+type fb2LimitReader struct {
+	reader    io.Reader
+	remaining int64
+}
+
 func bufferedContextReader(ctx context.Context, reader io.Reader, bufferSize int) io.Reader {
 	cr := &contextReader{ctx: ctx, reader: reader}
 	if bufferSize <= 0 {
@@ -851,6 +857,23 @@ func (r *contextReader) Read(p []byte) (int, error) {
 		return n, ctxErr
 	}
 	return n, nil
+}
+
+func (r *fb2LimitReader) Read(p []byte) (int, error) {
+	if r.remaining <= 0 {
+		var b [1]byte
+		n, err := r.reader.Read(b[:])
+		if n > 0 {
+			return 0, fmt.Errorf("%w: decompressed FB2 entry exceeds %d bytes", fb2.ErrLimitExceeded, fb2.MaxDecompressedBytes)
+		}
+		return 0, err
+	}
+	if int64(len(p)) > r.remaining {
+		p = p[:int(r.remaining)]
+	}
+	n, err := r.reader.Read(p)
+	r.remaining -= int64(n)
+	return n, err
 }
 
 func archiveEntryMD5(ctx context.Context, file *zip.File, bufferSize int) (string, error) {

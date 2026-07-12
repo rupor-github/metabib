@@ -7,9 +7,11 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"metabib/config"
+	"metabib/fb2"
 	"metabib/model"
 )
 
@@ -40,6 +42,26 @@ func TestBufferedContextReaderCancellation(t *testing.T) {
 	_, err := r.Read(make([]byte, 4))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Read() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestFB2LimitReaderRejectsOversizedEntry(t *testing.T) {
+	t.Parallel()
+
+	data, err := io.ReadAll(&fb2LimitReader{reader: strings.NewReader("ab"), remaining: 2})
+	if err != nil {
+		t.Fatalf("ReadAll(exact limit) error = %v", err)
+	}
+	if string(data) != "ab" {
+		t.Fatalf("ReadAll(exact limit) data = %q, want ab", data)
+	}
+
+	data, err = io.ReadAll(&fb2LimitReader{reader: strings.NewReader("abc"), remaining: 2})
+	if !errors.Is(err, fb2.ErrLimitExceeded) {
+		t.Fatalf("ReadAll() error = %v, want ErrLimitExceeded", err)
+	}
+	if string(data) != "ab" {
+		t.Fatalf("ReadAll() data = %q, want ab", data)
 	}
 }
 

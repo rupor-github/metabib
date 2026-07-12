@@ -2,6 +2,7 @@ package fb2
 
 import (
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -10,6 +11,24 @@ import (
 
 	"metabib/model"
 )
+
+const (
+	// Defensive limits for FB2 metadata parsing. These are intentionally much larger
+	// than normal library metadata needs; they exist to stop pathological or malicious
+	// inputs from consuming unbounded stack, memory, or decompression work.
+	MaxXMLDepth            = 256
+	MaxXMLNodes            = 1_000_000
+	MaxTextBytes           = 64 * 1024 * 1024
+	MaxDecompressedBytes   = 256 * 1024 * 1024
+	MaxNestedSequenceDepth = 64
+)
+
+var ErrLimitExceeded = errors.New("FB2 parsing limit exceeded")
+
+type parseState struct {
+	nodes     int
+	textBytes int
+}
 
 type element struct {
 	Name     xml.Name
@@ -37,7 +56,8 @@ func Parse(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
 		if !preserveDescription {
 			return parseTitleInfoOnly(dec)
 		}
-		node, err := readElement(dec, start)
+		state := &parseState{}
+		node, err := readElement(dec, start, 1, 0, state)
 		if err != nil {
 			return model.FB2Source{}, err
 		}
@@ -58,7 +78,8 @@ func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			if t.Name.Local == "title-info" {
-				node, err := readElement(dec, t)
+				state := &parseState{}
+				node, err := readElement(dec, t, 1, 0, state)
 				if err != nil {
 					return model.FB2Source{}, err
 				}
@@ -76,7 +97,20 @@ func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
 	}
 }
 
-func readElement(dec *xml.Decoder, start xml.StartElement) (element, error) {
+func readElement(dec *xml.Decoder, start xml.StartElement, depth int, sequenceDepth int, state *parseState) (element, error) {
+	if depth > MaxXMLDepth {
+		return element{}, fmt.Errorf("%w: XML depth exceeds %d", ErrLimitExceeded, MaxXMLDepth)
+	}
+	if start.Name.Local == "sequence" {
+		sequenceDepth++
+		if sequenceDepth > MaxNestedSequenceDepth {
+			return element{}, fmt.Errorf("%w: nested sequence depth exceeds %d", ErrLimitExceeded, MaxNestedSequenceDepth)
+		}
+	}
+	state.nodes++
+	if state.nodes > MaxXMLNodes {
+		return element{}, fmt.Errorf("%w: XML node count exceeds %d", ErrLimitExceeded, MaxXMLNodes)
+	}
 	node := element{Name: start.Name, Attrs: append([]xml.Attr(nil), start.Attr...)}
 	var text strings.Builder
 	for {
@@ -86,13 +120,18 @@ func readElement(dec *xml.Decoder, start xml.StartElement) (element, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			child, err := readElement(dec, t)
+			child, err := readElement(dec, t, depth+1, sequenceDepth, state)
 			if err != nil {
 				return node, err
 			}
 			node.Children = append(node.Children, child)
-			appendChildText(&text, child)
+			if err := appendChildText(&text, child, state); err != nil {
+				return node, err
+			}
 		case xml.CharData:
+			if err := state.addText(len(t)); err != nil {
+				return node, err
+			}
 			text.WriteString(string(t))
 		case xml.EndElement:
 			if t.Name.Local == start.Name.Local {
@@ -103,15 +142,30 @@ func readElement(dec *xml.Decoder, start xml.StartElement) (element, error) {
 	}
 }
 
-func appendChildText(text *strings.Builder, child element) {
+func (s *parseState) addText(bytes int) error {
+	s.textBytes += bytes
+	if s.textBytes > MaxTextBytes {
+		return fmt.Errorf("%w: text size exceeds %d bytes", ErrLimitExceeded, MaxTextBytes)
+	}
+	return nil
+}
+
+func appendChildText(text *strings.Builder, child element, state *parseState) error {
 	value := collectText(child)
 	if value == "" {
-		return
+		return nil
 	}
 	if !isInlineTextElement(child.Name.Local) && text.Len() > 0 {
+		if err := state.addText(1); err != nil {
+			return err
+		}
 		text.WriteByte(' ')
 	}
+	if err := state.addText(len(value)); err != nil {
+		return err
+	}
 	text.WriteString(value)
+	return nil
 }
 
 func isInlineTextElement(name string) bool {

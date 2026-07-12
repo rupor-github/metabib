@@ -1,6 +1,8 @@
 package fb2
 
 import (
+	"encoding/xml"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -167,5 +169,63 @@ func TestParseNoDescription(t *testing.T) {
 	}
 	if src.Present {
 		t.Fatalf("Present = true, want false")
+	}
+}
+
+func TestParseRejectsExcessiveXMLDepth(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+	b.WriteString(`<FictionBook><description>`)
+	for range MaxXMLDepth {
+		b.WriteString(`<a>`)
+	}
+	for range MaxXMLDepth {
+		b.WriteString(`</a>`)
+	}
+	b.WriteString(`</description></FictionBook>`)
+
+	_, err := Parse(strings.NewReader(b.String()), true)
+	if !errors.Is(err, ErrLimitExceeded) || !strings.Contains(err.Error(), "XML depth") {
+		t.Fatalf("Parse() error = %v, want XML depth limit", err)
+	}
+}
+
+func TestParseRejectsExcessiveSequenceDepth(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+	b.WriteString(`<FictionBook><description><title-info>`)
+	for range MaxNestedSequenceDepth + 1 {
+		b.WriteString(`<sequence name="s">`)
+	}
+	for range MaxNestedSequenceDepth + 1 {
+		b.WriteString(`</sequence>`)
+	}
+	b.WriteString(`</title-info></description></FictionBook>`)
+
+	_, err := Parse(strings.NewReader(b.String()), false)
+	if !errors.Is(err, ErrLimitExceeded) || !strings.Contains(err.Error(), "nested sequence depth") {
+		t.Fatalf("Parse() error = %v, want sequence depth limit", err)
+	}
+}
+
+func TestReadElementRejectsNodeAndTextLimits(t *testing.T) {
+	t.Parallel()
+
+	dec := xml.NewDecoder(strings.NewReader(`<a/>`))
+	tok, err := dec.Token()
+	if err != nil {
+		t.Fatalf("Token() error = %v", err)
+	}
+	start := tok.(xml.StartElement)
+	_, err = readElement(dec, start, 1, 0, &parseState{nodes: MaxXMLNodes})
+	if !errors.Is(err, ErrLimitExceeded) || !strings.Contains(err.Error(), "node count") {
+		t.Fatalf("readElement() error = %v, want node limit", err)
+	}
+
+	state := &parseState{textBytes: MaxTextBytes}
+	if err := state.addText(1); !errors.Is(err, ErrLimitExceeded) || !strings.Contains(err.Error(), "text size") {
+		t.Fatalf("addText() error = %v, want text limit", err)
 	}
 }
