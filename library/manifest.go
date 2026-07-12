@@ -134,7 +134,14 @@ func (r *manifestReadCloser) Close() error {
 	return r.file.Close()
 }
 
-func PlanArchives(ctx context.Context, cfg *config.Config, archivePaths []string, checkMD5 bool, log *zap.Logger) ([]ArchiveManifestDecision, bool, error) {
+func PlanArchives(
+	ctx context.Context,
+	cfg *config.Config,
+	archivePaths []string,
+	checkMD5 bool,
+	log *zap.Logger,
+	verbose bool,
+) ([]ArchiveManifestDecision, bool, error) {
 	archives, err := expandArchives(archivePaths)
 	if err != nil {
 		return nil, false, err
@@ -146,7 +153,7 @@ func PlanArchives(ctx context.Context, cfg *config.Config, archivePaths []string
 		if err := ctx.Err(); err != nil {
 			return nil, false, err
 		}
-		decision, err := planArchiveManifest(ctx, cfg, archive, manifestPaths[archive], checkMD5, log)
+		decision, err := planArchiveManifest(ctx, cfg, archive, manifestPaths[archive], checkMD5, log, verbose)
 		if err != nil {
 			return nil, false, err
 		}
@@ -356,6 +363,7 @@ func ValidateArchiveManifests(
 	archivePaths []string,
 	checkMD5 bool,
 	log *zap.Logger,
+	verbose bool,
 ) ([]ArchiveManifestDecision, []ManifestReport, error) {
 	archives, err := expandArchives(archivePaths)
 	if err != nil {
@@ -365,7 +373,7 @@ func ValidateArchiveManifests(
 	decisions := make([]ArchiveManifestDecision, 0, len(archives))
 	reports := make([]ManifestReport, 0, len(archives))
 	for _, archive := range archives {
-		decision, report, err := validateArchiveManifest(ctx, cfg, archive, manifestPaths[archive], checkMD5, log)
+		decision, report, err := validateArchiveManifest(ctx, cfg, archive, manifestPaths[archive], checkMD5, log, verbose)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -388,7 +396,7 @@ func ValidateDatabaseManifest(
 	report := ManifestReport{Kind: "database", SourcePath: dumpDir}
 	if dumpDir == "" {
 		report.Reason = "dump directory not specified"
-		logManifestReport(log, report)
+		logManifestReport(log, report, false)
 		return decision, report, nil
 	}
 
@@ -407,14 +415,14 @@ func ValidateDatabaseManifest(
 		}
 		report.Missing = true
 		report.Reason = "manifest missing"
-		logManifestReport(log, report)
+		logManifestReport(log, report, false)
 		return decision, report, nil
 	}
 
 	header, err := readDatabaseManifestHeader(manifestPath)
 	if err != nil {
 		report.Reason = err.Error()
-		logManifestReport(log, report)
+		logManifestReport(log, report, false)
 		return decision, report, nil
 	}
 	report.Valid = true
@@ -424,7 +432,7 @@ func ValidateDatabaseManifest(
 	if !databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, false) {
 		report.Valid = false
 		report.Reason = "manifest does not match current database inputs"
-		logManifestReport(log, report)
+		logManifestReport(log, report, false)
 		return decision, report, nil
 	}
 	if manifestInfo.ModTime().After(latest) && databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, true) {
@@ -445,7 +453,7 @@ func ValidateDatabaseManifest(
 			report.ChecksumVerified = true
 		}
 	}
-	logManifestReport(log, report)
+	logManifestReport(log, report, false)
 	return decision, report, nil
 }
 
@@ -544,7 +552,15 @@ func (w *manifestWriter) Abort() error {
 	return nil
 }
 
-func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string, manifestPath string, checkMD5 bool, log *zap.Logger) (ArchiveManifestDecision, error) {
+func planArchiveManifest(
+	ctx context.Context,
+	cfg *config.Config,
+	archive string,
+	manifestPath string,
+	checkMD5 bool,
+	log *zap.Logger,
+	verbose bool,
+) (ArchiveManifestDecision, error) {
 	start := time.Now()
 	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
 	archiveInfo, err := os.Stat(archive)
@@ -608,7 +624,7 @@ func planArchiveManifest(ctx context.Context, cfg *config.Config, archive string
 		if fresh {
 			decision.Use = true
 			decision.Records = header.Records
-			if log != nil {
+			if verbose && log != nil {
 				message := "Archive manifest selected"
 				if checkMD5 {
 					message = "Archive manifest checksum verified"
@@ -685,6 +701,7 @@ func validateArchiveManifest(
 	manifestPath string,
 	checkMD5 bool,
 	log *zap.Logger,
+	verbose bool,
 ) (ArchiveManifestDecision, ManifestReport, error) {
 	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
 	report := ManifestReport{Kind: "archive", SourcePath: archive, ManifestPath: manifestPath}
@@ -699,14 +716,14 @@ func validateArchiveManifest(
 		}
 		report.Missing = true
 		report.Reason = "manifest missing"
-		logManifestReport(log, report)
+		logManifestReport(log, report, verbose)
 		return decision, report, nil
 	}
 
 	header, err := readArchiveManifestHeader(manifestPath)
 	if err != nil {
 		report.Reason = err.Error()
-		logManifestReport(log, report)
+		logManifestReport(log, report, verbose)
 		return decision, report, nil
 	}
 	report.Valid = true
@@ -716,7 +733,7 @@ func validateArchiveManifest(
 	if !archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), false) {
 		report.Valid = false
 		report.Reason = "manifest does not match current archive inputs"
-		logManifestReport(log, report)
+		logManifestReport(log, report, verbose)
 		return decision, report, nil
 	}
 	if manifestInfo.ModTime().After(archiveInfo.ModTime()) && archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), true) {
@@ -737,11 +754,11 @@ func validateArchiveManifest(
 			report.ChecksumVerified = true
 		}
 	}
-	logManifestReport(log, report)
+	logManifestReport(log, report, verbose)
 	return decision, report, nil
 }
 
-func logManifestReport(log *zap.Logger, report ManifestReport) {
+func logManifestReport(log *zap.Logger, report ManifestReport, verbose bool) {
 	if log == nil {
 		return
 	}
@@ -759,7 +776,9 @@ func logManifestReport(log *zap.Logger, report ManifestReport) {
 		fields = append(fields, zap.String("reason", report.Reason))
 	}
 	if report.Ready(false) && report.Kind == "archive" {
-		log.Debug("Manifest ready", fields...)
+		if verbose {
+			log.Debug("Manifest ready", fields...)
+		}
 		return
 	}
 	if report.Ready(false) {

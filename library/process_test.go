@@ -75,7 +75,7 @@ func TestBuildArchiveManifestsProcessesZip(t *testing.T) {
 	cfg.Processing.ArchiveBatchSize = 1
 	cfg.Processing.ArchiveReadBuffer = 1024
 
-	plan, _, err := PlanArchives(context.Background(), cfg, []string{archive}, false, nil)
+	plan, _, err := PlanArchives(context.Background(), cfg, []string{archive}, false, nil, false)
 	if err != nil {
 		t.Fatalf("PlanArchives() error = %v", err)
 	}
@@ -111,7 +111,7 @@ func TestBuildArchiveManifestsKeepsBatchesAfterSkippedEntries(t *testing.T) {
 	cfg.Processing.ArchiveBatchSize = 1
 	cfg.Processing.ArchiveReadBuffer = 1024
 
-	plan, _, err := PlanArchives(context.Background(), cfg, []string{archive}, false, nil)
+	plan, _, err := PlanArchives(context.Background(), cfg, []string{archive}, false, nil, false)
 	if err != nil {
 		t.Fatalf("PlanArchives() error = %v", err)
 	}

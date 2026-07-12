@@ -424,14 +424,14 @@ func runCache(ctx context.Context, cmd *cli.Command) error {
 	var reports []library.ManifestReport
 	checkMD5 := cmd.Bool("check-md5")
 	if selectedArchives {
-		archivePlan, _, err := library.PlanArchives(ctx, cfg, archives, checkMD5, env.Log)
+		archivePlan, _, err := library.PlanArchives(ctx, cfg, archives, checkMD5, env.Log, env.Verbose)
 		if err != nil {
 			return err
 		}
 		if err := library.BuildArchiveManifests(ctx, cfg, env.Log, env.Verbose, archivePlan); err != nil {
 			return err
 		}
-		_, archiveReports, err := library.ValidateArchiveManifests(ctx, cfg, archives, checkMD5, env.Log)
+		_, archiveReports, err := library.ValidateArchiveManifests(ctx, cfg, archives, checkMD5, env.Log, env.Verbose)
 		if err != nil {
 			return err
 		}
@@ -532,7 +532,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	if selectedArchives {
 		var archiveReports []library.ManifestReport
 		var err error
-		archivePlan, archiveReports, err = library.ValidateArchiveManifests(ctx, cfg, archives, checkMD5, env.Log)
+		archivePlan, archiveReports, err = library.ValidateArchiveManifests(ctx, cfg, archives, checkMD5, env.Log, env.Verbose)
 		if err != nil {
 			return err
 		}
