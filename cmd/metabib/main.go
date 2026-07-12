@@ -537,10 +537,11 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	if err := writeMergeMetadata(outputPrefix, compression, meta, env.Log); err != nil {
+	metadata, err := stageMergeMetadata(outputPrefix, compression, meta, env.Log)
+	if err != nil {
 		return err
 	}
-	return writeOutput(ctx, outputPrefix, cmd.String("output-part-size"), compressionValue, env.Log, func(out *jsonl.Writer) error {
+	err = writeOutput(ctx, outputPrefix, cmd.String("output-part-size"), compressionValue, env.Log, func(out *jsonl.Writer) error {
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
 			if err != nil {
@@ -551,6 +552,13 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		_, err := library.CopyManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
 		return err
 	})
+	if err != nil {
+		return errors.Join(err, metadata.Abort())
+	}
+	if err := metadata.Commit(); err != nil {
+		return errors.Join(err, metadata.Abort())
+	}
+	return nil
 }
 
 func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
@@ -661,12 +669,19 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-func writeMergeMetadata(prefix string, compression jsonl.Compression, meta model.MergeMetadata, log *zap.Logger) error {
+type stagedMergeMetadata struct {
+	tmpPath   string
+	finalPath string
+	log       *zap.Logger
+	committed bool
+}
+
+func stageMergeMetadata(prefix string, compression jsonl.Compression, meta model.MergeMetadata, log *zap.Logger) (*stagedMergeMetadata, error) {
 	path := prefix + ".meta.json"
 	finalPath := jsonl.CompressedPath(path, compression)
 	f, w, closer, err := jsonl.CreateCompressedFile(path, compression)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpPath := f.Name()
 	cleanup := true
@@ -677,32 +692,50 @@ func writeMergeMetadata(prefix string, compression jsonl.Compression, meta model
 	}()
 	if err := jsonv2.MarshalWrite(w, meta); err != nil {
 		f.Close()
-		return fmt.Errorf("write merge metadata %q: %w", tmpPath, err)
+		return nil, fmt.Errorf("write merge metadata %q: %w", tmpPath, err)
 	}
 	if _, err := w.Write([]byte{'\n'}); err != nil {
 		f.Close()
-		return fmt.Errorf("write merge metadata newline %q: %w", tmpPath, err)
+		return nil, fmt.Errorf("write merge metadata newline %q: %w", tmpPath, err)
 	}
 	if closer != nil {
 		if err := closer.Close(); err != nil {
 			f.Close()
-			return fmt.Errorf("close merge metadata compressor %q: %w", tmpPath, err)
+			return nil, fmt.Errorf("close merge metadata compressor %q: %w", tmpPath, err)
 		}
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close merge metadata %q: %w", tmpPath, err)
-	}
-	if _, err := os.Stat(finalPath); err == nil {
-		if log != nil {
-			log.Warn("Overwriting existing merge metadata", zap.String("file", finalPath))
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat merge metadata %q: %w", finalPath, err)
-	}
-	if err := fileutil.ReplaceOutputFile(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("rename merge metadata %q to %q: %w", tmpPath, finalPath, err)
+		return nil, fmt.Errorf("close merge metadata %q: %w", tmpPath, err)
 	}
 	cleanup = false
+	return &stagedMergeMetadata{tmpPath: tmpPath, finalPath: finalPath, log: log}, nil
+}
+
+func (m *stagedMergeMetadata) Commit() error {
+	if m == nil || m.committed {
+		return nil
+	}
+	if _, err := os.Stat(m.finalPath); err == nil {
+		if m.log != nil {
+			m.log.Warn("Overwriting existing merge metadata", zap.String("file", m.finalPath))
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat merge metadata %q: %w", m.finalPath, err)
+	}
+	if err := fileutil.ReplaceOutputFile(m.tmpPath, m.finalPath); err != nil {
+		return fmt.Errorf("rename merge metadata %q to %q: %w", m.tmpPath, m.finalPath, err)
+	}
+	m.committed = true
+	return nil
+}
+
+func (m *stagedMergeMetadata) Abort() error {
+	if m == nil || m.committed {
+		return nil
+	}
+	if err := os.Remove(m.tmpPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove merge metadata %q: %w", m.tmpPath, err)
+	}
 	return nil
 }
 
@@ -748,11 +781,13 @@ func writeOutput(
 	}
 	out.WithLogger(log)
 	writeErr := write(out)
-	closeErr := out.Close()
 	if writeErr != nil {
-		return errors.Join(writeErr, closeErr)
+		return errors.Join(writeErr, out.Abort())
 	}
-	return closeErr
+	if err := out.Commit(); err != nil {
+		return errors.Join(err, out.Abort())
+	}
+	return nil
 }
 
 func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger) (databaseIndex, error) {

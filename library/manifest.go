@@ -27,6 +27,7 @@ const (
 	archiveManifestSchema  = "metabib.archive_manifest/1"
 	databaseManifestSchema = "metabib.database_manifest/1"
 	manifestExt            = ".manifest.zst"
+	sourceMTimeTolerance   = time.Microsecond
 )
 
 type ArchiveManifestDecision struct {
@@ -461,11 +462,12 @@ func newManifestWriter(path string) (*manifestWriter, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create manifest directory: %w", err)
 	}
-	tmpRecords := path + ".records.tmp"
-	f, err := os.Create(tmpRecords)
+	recordsPattern := filepath.Base(path) + ".records-*.tmp"
+	f, err := os.CreateTemp(filepath.Dir(path), recordsPattern)
 	if err != nil {
-		return nil, fmt.Errorf("create manifest records %q: %w", tmpRecords, err)
+		return nil, fmt.Errorf("create manifest records %q: %w", filepath.Join(filepath.Dir(path), recordsPattern), err)
 	}
+	tmpRecords := f.Name()
 	return &manifestWriter{path: path, tmpRecords: tmpRecords, recordsFile: f, recordsBuf: bufio.NewWriter(f)}, nil
 }
 
@@ -497,7 +499,20 @@ func (w *manifestWriter) Close(header any) error {
 		}
 	}
 
-	tmpManifest := w.path + ".tmp"
+	tmpManifestFile, err := os.CreateTemp(filepath.Dir(w.path), filepath.Base(w.path)+"-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create manifest %q: %w", filepath.Join(filepath.Dir(w.path), filepath.Base(w.path)+"-*.tmp"), err)
+	}
+	tmpManifest := tmpManifestFile.Name()
+	if err := tmpManifestFile.Close(); err != nil {
+		return fmt.Errorf("close empty manifest %q: %w", tmpManifest, err)
+	}
+	cleanupManifest := true
+	defer func() {
+		if cleanupManifest {
+			_ = os.Remove(tmpManifest)
+		}
+	}()
 	out, enc, err := createCompressedManifest(tmpManifest)
 	if err != nil {
 		return err
@@ -533,6 +548,7 @@ func (w *manifestWriter) Close(header any) error {
 	if err := os.Rename(tmpManifest, w.path); err != nil {
 		return fmt.Errorf("rename manifest %q to %q: %w", tmpManifest, w.path, err)
 	}
+	cleanupManifest = false
 	if err := os.Remove(w.tmpRecords); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove manifest records %q: %w", w.tmpRecords, err)
 	}
@@ -1008,7 +1024,7 @@ func archiveManifestLightMatches(header archiveManifestHeader, cfg *config.Confi
 	if filepath.Base(header.Source.Path) != filepath.Base(archive) || header.Processing != processingManifest(cfg) {
 		return false
 	}
-	return !compareModified || header.Source.Modified == modified.Format(time.RFC3339Nano)
+	return !compareModified || sourceMTimeMatches(header.Source.Modified, modified)
 }
 
 func databaseManifestMatches(
@@ -1053,12 +1069,13 @@ func databaseManifestLightMatches(
 	for idx := range dumps {
 		stored := header.Source.Dumps[idx]
 		current := dumps[idx]
+		if compareModified && !sourceMTimeMatches(stored.Modified, current.Modified) {
+			return false
+		}
 		stored.Path = ""
 		current.Path = ""
-		if !compareModified {
-			stored.Modified = ""
-			current.Modified = ""
-		}
+		stored.Modified = ""
+		current.Modified = ""
 		stored.MD5 = ""
 		current.MD5 = ""
 		if stored != current {
@@ -1066,6 +1083,30 @@ func databaseManifestLightMatches(
 		}
 	}
 	return true
+}
+
+func sourceMTimeMatches(stored string, current any) bool {
+	storedTime, err := time.Parse(time.RFC3339Nano, stored)
+	if err != nil {
+		return false
+	}
+	var currentTime time.Time
+	switch value := current.(type) {
+	case string:
+		currentTime, err = time.Parse(time.RFC3339Nano, value)
+		if err != nil {
+			return false
+		}
+	case time.Time:
+		currentTime = value
+	default:
+		return false
+	}
+	delta := storedTime.Sub(currentTime)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= sourceMTimeTolerance
 }
 
 func archiveManifestHeaderFor(cfg *config.Config, decision ArchiveManifestDecision, records int64) (archiveManifestHeader, error) {

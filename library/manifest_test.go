@@ -32,6 +32,9 @@ func TestManifestWriterAndIterator(t *testing.T) {
 	if err := w.Close(archiveManifestHeader{Schema: archiveManifestSchema, Records: 1}); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "records.manifest.zst*.tmp")); err != nil || len(matches) != 0 {
+		t.Fatalf("manifest temp matches after close = %#v err=%v, want none", matches, err)
+	}
 
 	var ids []int64
 	count, err := ForEachManifestRecord(context.Background(), path, func(rec model.Record) error {
@@ -62,6 +65,29 @@ func TestForEachManifestRecordRejectsUnexpectedSchema(t *testing.T) {
 	}
 	if _, err := ForEachManifestRecord(context.Background(), path, nil); err == nil {
 		t.Fatal("ForEachManifestRecord() error = nil, want schema error")
+	}
+}
+
+func TestManifestWritersUseUniqueTempPaths(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "records.manifest.zst")
+	first, err := newManifestWriter(path)
+	if err != nil {
+		t.Fatalf("newManifestWriter(first) error = %v", err)
+	}
+	second, err := newManifestWriter(path)
+	if err != nil {
+		first.Abort()
+		t.Fatalf("newManifestWriter(second) error = %v", err)
+	}
+	defer first.Abort()
+	defer second.Abort()
+	if first.tmpRecords == second.tmpRecords {
+		t.Fatalf("manifest records temp paths collided: %q", first.tmpRecords)
+	}
+	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "records.manifest.zst.records-*.tmp")); err != nil || len(matches) != 2 {
+		t.Fatalf("manifest records temp matches = %#v err=%v, want 2", matches, err)
 	}
 }
 
@@ -402,6 +428,55 @@ func TestDatabaseManifestIgnoresAbsoluteSourcePaths(t *testing.T) {
 	}
 	if !report.Ready(false) || !report.ChecksumVerified {
 		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestArchiveManifestToleratesSubMicrosecondMTimeDrift(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	stored := time.Date(2016, 6, 19, 20, 21, 39, 798633814, time.FixedZone("test", -4*60*60))
+	header := archiveManifestHeader{
+		Source:     ArchiveManifestSource{Path: "/source/books.zip", Modified: stored.Format(time.RFC3339Nano)},
+		Processing: processingManifest(cfg),
+	}
+	if !archiveManifestLightMatches(header, cfg, "/target/books.zip", stored.Add(-14*time.Nanosecond), true) {
+		t.Fatal("archiveManifestLightMatches() = false for sub-microsecond mtime drift")
+	}
+	if archiveManifestLightMatches(header, cfg, "/target/books.zip", stored.Add(-2*time.Microsecond), true) {
+		t.Fatal("archiveManifestLightMatches() = true for multi-microsecond mtime drift")
+	}
+}
+
+func TestDatabaseManifestToleratesSubMicrosecondMTimeDrift(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	stored := time.Date(2026, 7, 12, 8, 0, 13, 374015409, time.FixedZone("test", -4*60*60))
+	header := databaseManifestHeader{
+		Source: DatabaseManifestSource{
+			DumpDate: "2026-07-12",
+			Dumps: []DumpManifestSource{{
+				Name:          "lib.libavtor.sql",
+				DumpDate:      "2026-07-12",
+				DumpCompleted: "2026-07-12T02:17:36",
+				Modified:      stored.Format(time.RFC3339Nano),
+			}},
+		},
+		Processing: processingManifest(cfg),
+	}
+	current := []DumpManifestSource{{
+		Name:          "lib.libavtor.sql",
+		DumpDate:      "2026-07-12",
+		DumpCompleted: "2026-07-12T02:17:36",
+		Modified:      stored.Add(-9 * time.Nanosecond).Format(time.RFC3339Nano),
+	}}
+	if !databaseManifestLightMatches(header, cfg, "2026-07-12", current, true) {
+		t.Fatal("databaseManifestLightMatches() = false for sub-microsecond mtime drift")
+	}
+	current[0].Modified = stored.Add(-2 * time.Microsecond).Format(time.RFC3339Nano)
+	if databaseManifestLightMatches(header, cfg, "2026-07-12", current, true) {
+		t.Fatal("databaseManifestLightMatches() = true for multi-microsecond mtime drift")
 	}
 }
 

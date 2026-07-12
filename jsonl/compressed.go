@@ -21,9 +21,10 @@ func CreateCompressedFile(path string, compression Compression) (*os.File, io.Wr
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, nil, nil, fmt.Errorf("create output directory: %w", err)
 	}
-	f, err := os.Create(path + ".tmp")
+	pattern := filepath.Base(path) + "-*.tmp"
+	f, err := os.CreateTemp(filepath.Dir(path), pattern)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create output %q: %w", path+".tmp", err)
+		return nil, nil, nil, fmt.Errorf("create output %q: %w", filepath.Join(filepath.Dir(path), pattern), err)
 	}
 	switch compression {
 	case CompressionNone:
@@ -35,7 +36,7 @@ func CreateCompressedFile(path string, compression Compression) (*os.File, io.Wr
 		enc, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
 		if err != nil {
 			f.Close()
-			return nil, nil, nil, fmt.Errorf("create zstd compressor %q: %w", path+".tmp", err)
+			return nil, nil, nil, fmt.Errorf("create zstd compressor %q: %w", f.Name(), err)
 		}
 		return f, enc, enc, nil
 	case CompressionZip:

@@ -142,26 +142,96 @@ func TestWriteOutputReturnsCloseError(t *testing.T) {
 	}
 }
 
-func TestWriteOutputJoinsWriteAndCloseErrors(t *testing.T) {
+func TestWriteOutputAbortsOnWriteError(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	writeErr := assertErr("write failed")
-	err := writeOutput(context.Background(), filepath.Join(dir, "out"), "", "none", nil, func(out *jsonl.Writer) error {
-		if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}}); err != nil {
-			return err
-		}
-		finalPath := filepath.Join(dir, "out.0000000042-0000000042.jsonl")
-		if err := os.Mkdir(finalPath, 0o755); err != nil {
-			return err
+	err := writeOutput(context.Background(), filepath.Join(dir, "out"), "1b", "none", nil, func(out *jsonl.Writer) error {
+		for _, id := range []int64{41, 42} {
+			if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: id}}); err != nil {
+				return err
+			}
 		}
 		return writeErr
 	})
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("writeOutput() error = %v, want write error", err)
 	}
-	if err == writeErr {
-		t.Fatalf("writeOutput() error = %v, want joined close error", err)
+	matches, err := filepath.Glob(filepath.Join(dir, "out*"))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches after failed writeOutput = %#v, want none", matches)
+	}
+}
+
+func TestStagedMergeMetadataAbortDoesNotPublish(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	base := filepath.Join(dir, "out")
+	metadata, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
+	if err != nil {
+		t.Fatalf("stageMergeMetadata() error = %v", err)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json")); err != nil || len(matches) != 0 {
+		t.Fatalf("published metadata before commit = %#v err=%v, want none", matches, err)
+	}
+	if err := metadata.Abort(); err != nil {
+		t.Fatalf("Abort() error = %v", err)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json*")); err != nil || len(matches) != 0 {
+		t.Fatalf("metadata after abort = %#v err=%v, want none", matches, err)
+	}
+}
+
+func TestStagedMergeMetadataUsesUniqueTempPaths(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	base := filepath.Join(dir, "out")
+	first, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
+	if err != nil {
+		t.Fatalf("stageMergeMetadata(first) error = %v", err)
+	}
+	second, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
+	if err != nil {
+		first.Abort()
+		t.Fatalf("stageMergeMetadata(second) error = %v", err)
+	}
+	defer first.Abort()
+	defer second.Abort()
+	if first.tmpPath == second.tmpPath {
+		t.Fatalf("metadata temp paths collided: %q", first.tmpPath)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json-*.tmp")); err != nil || len(matches) != 2 {
+		t.Fatalf("metadata temp matches = %#v err=%v, want 2", matches, err)
+	}
+}
+
+func TestStagedMergeMetadataCommitPublishes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	base := filepath.Join(dir, "out")
+	metadata, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
+	if err != nil {
+		t.Fatalf("stageMergeMetadata() error = %v", err)
+	}
+	if err := metadata.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out.meta.json"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "metabib.merge_metadata/1") {
+		t.Fatalf("metadata = %s", data)
+	}
+	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json*.tmp")); err != nil || len(matches) != 0 {
+		t.Fatalf("metadata temp after commit = %#v err=%v, want none", matches, err)
 	}
 }
 

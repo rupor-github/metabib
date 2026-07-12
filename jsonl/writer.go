@@ -34,6 +34,7 @@ type Writer struct {
 	compression Compression
 	log         *zap.Logger
 	finalPaths  map[string]struct{}
+	stagedParts []stagedPart
 
 	file        *os.File
 	closer      io.Closer
@@ -43,6 +44,11 @@ type Writer struct {
 	partStartID int64
 	partEndID   int64
 	partIndex   int
+}
+
+type stagedPart struct {
+	stagePath string
+	finalPath string
 }
 
 func Create(path string, maxBytes int64) (*Writer, error) {
@@ -100,10 +106,72 @@ func (w *Writer) Write(rec model.Record) error {
 }
 
 func (w *Writer) Close() error {
+	return w.Commit()
+}
+
+func (w *Writer) Stage() error {
 	if w == nil || w.file == nil {
 		return nil
 	}
 	return w.closePart()
+}
+
+func (w *Writer) Commit() error {
+	if w == nil {
+		return nil
+	}
+	if err := w.Stage(); err != nil {
+		return err
+	}
+	for _, part := range w.stagedParts {
+		if _, err := os.Stat(part.finalPath); err == nil {
+			if w.log != nil {
+				w.log.Warn("Overwriting existing JSONL output", zap.String("file", part.finalPath))
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat JSONL output %q: %w", part.finalPath, err)
+		}
+	}
+	for _, part := range w.stagedParts {
+		if err := fileutil.ReplaceOutputFile(part.stagePath, part.finalPath); err != nil {
+			return fmt.Errorf("rename JSONL output %q to %q: %w", part.stagePath, part.finalPath, err)
+		}
+	}
+	w.stagedParts = nil
+	return nil
+}
+
+func (w *Writer) Abort() error {
+	if w == nil {
+		return nil
+	}
+	var errs []error
+	if w.closer != nil {
+		if err := w.closer.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close JSONL compressor %q: %w", w.partPath, err))
+		}
+	}
+	if w.file != nil {
+		if err := w.file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close JSONL output %q: %w", w.partPath, err))
+		}
+	}
+	if w.partPath != "" {
+		if err := removeIfExists(w.partPath); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, part := range w.stagedParts {
+		if err := removeIfExists(part.stagePath); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	w.file = nil
+	w.closer = nil
+	w.buf = nil
+	w.partPath = ""
+	w.stagedParts = nil
+	return errors.Join(errs...)
 }
 
 func (w *Writer) openPart(bookID int64) error {
@@ -114,11 +182,12 @@ func (w *Writer) openPart(bookID int64) error {
 	w.partStartID = bookID
 	w.partEndID = bookID
 	w.partBytes = 0
-	w.partPath = fmt.Sprintf("%s.part-%06d.tmp", w.basePath, w.partIndex)
-	f, err := os.Create(w.partPath)
+	pattern := fmt.Sprintf("%s.part-%06d-*.tmp", filepath.Base(w.basePath), w.partIndex)
+	f, err := os.CreateTemp(filepath.Dir(w.basePath), pattern)
 	if err != nil {
-		return fmt.Errorf("create JSONL output %q: %w", w.partPath, err)
+		return fmt.Errorf("create JSONL output %q: %w", filepath.Join(filepath.Dir(w.basePath), pattern), err)
 	}
+	w.partPath = f.Name()
 	out, closer, err := w.compressedWriter(f)
 	if err != nil {
 		f.Close()
@@ -159,21 +228,19 @@ func (w *Writer) closePart() error {
 			return err
 		}
 	}
-	if _, err := os.Stat(finalPath); err == nil {
-		if w.log != nil {
-			w.log.Warn("Overwriting existing JSONL output", zap.String("file", finalPath))
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat JSONL output %q: %w", finalPath, err)
-	}
-	if err := fileutil.ReplaceOutputFile(partPath, finalPath); err != nil {
-		return fmt.Errorf("rename JSONL output %q to %q: %w", partPath, finalPath, err)
-	}
+	w.stagedParts = append(w.stagedParts, stagedPart{stagePath: partPath, finalPath: finalPath})
 	w.finalPaths[finalPath] = struct{}{}
 	w.file = nil
 	w.closer = nil
 	w.buf = nil
 	w.partPath = ""
+	return nil
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove JSONL output %q: %w", path, err)
+	}
 	return nil
 }
 

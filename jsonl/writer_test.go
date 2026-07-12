@@ -52,6 +52,94 @@ func TestWriterRangeRenameAndSplit(t *testing.T) {
 	}
 }
 
+func TestWriterStageDoesNotPublishUntilCommit(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "out")
+	w, err := Create(base, 1)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, id := range []int64{10, 20} {
+		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: id}}); err != nil {
+			t.Fatalf("Write(%d) error = %v", id, err)
+		}
+	}
+	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 0 {
+		t.Fatalf("published matches before stage = %#v, want none", matches)
+	}
+	if err := w.Stage(); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 0 {
+		t.Fatalf("published matches before commit = %#v, want none", matches)
+	}
+	if err := w.Commit(); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 2 {
+		t.Fatalf("published matches after commit = %#v, want 2", matches)
+	}
+}
+
+func TestWriterAbortRemovesStagedParts(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "out")
+	w, err := Create(base, 1)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, id := range []int64{10, 20} {
+		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: id}}); err != nil {
+			t.Fatalf("Write(%d) error = %v", id, err)
+		}
+	}
+	if err := w.Stage(); err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	if err := w.Abort(); err != nil {
+		t.Fatalf("Abort() error = %v", err)
+	}
+	if matches := globOutput(t, filepath.Dir(base), "out*"); len(matches) != 0 {
+		t.Fatalf("matches after abort = %#v, want none", matches)
+	}
+}
+
+func TestWritersUseUniqueStagingPaths(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "out")
+	first, err := Create(base, 0)
+	if err != nil {
+		t.Fatalf("Create(first) error = %v", err)
+	}
+	second, err := Create(base, 0)
+	if err != nil {
+		t.Fatalf("Create(second) error = %v", err)
+	}
+	for idx, w := range []*Writer{first, second} {
+		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: int64(idx + 1)}}); err != nil {
+			t.Fatalf("Write(%d) error = %v", idx, err)
+		}
+		if err := w.Stage(); err != nil {
+			t.Fatalf("Stage(%d) error = %v", idx, err)
+		}
+	}
+	if first.stagedParts[0].stagePath == second.stagedParts[0].stagePath {
+		t.Fatalf("staging paths collided: %q", first.stagedParts[0].stagePath)
+	}
+	if matches := globOutput(t, filepath.Dir(base), "out.part-000001-*.tmp"); len(matches) != 2 {
+		t.Fatalf("staging matches = %#v, want 2", matches)
+	}
+	if err := first.Abort(); err != nil {
+		t.Fatalf("Abort(first) error = %v", err)
+	}
+	if err := second.Abort(); err != nil {
+		t.Fatalf("Abort(second) error = %v", err)
+	}
+}
+
 func TestRangedPathDefaultExtension(t *testing.T) {
 	t.Parallel()
 
@@ -232,6 +320,15 @@ func TestParseCompression(t *testing.T) {
 	if _, err := ParseCompression("bad"); err == nil {
 		t.Fatal("ParseCompression(bad) error = nil")
 	}
+}
+
+func globOutput(t *testing.T, dir string, pattern string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, pattern))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	return matches
 }
 
 func TestNormalizeBasePathRemovesCompressionSuffix(t *testing.T) {
