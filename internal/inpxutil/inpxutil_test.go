@@ -68,6 +68,86 @@ func TestCleanse(t *testing.T) {
 	}
 }
 
+func TestOutputPathValidatesCompactDumpDate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prefix  string
+		date    string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:   "empty date",
+			prefix: "out/books",
+			want:   "out/books.inpx",
+		},
+		{
+			name:   "valid compact date",
+			prefix: "out/books",
+			date:   "20260603",
+			want:   "out/books_20260603.inpx",
+		},
+		{
+			name:   "already suffixed",
+			prefix: "out/books_20260603",
+			date:   "20260603",
+			want:   "out/books_20260603.inpx",
+		},
+		{
+			name:    "iso date",
+			prefix:  "out/books",
+			date:    "2026-06-03",
+			wantErr: true,
+		},
+		{
+			name:    "short date",
+			prefix:  "out/books",
+			date:    "2026063",
+			wantErr: true,
+		},
+		{
+			name:    "long date",
+			prefix:  "out/books",
+			date:    "202606030",
+			wantErr: true,
+		},
+		{
+			name:    "non-digit",
+			prefix:  "out/books",
+			date:    "2026060x",
+			wantErr: true,
+		},
+		{
+			name:    "path separator",
+			prefix:  "out/books",
+			date:    "202606/3",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := OutputPath(tt.prefix, model.MergeMetadata{Database: model.MergeDatabaseMetadata{DumpDate: tt.date}})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("OutputPath() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("OutputPath() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("OutputPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
 	t.Parallel()
 

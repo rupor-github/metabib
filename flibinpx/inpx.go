@@ -183,7 +183,10 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 		opts.SourceLib = meta.Library
 	}
 	stats.DumpDate = meta.Database.DumpDate
-	outputPath := inpxutil.OutputPath(opts.OutputPrefix, meta)
+	outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
+	if err != nil {
+		return stats, err
+	}
 	stats.OutputPath = outputPath
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return stats, fmt.Errorf("create FLibrary INPX output directory: %w", err)

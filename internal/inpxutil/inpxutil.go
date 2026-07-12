@@ -246,13 +246,28 @@ func ArchiveList(archives map[string]*ArchiveRows) []*ArchiveRows {
 	return archiveList
 }
 
-func OutputPath(prefix string, meta model.MergeMetadata) string {
+func OutputPath(prefix string, meta model.MergeMetadata) (string, error) {
 	base := prefix
 	date := meta.Database.DumpDate
+	if date != "" && !isCompactDumpDate(date) {
+		return "", fmt.Errorf("invalid compact dump date %q: expected exactly 8 digits", date)
+	}
 	if date != "" && !strings.HasSuffix(base, "_"+date) {
 		base += "_" + date
 	}
-	return base + ".inpx"
+	return base + ".inpx", nil
+}
+
+func isCompactDumpDate(value string) bool {
+	if len(value) != 8 {
+		return false
+	}
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func ZipComment(meta model.MergeMetadata) string {

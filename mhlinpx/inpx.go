@@ -192,7 +192,10 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if opts.Log != nil {
 		opts.Log.Info("INPX records loaded", zap.Int64("records", loaded), zap.Int("parts", len(parts)), zap.Duration("elapsed", time.Since(loadStart)))
 	}
-	outputPath := inpxOutputPath(opts.OutputPrefix, meta)
+	outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
+	if err != nil {
+		return stats, err
+	}
 	stats.OutputPath = outputPath
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 		return stats, fmt.Errorf("create INPX output directory: %w", err)
@@ -719,15 +722,6 @@ func inRanges(ranges []model.IndexRange, idx int) bool {
 		}
 	}
 	return false
-}
-
-func inpxOutputPath(prefix string, meta model.MergeMetadata) string {
-	base := prefix
-	date := meta.Database.DumpDate
-	if date != "" && !strings.HasSuffix(base, "_"+date) {
-		base += "_" + date
-	}
-	return base + ".inpx"
 }
 
 func zipComment(meta model.MergeMetadata) string {
