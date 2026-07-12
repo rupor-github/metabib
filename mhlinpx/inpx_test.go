@@ -283,6 +283,30 @@ func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
 	}
 }
 
+func TestReadRecordsRejectsArchiveMissingFromMetadata(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	archivePath := filepath.Join(dir, "books.zip")
+	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if err := w.Write(mhlTestRecord(archivePath, "1.fb2", 0, 1)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	part := filepath.Join(dir, "all.0000000001-0000000001.jsonl")
+
+	_, err = readRecords(context.Background(), []string{part}, map[string]*archiveRows{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "rebuild merge output") {
+		t.Fatalf("readRecords() error = %v, want rebuild guidance", err)
+	}
+}
+
 func mhlTestRecord(archivePath string, entry string, index int, bookID int64) model.Record {
 	return model.Record{
 		Schema: "metabib.record/1",

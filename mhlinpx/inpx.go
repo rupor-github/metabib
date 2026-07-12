@@ -328,11 +328,11 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 			}
 			archive := archives[rec.ID.Archive.Path]
 			if archive == nil {
-				archive = &archiveRows{
-					Meta:    model.MergeArchiveMetadata{Path: rec.ID.Archive.Path, Name: filepath.Base(rec.ID.Archive.Path)},
-					Records: make(map[int]model.Record),
-				}
-				archives[rec.ID.Archive.Path] = archive
+				r.Close()
+				return records, fmt.Errorf(
+					"record references archive %q not listed in merge metadata; rebuild merge output before generating MyHomeLib INPX",
+					rec.ID.Archive.Path,
+				)
 			}
 			if existing, ok := archive.Records[rec.ID.Archive.Index]; ok {
 				logDuplicateArchiveIndex(log, part, rec.ID.Archive.Path, rec.ID.Archive.Index, existing, rec)
