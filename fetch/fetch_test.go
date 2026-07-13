@@ -69,6 +69,7 @@ func TestGetLastBookIDWithRetainedDailyUpdates(t *testing.T) {
 		"f.fb2.000101-000150.zip",
 		"000151-000200.zip",
 		"f.fb2.000201-000250.zip.tmp",
+		"2026-07-12.818211-818248.503.fb2.zip",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
@@ -78,8 +79,52 @@ func TestGetLastBookIDWithRetainedDailyUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getLastBookID() error = %v", err)
 	}
-	if got != 250 {
-		t.Fatalf("getLastBookID() = %d, want 250", got)
+	if got != 818248 {
+		t.Fatalf("getLastBookID() = %d, want 818248", got)
+	}
+}
+
+func TestDissectRange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		ok     bool
+		first  int
+		second int
+	}{
+		{name: "flibusta", input: "f.fb2.000101-000150.zip", ok: true, first: 101, second: 150},
+		{name: "plain", input: "000151-000200.zip", ok: true, first: 151, second: 200},
+		{
+			name:   "librusec fb2",
+			input:  "2026-07-12.818211-818248.503.fb2.zip",
+			ok:     true,
+			first:  818211,
+			second: 818248,
+		},
+		{name: "librusec pdf", input: "2026-07-12.818211-818248.503.pdf.zip", ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ok, first, second, err := dissectRange(tt.input)
+			if err != nil {
+				t.Fatalf("dissectRange() error = %v", err)
+			}
+			if ok != tt.ok || first != tt.first || second != tt.second {
+				t.Fatalf(
+					"dissectRange() = (%v, %d, %d), want (%v, %d, %d)",
+					ok,
+					first,
+					second,
+					tt.ok,
+					tt.first,
+					tt.second,
+				)
+			}
+		})
 	}
 }
 

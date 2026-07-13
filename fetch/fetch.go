@@ -518,7 +518,7 @@ func getLastBookID(path string) (int, error) {
 
 var (
 	mergeNameRE = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.merging`)
-	rangeRE     = regexp.MustCompile(`(?i)\s*([0-9]+)-([0-9]+)\.zip`)
+	rangeRE     = regexp.MustCompile(`(?i)(?:^|[^0-9])([0-9]+)-([0-9]+)(?:\.zip|\.[0-9]+\.fb2\.zip)`)
 )
 
 func dissectMergeName(name string) (bool, int, int, error) {
