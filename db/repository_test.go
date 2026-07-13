@@ -201,6 +201,44 @@ func TestBookByIDPopulatesAllDatabaseFields(t *testing.T) {
 	assertFullDatabaseSource(t, source)
 }
 
+func TestLibrusecCurrentRepositoryMapping(t *testing.T) {
+	repo := newLibrusecTestRepository(t)
+
+	ids, err := repo.BookIDs(context.Background())
+	if err != nil {
+		t.Fatalf("BookIDs() error = %v", err)
+	}
+	if len(ids) != 1 || ids[0] != 1 {
+		t.Fatalf("BookIDs() = %v, want [1]", ids)
+	}
+	sources, err := repo.BookSourcesByIDs(context.Background(), []int64{1})
+	if err != nil {
+		t.Fatalf("BookSourcesByIDs() error = %v", err)
+	}
+	source := sources[1]
+	if !source.Present || source.Book == nil || source.Book.BookID != 1 || source.Book.ReplacedBy != 2 {
+		t.Fatalf("book source = %#v", source)
+	}
+	if len(source.Authors) != 1 || source.Authors[0].ID != 100 || source.Authors[0].LastName != "Author" {
+		t.Fatalf("authors = %#v", source.Authors)
+	}
+	if len(source.Translators) != 1 || source.Translators[0].ID != 200 || source.Translators[0].LastName != "Translator" {
+		t.Fatalf("translators = %#v", source.Translators)
+	}
+	if len(source.Illustrators) != 1 || source.Illustrators[0].ID != 300 || source.Illustrators[0].LastName != "Illustrator" {
+		t.Fatalf("illustrators = %#v", source.Illustrators)
+	}
+	if len(source.Genres) != 1 || source.Genres[0].ID != 30 || source.Genres[0].Code != "sf" || source.Genres[0].Description != "Science fiction" {
+		t.Fatalf("genres = %#v", source.Genres)
+	}
+	if len(source.Sequences) != 1 || source.Sequences[0].ID != 40 || source.Sequences[0].Name != "Cycle" || source.Sequences[0].Number != 7 || source.Sequences[0].Type != 0 {
+		t.Fatalf("sequences = %#v", source.Sequences)
+	}
+	if source.Rating == nil || source.Rating.Average != 4 || source.Rating.Count != 5 {
+		t.Fatalf("rating = %#v", source.Rating)
+	}
+}
+
 func assertFullDatabaseSource(t *testing.T, source model.DatabaseSource) {
 	t.Helper()
 	if !source.Present || source.Book == nil {
@@ -268,6 +306,86 @@ func newTestRepository(t *testing.T) *Repository {
 		},
 		cols: map[string]map[string]bool{"libbook": {"ReplacedBy": true}},
 	}
+}
+
+func newLibrusecTestRepository(t *testing.T) *Repository {
+	t.Helper()
+	dsn := t.Name()
+	testDriverMu.Lock()
+	testDriverHandlers[dsn] = librusecRepositoryTestRows
+	testDriverMu.Unlock()
+	t.Cleanup(func() {
+		testDriverMu.Lock()
+		delete(testDriverHandlers, dsn)
+		testDriverMu.Unlock()
+	})
+	db, err := sql.Open(testDriverName, dsn)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return &Repository{
+		db:     db,
+		format: FormatLibrusecCurrent,
+		tables: map[string]bool{
+			"libbook":        true,
+			"libavtor":       true,
+			"libavtors":      true,
+			"libgenre":       true,
+			"libgenres":      true,
+			"libseq":         true,
+			"libseqs":        true,
+			"librate":        true,
+			"libfilename":    false,
+			"libjoinedbooks": false,
+		},
+		cols: map[string]map[string]bool{"libbook": {"ReplacedBy": true}},
+	}
+}
+
+func librusecRepositoryTestRows(query string, args []driver.NamedValue) (testRows, error) {
+	query = strings.Join(strings.Fields(query), " ")
+	bookTime := time.Date(2026, 7, 12, 1, 2, 3, 0, time.UTC)
+	modifiedTime := time.Date(2026, 7, 13, 4, 5, 6, 0, time.UTC)
+	switch {
+	case strings.Contains(query, "SELECT bid FROM libbook"):
+		return rows([]string{"bid"}, []driver.Value{int64(1)}), nil
+	case strings.Contains(query, "FROM libbook WHERE bid IN"):
+		return rows(
+			[]string{"bid", "FileSize", "Time", "Title", "Lang", "SrcLang", "FileType", "Year", "Deleted", "FileAuthor", "keywords", "md5", "Modified", "ReplacedBy"},
+			[]driver.Value{int64(1), int64(123), bookTime, "DB title", "ru", "en", "fb2", int64(1972), "0", "file author", "keywords", "abc", modifiedTime, int64(2)},
+		), nil
+	case strings.Contains(query, "FROM libavtor a"):
+		if !strings.Contains(query, "COALESCE(NULLIF(n.main, 0), n.aid)") {
+			return testRows{}, fmt.Errorf("missing main alias join: %s", query)
+		}
+		role, _ := args[len(args)-1].Value.(string)
+		switch role {
+		case "a":
+			return rows(librusecContributorBatchColumns(), append([]driver.Value{int64(1)}, librusecContributorValues(100, "Author")...)), nil
+		case "t":
+			return rows(librusecContributorBatchColumns(), append([]driver.Value{int64(1)}, librusecContributorValues(200, "Translator")...)), nil
+		case "i":
+			return rows(librusecContributorBatchColumns(), append([]driver.Value{int64(1)}, librusecContributorValues(300, "Illustrator")...)), nil
+		}
+		return testRows{}, fmt.Errorf("unexpected Librusec role %q", role)
+	case strings.Contains(query, "FROM libgenre g JOIN libgenres"):
+		return rows([]string{"bid", "gid", "code", "translated", "gdesc", "meta"}, []driver.Value{int64(1), int64(30), "sf", "", "Science fiction", ""}), nil
+	case strings.Contains(query, "FROM libseq s JOIN libseqs"):
+		return rows([]string{"bid", "sid", "seqname", "sn", "level", "type"}, []driver.Value{int64(1), int64(40), "Cycle", "7.90", int64(0), int64(0)}), nil
+	case strings.Contains(query, "FROM librate WHERE bid IN"):
+		return rows([]string{"bid", "Average", "Count", "Min", "Max"}, []driver.Value{int64(1), float64(4), int64(5), int64(1), int64(5)}), nil
+	default:
+		return testRows{}, fmt.Errorf("unexpected query: %s", query)
+	}
+}
+
+func librusecContributorBatchColumns() []string {
+	return append([]string{"bid"}, contributorColumns()...)
+}
+
+func librusecContributorValues(id int64, lastName string) []driver.Value {
+	return []driver.Value{id, "First", "Middle", lastName, "Nick", int64(11), "a@example.org", "https://example.org", "m", int64(0), int64(0)}
 }
 
 func repositoryTestRows(query string, _ []driver.NamedValue) (testRows, error) {

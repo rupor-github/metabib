@@ -18,6 +18,7 @@ import (
 
 type Repository struct {
 	db     *sql.DB
+	format Format
 	tables map[string]bool
 	cols   map[string]map[string]bool
 	tmu    sync.RWMutex
@@ -50,7 +51,12 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Repository, error) {
 	if cfg.ConnMaxLifetime > 0 {
 		db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	}
-	return &Repository{db: db, tables: make(map[string]bool), cols: make(map[string]map[string]bool)}, nil
+	repo := &Repository{db: db, tables: make(map[string]bool), cols: make(map[string]map[string]bool)}
+	if _, err := repo.DetectFormat(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return repo, nil
 }
 
 func (r *Repository) Close() error {
@@ -60,8 +66,19 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
+func (r *Repository) currentFormat() Format {
+	if r.format == "" {
+		return FormatFlibustaCurrent
+	}
+	return r.format
+}
+
 func (r *Repository) BookIDs(ctx context.Context) ([]int64, error) {
-	query := "SELECT BookId FROM libbook WHERE FileType = 'fb2' ORDER BY BookId"
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	query := fmt.Sprintf("SELECT %s FROM libbook WHERE FileType = 'fb2' ORDER BY %s", idColumn, idColumn)
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query book ids: %w", err)
@@ -82,8 +99,13 @@ func (r *Repository) BookIDByFilename(ctx context.Context, filename string) (int
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return 0, err
 	}
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
 	var id int64
-	if err := r.db.QueryRowContext(ctx, "SELECT BookId FROM libfilename WHERE FileName = ?", filename).Scan(&id); err != nil {
+	query := fmt.Sprintf("SELECT %s FROM libfilename WHERE FileName = ?", idColumn)
+	if err := r.db.QueryRowContext(ctx, query, filename).Scan(&id); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, nil
 		}
@@ -115,7 +137,15 @@ func (r *Repository) FileIdentitiesByIDs(ctx context.Context, ids []int64) (map[
 	// not named as numeric BookID.ext. It maps those legacy filenames back to the
 	// book ID without requiring the old archives to be renamed. In current data this
 	// is rare for FB2 entries and those legacy FB2 files are not expected in our archives.
-	query, args := inQuery(`SELECT BookId, FileName FROM libfilename WHERE BookId IN (`, ids, `) ORDER BY BookId, FileName`)
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	query, args := inQuery(
+		fmt.Sprintf("SELECT %s, FileName FROM libfilename WHERE %s IN (", idColumn, idColumn),
+		ids,
+		fmt.Sprintf(") ORDER BY %s, FileName", idColumn),
+	)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query file identities: %w", err)
@@ -147,11 +177,23 @@ func (r *Repository) BookByID(ctx context.Context, id int64) (model.DatabaseSour
 	}
 	src.Present = true
 	src.Book = book
-	if src.Authors, err = r.contributors(ctx, id, "libavtor", "AvtorId"); err != nil {
-		return src, err
-	}
-	if src.Translators, err = r.contributors(ctx, id, "libtranslator", "TranslatorId"); err != nil {
-		return src, err
+	if r.currentFormat() == FormatLibrusecCurrent {
+		if src.Authors, err = r.librusecContributors(ctx, id, "a"); err != nil {
+			return src, err
+		}
+		if src.Translators, err = r.librusecContributors(ctx, id, "t"); err != nil {
+			return src, err
+		}
+		if src.Illustrators, err = r.librusecContributors(ctx, id, "i"); err != nil {
+			return src, err
+		}
+	} else {
+		if src.Authors, err = r.contributors(ctx, id, "libavtor", "AvtorId"); err != nil {
+			return src, err
+		}
+		if src.Translators, err = r.contributors(ctx, id, "libtranslator", "TranslatorId"); err != nil {
+			return src, err
+		}
 	}
 	if src.Genres, err = r.genres(ctx, id); err != nil {
 		return src, err
@@ -189,11 +231,23 @@ func (r *Repository) BookSourcesByIDs(ctx context.Context, ids []int64) (map[int
 		src.Book = book
 		out[id] = src
 	}
-	if err := r.attachContributors(ctx, ids, out, "libavtor", "AvtorId", func(src *model.DatabaseSource, v []model.Contributor) { src.Authors = v }); err != nil {
-		return nil, err
-	}
-	if err := r.attachContributors(ctx, ids, out, "libtranslator", "TranslatorId", func(src *model.DatabaseSource, v []model.Contributor) { src.Translators = v }); err != nil {
-		return nil, err
+	if r.currentFormat() == FormatLibrusecCurrent {
+		if err := r.attachLibrusecContributors(ctx, ids, out, "a", func(src *model.DatabaseSource, v []model.Contributor) { src.Authors = v }); err != nil {
+			return nil, err
+		}
+		if err := r.attachLibrusecContributors(ctx, ids, out, "t", func(src *model.DatabaseSource, v []model.Contributor) { src.Translators = v }); err != nil {
+			return nil, err
+		}
+		if err := r.attachLibrusecContributors(ctx, ids, out, "i", func(src *model.DatabaseSource, v []model.Contributor) { src.Illustrators = v }); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := r.attachContributors(ctx, ids, out, "libavtor", "AvtorId", func(src *model.DatabaseSource, v []model.Contributor) { src.Authors = v }); err != nil {
+			return nil, err
+		}
+		if err := r.attachContributors(ctx, ids, out, "libtranslator", "TranslatorId", func(src *model.DatabaseSource, v []model.Contributor) { src.Translators = v }); err != nil {
+			return nil, err
+		}
 	}
 	if err := r.attachGenres(ctx, ids, out); err != nil {
 		return nil, err
@@ -221,15 +275,19 @@ func (r *Repository) books(ctx context.Context, ids []int64) (map[int64]*model.D
 	if err != nil {
 		return nil, err
 	}
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
 	extra := ""
 	if replacedBy {
 		extra = ", ReplacedBy"
 	}
-	query, args := inQuery(`
-SELECT BookId, FileSize, Time, Title, Lang, SrcLang,
+	query, args := inQuery(fmt.Sprintf(`
+SELECT %s, FileSize, Time, Title, Lang, SrcLang,
        FileType, Year, Deleted, FileAuthor, keywords, CAST(md5 AS CHAR),
        Modified`+extra+`
-  FROM libbook WHERE BookId IN (`, ids, `)`)
+  FROM libbook WHERE %s IN (`, idColumn, idColumn), ids, `)`)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query book batch: %w", err)
@@ -297,9 +355,59 @@ SELECT a.BookId, n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName,
 	return nil
 }
 
+func (r *Repository) attachLibrusecContributors(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource, role string, set func(*model.DatabaseSource, []model.Contributor)) error {
+	if ok, err := r.tableExists(ctx, "libavtor"); err != nil || !ok {
+		return err
+	}
+	if ok, err := r.tableExists(ctx, "libavtors"); err != nil || !ok {
+		return err
+	}
+	query, args := inQuery(`
+SELECT a.bid, cn.aid, cn.FirstName, cn.MiddleName, cn.LastName, cn.NickName,
+       cn.uid, cn.Email, cn.Homepage, cn.gender, 0, 0
+  FROM libavtor a
+  JOIN libavtors n ON n.aid = a.aid
+  JOIN libavtors cn ON cn.aid = COALESCE(NULLIF(n.main, 0), n.aid)
+ WHERE a.bid IN (`, ids, `) AND a.role = ? ORDER BY a.bid, cn.aid`)
+	args = append(args, role)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("query Librusec contributors batch for role %q: %w", role, err)
+	}
+	defer rows.Close()
+	grouped := make(map[int64][]model.Contributor)
+	for rows.Next() {
+		var bookID int64
+		var c model.Contributor
+		if err := rows.Scan(&bookID, &c.ID, &c.FirstName, &c.MiddleName, &c.LastName, &c.NickName, &c.UID, &c.Email, &c.Homepage, &c.Gender, &c.MasterID, &c.Position); err != nil {
+			return fmt.Errorf("scan Librusec contributor batch: %w", err)
+		}
+		grouped[bookID] = append(grouped[bookID], c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for id, values := range grouped {
+		src := out[id]
+		set(&src, values)
+		out[id] = src
+	}
+	return nil
+}
+
 func (r *Repository) attachGenres(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource) error {
 	if ok, err := r.tableExists(ctx, "libgenre"); err != nil || !ok {
 		return err
+	}
+	if r.currentFormat() == FormatLibrusecCurrent {
+		if ok, err := r.tableExists(ctx, "libgenres"); err != nil || !ok {
+			return err
+		}
+		query, args := inQuery(`
+SELECT g.bid, gl.gid, gl.code, '', gl.gdesc, ''
+  FROM libgenre g JOIN libgenres gl ON gl.gid = g.gid
+ WHERE g.bid IN (`, ids, `) ORDER BY g.bid`)
+		return r.attachGenresWithQuery(ctx, query, args, out)
 	}
 	if ok, err := r.tableExists(ctx, "libgenrelist"); err != nil || !ok {
 		return err
@@ -319,6 +427,10 @@ SELECT g.BookId, gl.GenreId, gl.GenreCode, COALESCE(gt.trgGenreCode, ''), gl.Gen
  WHERE g.BookId IN (`
 	}
 	query, args := inQuery(prefix, ids, suffix)
+	return r.attachGenresWithQuery(ctx, query, args, out)
+}
+
+func (r *Repository) attachGenresWithQuery(ctx context.Context, query string, args []any, out map[int64]model.DatabaseSource) error {
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query genres batch: %w", err)
@@ -341,6 +453,17 @@ func (r *Repository) attachSequences(ctx context.Context, ids []int64, out map[i
 	if ok, err := r.tableExists(ctx, "libseq"); err != nil || !ok {
 		return err
 	}
+	if r.currentFormat() == FormatLibrusecCurrent {
+		if ok, err := r.tableExists(ctx, "libseqs"); err != nil || !ok {
+			return err
+		}
+		query, args := inQuery(`
+SELECT s.bid, sn.sid, sn.seqname, CAST(s.sn AS CHAR), 0,
+       CASE sn.type WHEN 'a' THEN 0 WHEN 'p' THEN 1 ELSE -1 END
+  FROM libseq s JOIN libseqs sn ON sn.sid = s.sid
+ WHERE s.bid IN (`, ids, `) AND sn.type IN ('a', 'p') ORDER BY s.bid, sn.type, sn.seqname`)
+		return r.attachSequencesWithQuery(ctx, query, args, out, true)
+	}
 	if ok, err := r.tableExists(ctx, "libseqname"); err != nil || !ok {
 		return err
 	}
@@ -348,6 +471,16 @@ func (r *Repository) attachSequences(ctx context.Context, ids []int64, out map[i
 SELECT s.BookId, sn.SeqId, sn.SeqName, s.SeqNumb, s.Level, s.Type
   FROM libseq s JOIN libseqname sn ON sn.SeqId = s.SeqId
  WHERE s.BookId IN (`, ids, `) ORDER BY s.BookId, s.Type, s.Level, sn.SeqName`)
+	return r.attachSequencesWithQuery(ctx, query, args, out, false)
+}
+
+func (r *Repository) attachSequencesWithQuery(
+	ctx context.Context,
+	query string,
+	args []any,
+	out map[int64]model.DatabaseSource,
+	decimalNumber bool,
+) error {
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query sequences batch: %w", err)
@@ -356,7 +489,17 @@ SELECT s.BookId, sn.SeqId, sn.SeqName, s.SeqNumb, s.Level, s.Type
 	for rows.Next() {
 		var bookID int64
 		var s model.DBSequence
-		if err := rows.Scan(&bookID, &s.ID, &s.Name, &s.Number, &s.Level, &s.Type); err != nil {
+		if decimalNumber {
+			var number string
+			if err := rows.Scan(&bookID, &s.ID, &s.Name, &number, &s.Level, &s.Type); err != nil {
+				return fmt.Errorf("scan sequence batch: %w", err)
+			}
+			numberValue, err := sequenceNumber(number)
+			if err != nil {
+				return err
+			}
+			s.Number = numberValue
+		} else if err := rows.Scan(&bookID, &s.ID, &s.Name, &s.Number, &s.Level, &s.Type); err != nil {
 			return fmt.Errorf("scan sequence batch: %w", err)
 		}
 		src := out[bookID]
@@ -370,9 +513,13 @@ func (r *Repository) attachRatings(ctx context.Context, ids []int64, out map[int
 	if ok, err := r.tableExists(ctx, "librate"); err != nil || !ok {
 		return err
 	}
-	query, args := inQuery(`
-SELECT BookId, ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
-  FROM librate WHERE BookId IN (`, ids, `) GROUP BY BookId`)
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	query, args := inQuery(fmt.Sprintf(`
+SELECT %s, ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
+  FROM librate WHERE %s IN (`, idColumn, idColumn), ids, fmt.Sprintf(`) GROUP BY %s`, idColumn))
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query ratings batch: %w", err)
@@ -397,7 +544,15 @@ func (r *Repository) attachFilenames(ctx context.Context, ids []int64, out map[i
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return err
 	}
-	query, args := inQuery(`SELECT BookId, FileName FROM libfilename WHERE BookId IN (`, ids, `) ORDER BY BookId, FileName`)
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	query, args := inQuery(
+		fmt.Sprintf("SELECT %s, FileName FROM libfilename WHERE %s IN (", idColumn, idColumn),
+		ids,
+		fmt.Sprintf(") ORDER BY %s, FileName", idColumn),
+	)
 	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("query filenames batch: %w", err)
@@ -463,11 +618,15 @@ func (r *Repository) book(ctx context.Context, id int64) (*model.DBBook, bool, e
 	if replacedBy {
 		extra = ", ReplacedBy"
 	}
-	row := r.db.QueryRowContext(ctx, `
-SELECT BookId, FileSize, Time, Title, Lang, SrcLang,
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	row := r.db.QueryRowContext(ctx, fmt.Sprintf(`
+SELECT %s, FileSize, Time, Title, Lang, SrcLang,
        FileType, Year, Deleted, FileAuthor, keywords, CAST(md5 AS CHAR),
        Modified`+extra+`
-  FROM libbook WHERE BookId = ?`, id)
+  FROM libbook WHERE %s = ?`, idColumn, idColumn), id)
 
 	var b model.DBBook
 	var tm, modified sql.NullTime
@@ -523,6 +682,36 @@ SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
 	return out, rows.Err()
 }
 
+func (r *Repository) librusecContributors(ctx context.Context, id int64, role string) ([]model.Contributor, error) {
+	if ok, err := r.tableExists(ctx, "libavtor"); err != nil || !ok {
+		return nil, err
+	}
+	if ok, err := r.tableExists(ctx, "libavtors"); err != nil || !ok {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT cn.aid, cn.FirstName, cn.MiddleName, cn.LastName, cn.NickName, cn.uid,
+       cn.Email, cn.Homepage, cn.gender, 0, 0
+  FROM libavtor a
+  JOIN libavtors n ON n.aid = a.aid
+  JOIN libavtors cn ON cn.aid = COALESCE(NULLIF(n.main, 0), n.aid)
+ WHERE a.bid = ? AND a.role = ?
+ ORDER BY cn.aid`, id, role)
+	if err != nil {
+		return nil, fmt.Errorf("query Librusec contributors for role %q and book %d: %w", role, id, err)
+	}
+	defer rows.Close()
+	var out []model.Contributor
+	for rows.Next() {
+		var c model.Contributor
+		if err := rows.Scan(&c.ID, &c.FirstName, &c.MiddleName, &c.LastName, &c.NickName, &c.UID, &c.Email, &c.Homepage, &c.Gender, &c.MasterID, &c.Position); err != nil {
+			return nil, fmt.Errorf("scan Librusec contributor: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) useAuthorAliases(ctx context.Context, table string) (bool, error) {
 	if table != "libavtor" {
 		return false, nil
@@ -546,6 +735,15 @@ func (r *Repository) genres(ctx context.Context, id int64) ([]model.DBGenre, err
 	if ok, err := r.tableExists(ctx, "libgenre"); err != nil || !ok {
 		return nil, err
 	}
+	if r.currentFormat() == FormatLibrusecCurrent {
+		if ok, err := r.tableExists(ctx, "libgenres"); err != nil || !ok {
+			return nil, err
+		}
+		return r.genresWithQuery(ctx, `
+SELECT gl.gid, gl.code, '', gl.gdesc, ''
+  FROM libgenre g JOIN libgenres gl ON gl.gid = g.gid
+ WHERE g.bid = ?`, id)
+	}
 	if ok, err := r.tableExists(ctx, "libgenrelist"); err != nil || !ok {
 		return nil, err
 	}
@@ -562,9 +760,13 @@ SELECT gl.GenreId, gl.GenreCode, COALESCE(gt.trgGenreCode, ''), gl.GenreDesc, gl
   LEFT JOIN libgenretranslate gt ON gt.srcGenreCode = gl.GenreCode
  WHERE g.BookId = ?`
 	}
-	rows, err := r.db.QueryContext(ctx, query, id)
+	return r.genresWithQuery(ctx, query, id)
+}
+
+func (r *Repository) genresWithQuery(ctx context.Context, query string, args ...any) ([]model.DBGenre, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query genres for book %d: %w", id, err)
+		return nil, fmt.Errorf("query genres: %w", err)
 	}
 	defer rows.Close()
 	var out []model.DBGenre
@@ -582,21 +784,45 @@ func (r *Repository) sequences(ctx context.Context, id int64) ([]model.DBSequenc
 	if ok, err := r.tableExists(ctx, "libseq"); err != nil || !ok {
 		return nil, err
 	}
+	if r.currentFormat() == FormatLibrusecCurrent {
+		if ok, err := r.tableExists(ctx, "libseqs"); err != nil || !ok {
+			return nil, err
+		}
+		return r.sequencesWithQuery(ctx, `
+SELECT sn.sid, sn.seqname, CAST(s.sn AS CHAR), 0,
+       CASE sn.type WHEN 'a' THEN 0 WHEN 'p' THEN 1 ELSE -1 END
+  FROM libseq s JOIN libseqs sn ON sn.sid = s.sid
+ WHERE s.bid = ? AND sn.type IN ('a', 'p') ORDER BY sn.type, sn.seqname`, true, id)
+	}
 	if ok, err := r.tableExists(ctx, "libseqname"); err != nil || !ok {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, `
+	return r.sequencesWithQuery(ctx, `
 SELECT sn.SeqId, sn.SeqName, s.SeqNumb, s.Level, s.Type
   FROM libseq s JOIN libseqname sn ON sn.SeqId = s.SeqId
- WHERE s.BookId = ? ORDER BY s.Type, s.Level, sn.SeqName`, id)
+ WHERE s.BookId = ? ORDER BY s.Type, s.Level, sn.SeqName`, false, id)
+}
+
+func (r *Repository) sequencesWithQuery(ctx context.Context, query string, decimalNumber bool, args ...any) ([]model.DBSequence, error) {
+	rows, err := r.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query sequences for book %d: %w", id, err)
+		return nil, fmt.Errorf("query sequences: %w", err)
 	}
 	defer rows.Close()
 	var out []model.DBSequence
 	for rows.Next() {
 		var s model.DBSequence
-		if err := rows.Scan(&s.ID, &s.Name, &s.Number, &s.Level, &s.Type); err != nil {
+		if decimalNumber {
+			var number string
+			if err := rows.Scan(&s.ID, &s.Name, &number, &s.Level, &s.Type); err != nil {
+				return nil, fmt.Errorf("scan sequence: %w", err)
+			}
+			numberValue, err := sequenceNumber(number)
+			if err != nil {
+				return nil, err
+			}
+			s.Number = numberValue
+		} else if err := rows.Scan(&s.ID, &s.Name, &s.Number, &s.Level, &s.Type); err != nil {
 			return nil, fmt.Errorf("scan sequence: %w", err)
 		}
 		out = append(out, s)
@@ -608,9 +834,13 @@ func (r *Repository) rating(ctx context.Context, id int64) (*model.DBRating, err
 	if ok, err := r.tableExists(ctx, "librate"); err != nil || !ok {
 		return nil, err
 	}
-	row := r.db.QueryRowContext(ctx, `
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	row := r.db.QueryRowContext(ctx, fmt.Sprintf(`
 SELECT ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNSIGNED)), MAX(CAST(Rate AS UNSIGNED))
-  FROM librate WHERE BookId = ?`, id)
+  FROM librate WHERE %s = ?`, idColumn), id)
 	var avg sql.NullFloat64
 	var count int64
 	var min, max sql.NullInt64
@@ -627,7 +857,12 @@ func (r *Repository) filenames(ctx context.Context, id int64) ([]string, error) 
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return nil, err
 	}
-	rows, err := r.db.QueryContext(ctx, "SELECT FileName FROM libfilename WHERE BookId = ? ORDER BY FileName", id)
+	idColumn := "BookId"
+	if r.currentFormat() == FormatLibrusecCurrent {
+		idColumn = "bid"
+	}
+	query := fmt.Sprintf("SELECT FileName FROM libfilename WHERE %s = ? ORDER BY FileName", idColumn)
+	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("query filenames for book %d: %w", id, err)
 	}
@@ -717,6 +952,14 @@ func formatTime(v sql.NullTime) string {
 		return ""
 	}
 	return v.Time.Format(time.RFC3339)
+}
+
+func sequenceNumber(value string) (int64, error) {
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse sequence number %q: %w", value, err)
+	}
+	return int64(f), nil
 }
 
 func inQuery(prefix string, ids []int64, suffix string) (string, []any) {

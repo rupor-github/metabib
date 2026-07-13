@@ -119,6 +119,59 @@ func TestAuthorAliasFixup(t *testing.T) {
 	}
 }
 
+func TestImportFixupSkipsAlterDatabase(t *testing.T) {
+	t.Parallel()
+
+	input := strings.Join([]string{
+		"CREATE TABLE `libpolka` (`id` int);",
+		"ALTER DATABASE `l` CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci ;",
+		"INSERT INTO `libpolka` VALUES (1);",
+	}, "\n")
+	var out bytes.Buffer
+	if err := writeImportFixup(&out, strings.NewReader(input), false); err != nil {
+		t.Fatalf("writeImportFixup() error = %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "ALTER DATABASE") {
+		t.Fatalf("fixup output still contains ALTER DATABASE: %s", got)
+	}
+	if !strings.Contains(got, "CREATE TABLE") || !strings.Contains(got, "INSERT INTO") {
+		t.Fatalf("fixup output removed ordinary SQL: %s", got)
+	}
+}
+
+func TestFilterImportDumps(t *testing.T) {
+	t.Parallel()
+
+	dumps := []DumpFile{
+		{Name: "libbook.sql"},
+		{Name: "libavtor.sql"},
+		{Name: "libavtors.sql"},
+		{Name: "libgenre.sql"},
+		{Name: "libgenres.sql"},
+		{Name: "libseq.sql"},
+		{Name: "libseqs.sql"},
+		{Name: "librate.sql"},
+		{Name: "libpolka.sql"},
+		{Name: "libmag.sql"},
+		{Name: "libmags.sql"},
+		{Name: "libquality.sql"},
+	}
+	filtered := filterImportDumps(dumps, FormatLibrusecCurrent)
+	if len(filtered) != 8 {
+		t.Fatalf("librusec filtered dumps = %v, want 8 required dumps", filtered)
+	}
+	for _, dump := range filtered {
+		if !librusecImportDump(dump.Name) {
+			t.Fatalf("unexpected dump selected for Librusec import: %s", dump.Name)
+		}
+	}
+	unfiltered := filterImportDumps(dumps, FormatFlibustaCurrent)
+	if len(unfiltered) != len(dumps) {
+		t.Fatalf("flibusta filtered dumps = %d, want %d", len(unfiltered), len(dumps))
+	}
+}
+
 func TestHelpers(t *testing.T) {
 	t.Parallel()
 

@@ -18,6 +18,7 @@
           "properties": {
             "dump_dir": {"type": "string"},
             "dump_date": {"type": "string"},
+            "database_format": {"enum": ["flibusta-current", "librusec-current"]},
             "dumps": {
               "type": "array",
               "items": {"$ref": "#/$defs/dump"}

@@ -149,6 +149,11 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	start := time.Now()
 	var manifestOut *manifestWriter
 	if manifest.Create {
+		format, err := repo.DetectFormat(ctx)
+		if err != nil {
+			return fmt.Errorf("detect database format: %w", err)
+		}
+		manifest.Format = format
 		provenance, err := repo.ImportProvenance(ctx)
 		if err != nil {
 			return fmt.Errorf("read database import provenance: %w", err)

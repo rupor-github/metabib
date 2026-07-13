@@ -62,15 +62,16 @@ type RecordSources struct {
 }
 
 type DatabaseSource struct {
-	Present     bool           `json:"present"`
-	Book        *DBBook        `json:"book,omitempty"`
-	Authors     []Contributor  `json:"authors,omitempty"`
-	Translators []Contributor  `json:"translators,omitempty"`
-	Genres      []DBGenre      `json:"genres,omitempty"`
-	Sequences   []DBSequence   `json:"sequences,omitempty"`
-	Rating      *DBRating      `json:"rating,omitempty"`
-	Filenames   []string       `json:"filenames,omitempty"`
-	JoinedBooks []DBJoinedBook `json:"joined_books,omitempty"`
+	Present      bool           `json:"present"`
+	Book         *DBBook        `json:"book,omitempty"`
+	Authors      []Contributor  `json:"authors,omitempty"`
+	Translators  []Contributor  `json:"translators,omitempty"`
+	Illustrators []Contributor  `json:"illustrators,omitempty"`
+	Genres       []DBGenre      `json:"genres,omitempty"`
+	Sequences    []DBSequence   `json:"sequences,omitempty"`
+	Rating       *DBRating      `json:"rating,omitempty"`
+	Filenames    []string       `json:"filenames,omitempty"`
+	JoinedBooks  []DBJoinedBook `json:"joined_books,omitempty"`
 }
 
 type DBBook struct {

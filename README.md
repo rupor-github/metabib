@@ -1,12 +1,18 @@
-<h1>
-    <img src="docs/library.svg" style="vertical-align:middle; width:14%" align="absmiddle"/>
-    <span style="vertical-align:middle;">&nbsp;&nbsp;Metadata extractor from Flibusta-style SQL dumps and FB2 archives.</span>
-</h1>
+<table>
+  <tr>
+    <td width="120" valign="middle">
+      <img src="docs/library.svg" width="96" alt="metabib" />
+    </td>
+    <td valign="middle">
+      <h1>Metadata extractor from Flibusta/Librusec SQL dumps and FB2 archives.</h1>
+    </td>
+  </tr>
+</table>
 
 ## metabib
 [![GitHub Release](https://img.shields.io/github/release/rupor-github/metabib.svg)](https://github.com/rupor-github/metabib/releases)
 
-`metabib` extracts metadata from Flibusta-style SQL dumps and FB2 archives into
+`metabib` extracts metadata from Flibusta/Librusec SQL dumps and FB2 archives into
 JSON Lines. It first builds cache manifests for database dumps and/or archives,
 then merges those cached artifacts into final JSONL. The project is intended as
 a modern replacement for the outdated and cross-platform maintenance-heavy
@@ -18,7 +24,7 @@ ago.
 set. The intentionally unported areas include:
 
 - library content formats other than FB2;
-- Librusec schema differences and Flibusta-specific assumptions;
+- non-FB2 Librusec update archives such as PDF updates;
 - historical dump schema changes and migration compatibility;
 - legacy INPX compatibility quirks for specific catalog readers.
 - creation of INPX daily updates is not presently supported because the legacy
@@ -57,6 +63,10 @@ tools.
 - `flib-inpx` consumes the same merged JSONL dataset and metadata sidecar to
   produce a FLibrary-compatible FB2 INPX with extended fields and multiple flat
   series links.
+
+Both current Flibusta and current Librusec SQL dump schemas are supported. The
+database cache pass autodetects the dump schema and records it in the database
+manifest so incompatible manifests are not reused accidentally.
 
 The same transformation approach can support other derived artifacts later,
 including update lineages and differential update schemes.
@@ -194,6 +204,7 @@ library profile:
 
 ```sh
 metabib fetch --library flibusta --to upd_flibusta --tosql flibusta_20260622 --continue
+metabib fetch --library librusec --to upd_librusec --tosql librusec_20260713 --continue
 ```
 
 `fetch` replaces the old `libget2` role. It reads profiles from the `fetch`
@@ -204,6 +215,11 @@ Both rollup archives such as `fb2-000001-000100.zip` and retained daily updates
 such as `f.fb2.000101-000150.zip` count toward the local high-water mark. When
 `--tosql` is omitted, the SQL output directory is generated from the library name
 and current UTC timestamp. Use `--nosql` to download archive updates only.
+
+The default configuration includes `flibusta` and `librusec` fetch profiles.
+Librusec daily FB2 updates use dated names such as
+`2026-07-12.818211-818248.503.fb2.zip`; `metabib` downloads only the FB2 update
+archives and skips other content formats.
 
 The command preserves the old `libget2` automation exit-code contract: exit code
 `0` means no new archive updates were downloaded, exit code `1` means an error
@@ -241,6 +257,10 @@ well. Generated archive names use the ID width of the existing `.merging` archiv
 or latest finalized `fb2-*.zip`; new archive directories default to 10-digit IDs.
 Daily update ZIPs are always preserved; retention and cleanup are separate
 operational concerns.
+
+Rolled-up archive names are always Flibusta-style range names such as
+`fb2-0000817672-0000818248.zip`, including when the source updates are dated
+Librusec ZIPs.
 
 By default, direct compressed copying does not validate entry payload CRCs. Set
 `rollup.validate_crc: true` in the configuration to decompress each non-empty
@@ -320,6 +340,10 @@ before import. Use `cache --allow-dump-date-mismatch` to accept mixed dump dates
 per-file dump dates are still recorded, while the top-level manifest `dump_date`
 is omitted.
 
+For current Librusec dumps, only the tables required for FB2 metadata are
+imported. Unsupported or unrelated dump files in the SQL directory are ignored by
+the importer.
+
 Merge from archives only, database only, or both:
 
 ```sh
@@ -332,6 +356,10 @@ metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/flibusta -
 selected manifest is missing, invalid, or stale. Use `--check-md5` for full
 source checksum verification, or `--allow-stale` to warn and continue with stale
 manifests.
+
+Archive-only merge does not require a database manifest. A database manifest is
+required only when `--database-dumps` is selected, whether that is for
+database-only output or for enriching archive records with database metadata.
 
 Merged JSONL output is zstd-compressed by default, using the same compression
 level as manifest files. Use `--output-compression zstd`, `gz`, `zip`, or `none`
@@ -356,6 +384,11 @@ metabib mhl-inpx --input all --output flibusta
 merge metadata sidecar; it does not read SQL dumps, start MariaDB, or parse FB2
 archives directly. FB2 fallback metadata is read from
 `sources.fb2.description.title_info`.
+
+When the merge input is database-only and has no archives, `mhl-inpx` writes the
+records into `online.inp`, matching the legacy `lib2inpx` database-only output.
+When archive metadata is present, `online.inp` is not created; archive-less
+records are ignored to preserve the historical archive-based behavior.
 
 Available `mhl-inpx` arguments:
 
@@ -403,6 +436,9 @@ metabib flib-inpx --input all --output flibusta
 metadata sidecar. It does not read SQL dumps or archives directly. Unlike
 `mhl-inpx`, it emits no dummy records and always writes `structure.info` with
 FLibrary extensions such as `FOLDER`, `YEAR`, and `SOURCELIB`.
+
+Database-only FLibrary INPX generation follows the same `online.inp` rule as
+`mhl-inpx`: it is created only when the merge metadata contains no archives.
 
 When a book has multiple selected sequences, `flib-inpx` writes repeated `.inp`
 rows for the same `FOLDER + FILE + EXT`, one row per flat `SERIES`/`SERNO` link.

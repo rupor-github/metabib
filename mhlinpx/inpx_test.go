@@ -61,6 +61,21 @@ func TestGenerate(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
+	if err := w.Write(model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			BookID:    1,
+			FileName:  "online-only",
+			Extension: "fb2",
+		},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: 1, FileSize: 321, Title: "Online Only", FileType: "fb2", Time: "2026-06-03T00:00:00Z"},
+		}},
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -98,27 +113,9 @@ func TestGenerate(t *testing.T) {
 		stats.FB2Records != 0 || stats.Dummy != 1 || stats.DumpDate != "20260603" {
 		t.Fatalf("stats = %#v", stats)
 	}
-	zr, err := zip.OpenReader(stats.OutputPath)
-	if err != nil {
-		t.Fatalf("OpenReader() error = %v", err)
-	}
-	defer zr.Close()
-	if string(zr.Comment) != "flibusta - 2026-06-03" {
-		t.Fatalf("comment = %q", zr.Comment)
-	}
-	entries := map[string]string{}
-	for _, file := range zr.File {
-		r, err := file.Open()
-		if err != nil {
-			t.Fatalf("Open(%q) error = %v", file.Name, err)
-		}
-		buf := new(strings.Builder)
-		if _, err := io.Copy(buf, r); err != nil {
-			r.Close()
-			t.Fatalf("ReadFrom(%q) error = %v", file.Name, err)
-		}
-		r.Close()
-		entries[file.Name] = buf.String()
+	entries, comment := readZipEntries(t, stats.OutputPath)
+	if comment != "flibusta - 2026-06-03" {
+		t.Fatalf("comment = %q", comment)
 	}
 	if !strings.Contains(entries["fb2-0000000001-0000000003.inp"], "Last,First,") {
 		t.Fatalf("inp = %q", entries["fb2-0000000001-0000000003.inp"])
@@ -129,11 +126,76 @@ func TestGenerate(t *testing.T) {
 	if strings.TrimSpace(entries["version.info"]) != "20260603" {
 		t.Fatalf("version.info = %q", entries["version.info"])
 	}
+	if _, ok := entries["online.inp"]; ok {
+		t.Fatalf("unexpected online.inp for mixed archive input: %#v", entries)
+	}
 	if !strings.HasPrefix(entries["collection.info"], "\ufeff") {
 		t.Fatalf("collection.info missing UTF-8 BOM: %q", entries["collection.info"])
 	}
 	if !strings.Contains(entries["collection.info"], "flibusta_20260603") {
 		t.Fatalf("collection.info = %q", entries["collection.info"])
+	}
+}
+
+func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "online")
+	writeMetadata(t, prefix, model.MergeMetadata{
+		Schema:  "metabib.merge_metadata/1",
+		Library: "librusec",
+		Database: model.MergeDatabaseMetadata{
+			DumpDate:    "20260713",
+			DumpDateISO: "2026-07-13",
+		},
+		Parts: []string{"online.0000000001-0000000001.jsonl"},
+	})
+	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if err := w.Write(model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "librusec",
+			BookID:    1,
+			FileName:  "1",
+			Extension: "fb2",
+		},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: 1, FileSize: 123, Title: "Online Title", FileType: "fb2", Time: "2026-07-13T00:00:00Z", Lang: "ru"},
+			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
+			Genres:  []model.DBGenre{{Code: "sf"}},
+		}},
+	}); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "librusec"),
+		Format:          Format2X,
+		SequenceMode:    SequenceAuthor,
+		FB2Preference:   PreferComplement,
+		QuickFix:        true,
+		Limits:          DefaultLimits(),
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Archives != 1 || stats.Files != 1 || stats.Records != 1 || stats.DBRecords != 1 || stats.Dummy != 0 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries, _ := readZipEntries(t, stats.OutputPath)
+	if !strings.Contains(entries["online.inp"], "Last,First,") || !strings.Contains(entries["online.inp"], "Online Title") {
+		t.Fatalf("online.inp = %q", entries["online.inp"])
 	}
 }
 
@@ -350,4 +412,28 @@ func writeMetadata(t *testing.T, prefix string, meta model.MergeMetadata) {
 	if err := os.WriteFile(prefix+".meta.json", append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+}
+
+func readZipEntries(t *testing.T, path string) (map[string]string, string) {
+	t.Helper()
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		t.Fatalf("OpenReader() error = %v", err)
+	}
+	defer zr.Close()
+	entries := map[string]string{}
+	for _, file := range zr.File {
+		r, err := file.Open()
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", file.Name, err)
+		}
+		buf := new(strings.Builder)
+		if _, err := io.Copy(buf, r); err != nil {
+			r.Close()
+			t.Fatalf("ReadFrom(%q) error = %v", file.Name, err)
+		}
+		r.Close()
+		entries[file.Name] = buf.String()
+	}
+	return entries, string(zr.Comment)
 }

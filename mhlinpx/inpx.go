@@ -184,6 +184,9 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	for _, archive := range meta.Archives {
 		archives[archive.Path] = &archiveRows{Meta: archive, Records: make(map[int]model.Record)}
 	}
+	if len(meta.Archives) == 0 {
+		archives[inpxutil.OnlineArchivePath] = newOnlineArchive()
+	}
 	loadStart := time.Now()
 	loaded, err := readRecords(ctx, parts, archives, opts.Log)
 	if err != nil {
@@ -340,6 +343,11 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 			}
 			records++
 			if rec.ID.Archive == nil {
+				if online := archives[inpxutil.OnlineArchivePath]; online != nil {
+					idx := online.Meta.Entries
+					online.Records[idx] = rec
+					online.Meta.Entries++
+				}
 				continue
 			}
 			archive := archives[rec.ID.Archive.Path]
@@ -361,6 +369,13 @@ func readRecords(ctx context.Context, parts []string, archives map[string]*archi
 		}
 	}
 	return records, nil
+}
+
+func newOnlineArchive() *archiveRows {
+	return &archiveRows{
+		Meta:    model.MergeArchiveMetadata{Path: inpxutil.OnlineArchivePath, Name: inpxutil.OnlineArchiveName},
+		Records: make(map[int]model.Record),
+	}
 }
 
 func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, index int, existing model.Record, duplicate model.Record) {

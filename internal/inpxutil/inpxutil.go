@@ -26,6 +26,11 @@ import (
 
 const FieldSep = "\x04"
 
+const (
+	OnlineArchivePath = "online"
+	OnlineArchiveName = "online.zip"
+)
+
 var cleanseReplacer = strings.NewReplacer(
 	"\r\n", " ",
 	"\r", " ",
@@ -82,6 +87,9 @@ func LoadInput(ctx context.Context, inputPrefix string, log *zap.Logger) (model.
 	archives := make(map[string]*ArchiveRows, len(meta.Archives))
 	for _, archive := range meta.Archives {
 		archives[archive.Path] = &ArchiveRows{Meta: archive, Records: make(map[int]model.Record)}
+	}
+	if len(meta.Archives) == 0 {
+		archives[OnlineArchivePath] = newOnlineArchive()
 	}
 	loadStart := time.Now()
 	loaded, err := ReadRecords(ctx, parts, archives, log)
@@ -194,6 +202,11 @@ func ReadRecords(ctx context.Context, parts []string, archives map[string]*Archi
 			}
 			records++
 			if rec.ID.Archive == nil {
+				if online := archives[OnlineArchivePath]; online != nil {
+					idx := online.Meta.Entries
+					online.Records[idx] = rec
+					online.Meta.Entries++
+				}
 				continue
 			}
 			archive := archives[rec.ID.Archive.Path]
@@ -215,6 +228,13 @@ func ReadRecords(ctx context.Context, parts []string, archives map[string]*Archi
 		}
 	}
 	return records, nil
+}
+
+func newOnlineArchive() *ArchiveRows {
+	return &ArchiveRows{
+		Meta:    model.MergeArchiveMetadata{Path: OnlineArchivePath, Name: OnlineArchiveName},
+		Records: make(map[int]model.Record),
+	}
 }
 
 func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, index int, existing model.Record, duplicate model.Record) {

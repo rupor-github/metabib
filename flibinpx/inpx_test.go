@@ -48,6 +48,9 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	if err := w.Write(flibRecord(archivePath, 1, "fb2")); err != nil {
 		t.Fatalf("Write() ignored error = %v", err)
 	}
+	if err := w.Write(flibOnlineRecord(2)); err != nil {
+		t.Fatalf("Write() online-only error = %v", err)
+	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -84,6 +87,9 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	if entries["structure.info"] != structureInfo {
 		t.Fatalf("structure.info = %q", entries["structure.info"])
 	}
+	if _, ok := entries["online.inp"]; ok {
+		t.Fatalf("unexpected online.inp for mixed archive input: %#v", entries)
+	}
 	if strings.Contains(entries["fb2-0000000001-0000000002.inp"], "dummy record") {
 		t.Fatalf("inp contains dummy row: %q", entries["fb2-0000000001-0000000002.inp"])
 	}
@@ -104,6 +110,53 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	}
 	if first[15] != "one:two:three:" || first[16] != "2025" || first[17] != "flibusta" {
 		t.Fatalf("extended fields = %#v", first[15:18])
+	}
+}
+
+func TestGenerateFLibraryDatabaseOnlyWritesOnlineINP(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "online")
+	writeFLibMetadata(t, prefix, model.MergeMetadata{
+		Schema:  "metabib.merge_metadata/1",
+		Library: "librusec",
+		Database: model.MergeDatabaseMetadata{
+			DumpDate:    "20260713",
+			DumpDateISO: "2026-07-13",
+		},
+		Parts: []string{"online.0000000001-0000000001.jsonl"},
+	})
+	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if err := w.Write(flibOnlineRecord(1)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "librusec"),
+		SequenceMode:    SequenceAll,
+		FB2Preference:   PreferComplement,
+		FlattenMode:     FlattenAll,
+		DedupMode:       DedupCaseInsensitive,
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Archives != 1 || stats.Files != 1 || stats.Records != 1 || stats.DBRecords != 1 || stats.FB2Records != 0 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries := readZipEntries(t, stats.OutputPath)
+	if !strings.Contains(entries["online.inp"], "Last,First,") || !strings.Contains(entries["online.inp"], "Online Title") {
+		t.Fatalf("online.inp = %q", entries["online.inp"])
 	}
 }
 
@@ -194,6 +247,31 @@ func flibRecord(archivePath string, index int, ext string) model.Record {
 				},
 			}},
 		},
+	}
+}
+
+func flibOnlineRecord(bookID int64) model.Record {
+	return model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "librusec",
+			BookID:    bookID,
+			FileName:  strconv.FormatInt(bookID, 10),
+			Extension: "fb2",
+		},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book: &model.DBBook{
+				BookID:   bookID,
+				FileSize: 123,
+				Title:    "Online Title",
+				FileType: "fb2",
+				Time:     "2026-07-13T00:00:00Z",
+				Lang:     "ru",
+			},
+			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
+			Genres:  []model.DBGenre{{Code: "sf"}},
+		}},
 	}
 }
 

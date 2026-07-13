@@ -496,10 +496,11 @@ func collectArchives(dirs []string) ([]archive, error) {
 }
 
 var (
-	archiveNameRE = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.zip$`)
-	mergeNameRE   = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.merging$`)
-	updateNameRE  = regexp.MustCompile(`(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$`)
-	localNameRE   = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.(?:zip|merging)$`)
+	archiveNameRE        = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.zip$`)
+	mergeNameRE          = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.merging$`)
+	updateNameRE         = regexp.MustCompile(`(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$`)
+	librusecUpdateNameRE = regexp.MustCompile(`(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.fb2\.zip$`)
+	localNameRE          = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.(?:zip|merging)$`)
 )
 
 func archiveNameWidth(last archive, merge archive) int {
@@ -551,7 +552,7 @@ func getMergeArchive(files []archive) (archive, error) {
 func getUpdates(files []archive, last int) ([]archive, error) {
 	updates := make([]archive, 0)
 	for _, file := range files {
-		ok, first, second, err := dissect(updateNameRE, file.info.Name())
+		ok, first, second, err := dissectUpdateName(file.info.Name())
 		if err != nil {
 			return nil, err
 		}
@@ -560,6 +561,16 @@ func getUpdates(files []archive, last int) ([]archive, error) {
 		}
 	}
 	return updates, nil
+}
+
+func dissectUpdateName(name string) (bool, int, int, error) {
+	for _, re := range []*regexp.Regexp{updateNameRE, librusecUpdateNameRE} {
+		ok, first, second, err := dissect(re, name)
+		if err != nil || ok {
+			return ok, first, second, err
+		}
+	}
+	return false, 0, 0, nil
 }
 
 func dissect(re *regexp.Regexp, name string) (bool, int, int, error) {

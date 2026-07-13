@@ -140,6 +140,14 @@ func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
 	if len(dumps) == 0 {
 		return errors.New("no SQL dumps found")
 	}
+	format, err := DetectDumpFormat(dumps)
+	if err != nil {
+		return err
+	}
+	dumps = filterImportDumps(dumps, format)
+	if len(dumps) == 0 {
+		return fmt.Errorf("no SQL dumps selected for import format %q", format)
+	}
 	client := i.client
 	if client == "" {
 		var err error
@@ -174,16 +182,42 @@ func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
 	return nil
 }
 
+func filterImportDumps(dumps []DumpFile, format Format) []DumpFile {
+	if format != FormatLibrusecCurrent {
+		return dumps
+	}
+	out := make([]DumpFile, 0, len(dumps))
+	for _, dump := range dumps {
+		if librusecImportDump(dump.Name) {
+			out = append(out, dump)
+		}
+	}
+	return out
+}
+
+func librusecImportDump(name string) bool {
+	switch strings.ToLower(filepath.Base(name)) {
+	case "libbook.sql",
+		"libavtor.sql",
+		"libavtors.sql",
+		"libgenre.sql",
+		"libgenres.sql",
+		"libseq.sql",
+		"libseqs.sql",
+		"librate.sql":
+		return true
+	default:
+		return false
+	}
+}
+
 func (i *Importer) importDump(ctx context.Context, client string, dump DumpFile) error {
 	f, err := os.Open(dump.Path)
 	if err != nil {
 		return fmt.Errorf("open dump %q: %w", dump.Path, err)
 	}
 	defer f.Close()
-	var stdin io.Reader = f
-	if isAuthorAliasDump(dump.Name) {
-		stdin = authorAliasFixupReader(f)
-	}
+	stdin := importFixupReader(f, dump.Name)
 
 	args, err := i.clientArgs()
 	if err != nil {
@@ -204,12 +238,33 @@ func isAuthorAliasDump(name string) bool {
 	return strings.Contains(strings.ToLower(filepath.Base(name)), "libavtoraliase")
 }
 
-func authorAliasFixupReader(r io.Reader) io.Reader {
+func importFixupReader(r io.Reader, dumpName string) io.Reader {
 	pr, pw := io.Pipe()
 	go func() {
-		_ = pw.CloseWithError(writeAuthorAliasFixup(pw, r))
+		_ = pw.CloseWithError(writeImportFixup(pw, r, isAuthorAliasDump(dumpName)))
 	}()
 	return pr
+}
+
+func writeImportFixup(w io.Writer, r io.Reader, fixAuthorAliases bool) error {
+	br := bufio.NewReader(r)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			fixed := fixImportSQLLine(line, fixAuthorAliases)
+			if fixed != "" {
+				if _, writeErr := io.WriteString(w, fixed); writeErr != nil {
+					return writeErr
+				}
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func writeAuthorAliasFixup(w io.Writer, r io.Reader) error {
@@ -217,7 +272,7 @@ func writeAuthorAliasFixup(w io.Writer, r io.Reader) error {
 	for {
 		line, err := br.ReadString('\n')
 		if line != "" {
-			if _, writeErr := io.WriteString(w, fixAuthorAliasSQLLine(line)); writeErr != nil {
+			if _, writeErr := io.WriteString(w, fixImportSQLLine(line, true)); writeErr != nil {
 				return writeErr
 			}
 		}
@@ -228,6 +283,17 @@ func writeAuthorAliasFixup(w io.Writer, r io.Reader) error {
 			return err
 		}
 	}
+}
+
+func fixImportSQLLine(line string, fixAuthorAliases bool) string {
+	trimmed := strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(strings.ToUpper(trimmed), "ALTER DATABASE ") {
+		return ""
+	}
+	if fixAuthorAliases {
+		return fixAuthorAliasSQLLine(line)
+	}
+	return line
 }
 
 func fixAuthorAliasSQLLine(line string) string {

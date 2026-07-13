@@ -43,6 +43,7 @@ type DatabaseManifestDecision struct {
 	ManifestPath string
 	DumpDir      string
 	DumpDate     string
+	Format       db.Format
 	Dumps        []DumpManifestSource
 	Use          bool
 	Create       bool
@@ -101,6 +102,7 @@ type manifestIterationHeader struct {
 type DatabaseManifestSource struct {
 	DumpDir  string               `json:"dump_dir"`
 	DumpDate string               `json:"dump_date,omitempty"`
+	Format   db.Format            `json:"database_format,omitempty"`
 	Dumps    []DumpManifestSource `json:"dumps"`
 }
 
@@ -186,6 +188,11 @@ func PlanDatabaseManifest(
 	if err != nil {
 		return decision, err
 	}
+	format, err := db.DetectDumpFormat(dumps)
+	if err != nil {
+		return decision, err
+	}
+	decision.Format = format
 	decision.Dumps = dumpSources
 	manifestInfo, err := os.Stat(manifestPath)
 	if err != nil {
@@ -215,14 +222,14 @@ func PlanDatabaseManifest(
 		)
 	}
 	header, err := readDatabaseManifestHeader(manifestPath)
-	if err == nil && databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, true) {
+	if err == nil && databaseManifestLightMatches(header, cfg, dumpDate, decision.Format, dumpSources, true) {
 		if checkMD5 {
 			dumpSources, err = dumpSourcesWithMD5(ctx, dumps)
 			if err != nil {
 				return decision, err
 			}
 			decision.Dumps = dumpSources
-			if !databaseManifestMatches(header, cfg, dumpDate, dumpSources) {
+			if !databaseManifestMatches(header, cfg, dumpDate, decision.Format, dumpSources) {
 				if !cfg.Processing.Rebuild {
 					if log != nil {
 						log.Warn("Database manifest checksum does not match current dumps; run cache --rebuild to recreate it", zap.String("manifest", manifestPath))
@@ -408,6 +415,11 @@ func ValidateDatabaseManifest(
 	if err != nil {
 		return decision, report, err
 	}
+	format, err := db.DetectDumpFormat(dumps)
+	if err != nil {
+		return decision, report, err
+	}
+	decision.Format = format
 	decision.Dumps = dumpSources
 	manifestInfo, err := os.Stat(manifestPath)
 	if err != nil {
@@ -430,13 +442,13 @@ func ValidateDatabaseManifest(
 	report.Records = header.Records
 	decision.Records = header.Records
 	decision.Use = true
-	if !databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, false) {
+	if !databaseManifestLightMatches(header, cfg, dumpDate, decision.Format, dumpSources, false) {
 		report.Valid = false
 		report.Reason = "manifest does not match current database inputs"
 		logManifestReport(log, report, false)
 		return decision, report, nil
 	}
-	if manifestInfo.ModTime().After(latest) && databaseManifestLightMatches(header, cfg, dumpDate, dumpSources, true) {
+	if manifestInfo.ModTime().After(latest) && databaseManifestLightMatches(header, cfg, dumpDate, decision.Format, dumpSources, true) {
 		report.Fresh = true
 	} else {
 		report.Reason = "manifest is older than source dumps or source timestamps changed"
@@ -447,7 +459,7 @@ func ValidateDatabaseManifest(
 			return decision, report, err
 		}
 		decision.Dumps = dumpSources
-		if !databaseManifestMatches(header, cfg, dumpDate, dumpSources) {
+		if !databaseManifestMatches(header, cfg, dumpDate, decision.Format, dumpSources) {
 			report.Valid = false
 			report.Reason = "manifest checksum does not match source dumps"
 		} else {
@@ -1031,9 +1043,10 @@ func databaseManifestMatches(
 	header databaseManifestHeader,
 	cfg *config.Config,
 	dumpDate string,
+	format db.Format,
 	dumps []DumpManifestSource,
 ) bool {
-	if header.Source.DumpDate != dumpDate || header.Processing != processingManifest(cfg) {
+	if header.Source.DumpDate != dumpDate || databaseManifestFormat(header) != format || header.Processing != processingManifest(cfg) {
 		return false
 	}
 	if len(header.Source.Dumps) != len(dumps) {
@@ -1057,10 +1070,11 @@ func databaseManifestLightMatches(
 	header databaseManifestHeader,
 	cfg *config.Config,
 	dumpDate string,
+	format db.Format,
 	dumps []DumpManifestSource,
 	compareModified bool,
 ) bool {
-	if header.Source.DumpDate != dumpDate || header.Processing != processingManifest(cfg) {
+	if header.Source.DumpDate != dumpDate || databaseManifestFormat(header) != format || header.Processing != processingManifest(cfg) {
 		return false
 	}
 	if len(header.Source.Dumps) != len(dumps) {
@@ -1083,6 +1097,13 @@ func databaseManifestLightMatches(
 		}
 	}
 	return true
+}
+
+func databaseManifestFormat(header databaseManifestHeader) db.Format {
+	if header.Source.Format == "" {
+		return db.FormatFlibustaCurrent
+	}
+	return header.Source.Format
 }
 
 func sourceMTimeMatches(stored string, current any) bool {
@@ -1128,11 +1149,16 @@ func archiveManifestHeaderFor(cfg *config.Config, decision ArchiveManifestDecisi
 }
 
 func databaseManifestHeaderFor(cfg *config.Config, decision DatabaseManifestDecision, records int64) databaseManifestHeader {
+	format := decision.Format
+	if format == "" {
+		format = db.FormatFlibustaCurrent
+	}
 	return databaseManifestHeader{
 		Schema: databaseManifestSchema,
 		Source: DatabaseManifestSource{
 			DumpDir:  decision.DumpDir,
 			DumpDate: decision.DumpDate,
+			Format:   format,
 			Dumps:    decision.Dumps,
 		},
 		Processing: processingManifest(cfg),

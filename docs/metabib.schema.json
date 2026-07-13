@@ -55,6 +55,7 @@
         "book": {"$ref": "#/$defs/database_book"},
         "authors": {"type": "array", "items": {"$ref": "#/$defs/contributor"}},
         "translators": {"type": "array", "items": {"$ref": "#/$defs/contributor"}},
+        "illustrators": {"type": "array", "items": {"$ref": "#/$defs/contributor"}},
         "genres": {"type": "array", "items": {"$ref": "#/$defs/database_genre"}},
         "sequences": {"type": "array", "items": {"$ref": "#/$defs/database_sequence"}},
         "rating": {"$ref": "#/$defs/database_rating"},

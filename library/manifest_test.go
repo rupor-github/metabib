@@ -119,8 +119,8 @@ func TestPlanDatabaseManifestMissingAndFresh(t *testing.T) {
 
 	ctx := context.Background()
 	dir := t.TempDir()
-	dump := writeManifestTestFile(t, dir, "a.sql", "dump")
-	dumps := []db.DumpFile{{Path: dump, Name: "a.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
+	dump := writeManifestTestFile(t, dir, "libbook.sql", "CREATE TABLE `libbook` (`BookId` int);")
+	dumps := []db.DumpFile{{Path: dump, Name: "libbook.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
 	cfg := manifestTestConfig()
 
 	decision, err := PlanDatabaseManifest(ctx, cfg, dir, dumps, "2026-06-20", false, nil)
@@ -392,8 +392,8 @@ func TestDatabaseManifestIgnoresAbsoluteSourcePaths(t *testing.T) {
 	manifestDir := t.TempDir()
 	sourceDir := t.TempDir()
 	targetDir := t.TempDir()
-	sourceDump := writeManifestTestFile(t, sourceDir, "a.sql", "dump")
-	targetDump := writeManifestTestFile(t, targetDir, "a.sql", "dump")
+	sourceDump := writeManifestTestFile(t, sourceDir, "libbook.sql", "CREATE TABLE `libbook` (`BookId` int);")
+	targetDump := writeManifestTestFile(t, targetDir, "libbook.sql", "CREATE TABLE `libbook` (`BookId` int);")
 	dumpTime := time.Now().Add(-time.Hour).Round(0)
 	if err := os.Chtimes(sourceDump, dumpTime, dumpTime); err != nil {
 		t.Fatalf("Chtimes(source) error = %v", err)
@@ -403,8 +403,8 @@ func TestDatabaseManifestIgnoresAbsoluteSourcePaths(t *testing.T) {
 	}
 	cfg := manifestTestConfig()
 	cfg.Processing.Manifests.DatabaseDir = manifestDir
-	sourceDumps := []db.DumpFile{{Path: sourceDump, Name: "a.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
-	targetDumps := []db.DumpFile{{Path: targetDump, Name: "a.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
+	sourceDumps := []db.DumpFile{{Path: sourceDump, Name: "libbook.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
+	targetDumps := []db.DumpFile{{Path: targetDump, Name: "libbook.sql", DumpDate: "2026-06-20", DumpCompleted: "2026-06-20T02:19:33"}}
 
 	decision, err := PlanDatabaseManifest(ctx, cfg, sourceDir, sourceDumps, "2026-06-20", false, nil)
 	if err != nil {
@@ -471,12 +471,29 @@ func TestDatabaseManifestToleratesSubMicrosecondMTimeDrift(t *testing.T) {
 		DumpCompleted: "2026-07-12T02:17:36",
 		Modified:      stored.Add(-9 * time.Nanosecond).Format(time.RFC3339Nano),
 	}}
-	if !databaseManifestLightMatches(header, cfg, "2026-07-12", current, true) {
+	if !databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatFlibustaCurrent, current, true) {
 		t.Fatal("databaseManifestLightMatches() = false for sub-microsecond mtime drift")
 	}
 	current[0].Modified = stored.Add(-2 * time.Microsecond).Format(time.RFC3339Nano)
-	if databaseManifestLightMatches(header, cfg, "2026-07-12", current, true) {
+	if databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatFlibustaCurrent, current, true) {
 		t.Fatal("databaseManifestLightMatches() = true for multi-microsecond mtime drift")
+	}
+}
+
+func TestDatabaseManifestFormatCompatibility(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	header := databaseManifestHeader{Source: DatabaseManifestSource{DumpDate: "2026-07-12"}, Processing: processingManifest(cfg)}
+	if !databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatFlibustaCurrent, nil, false) {
+		t.Fatal("legacy database manifest without format should match flibusta-current")
+	}
+	if databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatLibrusecCurrent, nil, false) {
+		t.Fatal("legacy database manifest without format matched librusec-current")
+	}
+	header.Source.Format = db.FormatLibrusecCurrent
+	if !databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatLibrusecCurrent, nil, false) {
+		t.Fatal("librusec-current database manifest did not match librusec-current")
 	}
 }
 

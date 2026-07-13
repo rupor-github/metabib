@@ -34,6 +34,8 @@ func TestGetUpdates(t *testing.T) {
 		{info: fakeInfo{name: "f.fb2.000101-000150.zip"}},
 		{info: fakeInfo{name: "f.fb2.000140-000160.zip"}},
 		{info: fakeInfo{name: "f.fb2.000151-000200.zip"}},
+		{info: fakeInfo{name: "2026-07-12.000201-000250.503.fb2.zip"}},
+		{info: fakeInfo{name: "2026-07-12.000251-000300.503.pdf.zip"}},
 		{info: fakeInfo{name: "f.fb2.000201-000250.zip.tmp"}},
 		{info: fakeInfo{name: "backup-f.fb2.000251-000300.zip"}},
 		{info: fakeInfo{name: "fb2-000001-000100.zip"}},
@@ -42,8 +44,8 @@ func TestGetUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getUpdates() error = %v", err)
 	}
-	if len(updates) != 2 || updates[0].begin != 140 || updates[0].end != 160 || updates[1].begin != 151 || updates[1].end != 200 {
-		t.Fatalf("updates = %#v, want 140-160 and 151-200", updates)
+	if len(updates) != 3 || updates[0].begin != 140 || updates[0].end != 160 || updates[1].begin != 151 || updates[1].end != 200 || updates[2].begin != 201 || updates[2].end != 250 {
+		t.Fatalf("updates = %#v, want 140-160, 151-200, and 201-250", updates)
 	}
 }
 
