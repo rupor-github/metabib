@@ -179,6 +179,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if err != nil {
 		return stats, err
 	}
+	inpxutil.EnsureDumpDate(&meta, opts.Log)
 	if opts.SourceLib == "" {
 		opts.SourceLib = meta.Library
 	}

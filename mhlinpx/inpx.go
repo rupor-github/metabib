@@ -167,6 +167,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if err != nil {
 		return stats, err
 	}
+	inpxutil.EnsureDumpDate(&meta, opts.Log)
 	stats.DumpDate = meta.Database.DumpDate
 	parts, err := discoverInputParts(opts.InputPrefix, metaPath, meta, opts.Log)
 	if err != nil {

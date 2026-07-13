@@ -180,6 +180,22 @@ func ReadMetadata(path string) (model.MergeMetadata, error) {
 	return meta, nil
 }
 
+func EnsureDumpDate(meta *model.MergeMetadata, log *zap.Logger) {
+	if meta == nil || meta.Database.DumpDate != "" {
+		return
+	}
+	now := time.Now().UTC()
+	meta.Database.DumpDate = now.Format("20060102")
+	meta.Database.DumpDateISO = now.Format("2006-01-02")
+	if log != nil {
+		log.Warn(
+			"INPX input metadata has empty dump date; using current date",
+			zap.String("dump_date", meta.Database.DumpDate),
+			zap.String("display_date", meta.Database.DumpDateISO),
+		)
+	}
+}
+
 func ReadRecords(ctx context.Context, parts []string, archives map[string]*ArchiveRows, log *zap.Logger) (int64, error) {
 	var records int64
 	for _, part := range parts {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -145,6 +146,41 @@ func TestOutputPathValidatesCompactDumpDate(t *testing.T) {
 				t.Fatalf("OutputPath() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnsureDumpDateUsesCurrentDateAndWarns(t *testing.T) {
+	t.Parallel()
+
+	core, logs := observer.New(zap.WarnLevel)
+	meta := model.MergeMetadata{}
+	before := time.Now().UTC().Format("20060102")
+	EnsureDumpDate(&meta, zap.New(core))
+	after := time.Now().UTC().Format("20060102")
+
+	if meta.Database.DumpDate != before && meta.Database.DumpDate != after {
+		t.Fatalf("DumpDate = %q, want current date %q or %q", meta.Database.DumpDate, before, after)
+	}
+	if meta.Database.DumpDateISO == "" {
+		t.Fatal("DumpDateISO is empty")
+	}
+	if logs.FilterMessage("INPX input metadata has empty dump date; using current date").Len() != 1 {
+		t.Fatalf("logs = %#v, want one empty-date warning", logs.All())
+	}
+}
+
+func TestEnsureDumpDateKeepsExistingDate(t *testing.T) {
+	t.Parallel()
+
+	core, logs := observer.New(zap.WarnLevel)
+	meta := model.MergeMetadata{Database: model.MergeDatabaseMetadata{DumpDate: "20260603", DumpDateISO: "2026-06-03"}}
+	EnsureDumpDate(&meta, zap.New(core))
+
+	if meta.Database.DumpDate != "20260603" || meta.Database.DumpDateISO != "2026-06-03" {
+		t.Fatalf("metadata changed: %#v", meta.Database)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("logs = %#v, want no warnings", logs.All())
 	}
 }
 
