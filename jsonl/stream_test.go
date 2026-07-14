@@ -76,6 +76,82 @@ func TestDatasetValuesRejectsDuplicateHeader(t *testing.T) {
 	}
 }
 
+func TestDatasetValuesValidatesArchiveOrder(t *testing.T) {
+	t.Parallel()
+
+	dataset := model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Records:      4,
+		Archives: []model.DatasetArchive{
+			{ID: "archive-0001", Ordinal: 0, Name: "z.zip"},
+			{ID: "archive-0002", Ordinal: 1, Name: "a.zip"},
+		},
+		Ordering: model.DatasetOrdering{Mode: "archive_entry", ArchiveKey: "ordinal", EntryKey: "index", Direction: "ascending"},
+	}
+	path := writeDatasetStream(t,
+		CompressionNone,
+		dataset,
+		datasetArchiveRecord("archive-0001", 0),
+		datasetArchiveRecord("archive-0001", 1),
+		datasetArchiveRecord("archive-0001", 1),
+		datasetArchiveRecord("archive-0002", 0),
+	)
+	_, records, err := readDatasetValues(context.Background(), path)
+	if err != nil {
+		t.Fatalf("DatasetValues() error = %v", err)
+	}
+	if records != 4 {
+		t.Fatalf("records = %d, want 4", records)
+	}
+}
+
+func TestDatasetValuesRejectsOutOfArchiveOrder(t *testing.T) {
+	t.Parallel()
+
+	dataset := model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Records:      2,
+		Archives: []model.DatasetArchive{
+			{ID: "archive-0001", Ordinal: 0, Name: "z.zip"},
+			{ID: "archive-0002", Ordinal: 1, Name: "a.zip"},
+		},
+		Ordering: model.DatasetOrdering{Mode: "archive_entry", ArchiveKey: "ordinal", EntryKey: "index", Direction: "ascending"},
+	}
+	path := writeDatasetStream(t,
+		CompressionNone,
+		dataset,
+		datasetArchiveRecord("archive-0002", 0),
+		datasetArchiveRecord("archive-0001", 0),
+	)
+	_, records, err := readDatasetValues(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "out of archive order") || records != 1 {
+		t.Fatalf("DatasetValues() records=%d error=%v, want archive order error after one record", records, err)
+	}
+}
+
+func TestDatasetValuesRejectsOutOfDatabaseBookIDOrder(t *testing.T) {
+	t.Parallel()
+
+	dataset := model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Records:      2,
+		Ordering:     model.DatasetOrdering{Mode: "database_book_id", Source: "database", Direction: "ascending"},
+	}
+	path := writeDatasetStream(t,
+		CompressionNone,
+		dataset,
+		datasetDatabaseRecord(20),
+		datasetDatabaseRecord(10),
+	)
+	_, records, err := readDatasetValues(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), "out of database book ID order") || records != 1 {
+		t.Fatalf("DatasetValues() records=%d error=%v, want database order error after one record", records, err)
+	}
+}
+
 func TestDatasetValuesCompressedInput(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +197,24 @@ func readDatasetValues(ctx context.Context, path string) (model.Dataset, int64, 
 		records++
 	}
 	return dataset, records, nil
+}
+
+func datasetArchiveRecord(source string, index int) model.DatasetRecord {
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
+		},
+	}
+}
+
+func datasetDatabaseRecord(bookID int64) model.DatasetRecord {
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
+		},
+	}
 }
 
 func writeDatasetStream(t *testing.T, compression Compression, values ...any) string {

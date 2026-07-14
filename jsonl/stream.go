@@ -52,6 +52,7 @@ func DatasetValues(ctx context.Context, path string) iter.Seq2[DatasetValue, err
 		if !yield(DatasetValue{Header: true, Dataset: dataset}, nil) {
 			return
 		}
+		orderValidator := newDatasetOrderValidator(path, dataset)
 
 		var records int64
 		for records < dataset.Records {
@@ -83,6 +84,10 @@ func DatasetValues(ctx context.Context, path string) iter.Seq2[DatasetValue, err
 				))
 				return
 			}
+			if err := orderValidator.validate(rec, records+1); err != nil {
+				yield(DatasetValue{}, err)
+				return
+			}
 			if !yield(DatasetValue{Record: rec}, nil) {
 				return
 			}
@@ -101,6 +106,104 @@ func DatasetValues(ctx context.Context, path string) iter.Seq2[DatasetValue, err
 			yield(DatasetValue{}, err)
 		}
 	}
+}
+
+type datasetOrderValidator struct {
+	path            string
+	dataset         model.Dataset
+	archiveOrdinals map[string]int
+	prevArchive     datasetArchiveOrder
+	prevBookID      int64
+	hasArchive      bool
+	hasBookID       bool
+}
+
+type datasetArchiveOrder struct {
+	ordinal int
+	index   int
+}
+
+func newDatasetOrderValidator(path string, dataset model.Dataset) datasetOrderValidator {
+	archiveOrdinals := make(map[string]int, len(dataset.Archives))
+	for _, archive := range dataset.Archives {
+		archiveOrdinals[archive.ID] = archive.Ordinal
+	}
+	return datasetOrderValidator{path: path, dataset: dataset, archiveOrdinals: archiveOrdinals}
+}
+
+func (v *datasetOrderValidator) validate(rec model.DatasetRecord, recordNumber int64) error {
+	switch v.dataset.Ordering.Mode {
+	case "":
+		return nil
+	case "archive_entry":
+		return v.validateArchiveEntry(rec, recordNumber)
+	case "database_book_id":
+		return v.validateDatabaseBookID(rec, recordNumber)
+	default:
+		return fmt.Errorf("dataset JSONL %q declares unsupported ordering mode %q", v.path, v.dataset.Ordering.Mode)
+	}
+}
+
+func (v *datasetOrderValidator) validateArchiveEntry(rec model.DatasetRecord, recordNumber int64) error {
+	locator := rec.Record.Locator
+	if locator.Kind != "archive_entry" {
+		return fmt.Errorf("dataset JSONL %q record %d has locator kind %q, want archive_entry", v.path, recordNumber, locator.Kind)
+	}
+	if locator.Index == nil {
+		return fmt.Errorf("dataset JSONL %q record %d has archive_entry locator without index", v.path, recordNumber)
+	}
+	ordinal, ok := v.archiveOrdinals[locator.Source]
+	if !ok {
+		return fmt.Errorf("dataset JSONL %q record %d references undeclared archive source %q", v.path, recordNumber, locator.Source)
+	}
+	current := datasetArchiveOrder{ordinal: ordinal, index: *locator.Index}
+	if v.hasArchive && archiveOrderLess(current, v.prevArchive) {
+		return fmt.Errorf(
+			"dataset JSONL %q record %d is out of archive order: archive ordinal %d index %d after ordinal %d index %d",
+			v.path,
+			recordNumber,
+			current.ordinal,
+			current.index,
+			v.prevArchive.ordinal,
+			v.prevArchive.index,
+		)
+	}
+	v.prevArchive = current
+	v.hasArchive = true
+	return nil
+}
+
+func archiveOrderLess(a datasetArchiveOrder, b datasetArchiveOrder) bool {
+	return a.ordinal < b.ordinal || a.ordinal == b.ordinal && a.index < b.index
+}
+
+func (v *datasetOrderValidator) validateDatabaseBookID(rec model.DatasetRecord, recordNumber int64) error {
+	locator := rec.Record.Locator
+	if locator.Kind != "database_book" {
+		return fmt.Errorf("dataset JSONL %q record %d has locator kind %q, want database_book", v.path, recordNumber, locator.Kind)
+	}
+	wantSource := v.dataset.Ordering.Source
+	if wantSource == "" {
+		wantSource = "database"
+	}
+	if locator.Source != wantSource {
+		return fmt.Errorf("dataset JSONL %q record %d has locator source %q, want %q", v.path, recordNumber, locator.Source, wantSource)
+	}
+	if locator.BookID == nil {
+		return fmt.Errorf("dataset JSONL %q record %d has database_book locator without book ID", v.path, recordNumber)
+	}
+	if v.hasBookID && *locator.BookID < v.prevBookID {
+		return fmt.Errorf(
+			"dataset JSONL %q record %d is out of database book ID order: %d after %d",
+			v.path,
+			recordNumber,
+			*locator.BookID,
+			v.prevBookID,
+		)
+	}
+	v.prevBookID = *locator.BookID
+	v.hasBookID = true
+	return nil
 }
 
 func validateDatasetHeader(path string, dataset model.Dataset) error {
