@@ -65,6 +65,16 @@ func TestDatasetValuesRejectsMissingHeader(t *testing.T) {
 	}
 }
 
+func TestDatasetValuesRejectsLegacyV1Record(t *testing.T) {
+	t.Parallel()
+
+	path := writeDatasetStream(t, CompressionNone, map[string]any{"schema": "metabib.record/1"})
+	_, _, err := readDatasetValues(context.Background(), path)
+	if err == nil || !strings.Contains(err.Error(), model.DatasetSchemaV1) || !strings.Contains(err.Error(), "metabib.record/1") {
+		t.Fatalf("DatasetValues() error=%v, want v1 record rejection", err)
+	}
+}
+
 func TestDatasetValuesRejectsDuplicateHeader(t *testing.T) {
 	t.Parallel()
 

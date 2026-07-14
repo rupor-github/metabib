@@ -133,7 +133,13 @@ func TestWriteOutputWritesDatasetHeaderFirst(t *testing.T) {
 		if err := out.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}); err != nil {
 			return err
 		}
-		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
+		bookID := int64(42)
+		return out.WriteValue(model.DatasetRecord{
+			Schema: model.RecordSchemaV2,
+			Record: model.RecordDescriptor{
+				Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
+			},
+		})
 	})
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
@@ -146,7 +152,7 @@ func TestWriteOutputWritesDatasetHeaderFirst(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("lines = %#v, want header and one record", lines)
 	}
-	if !strings.Contains(lines[0], `"schema":"metabib.dataset/1"`) || !strings.Contains(lines[1], `"schema":"metabib.record/1"`) {
+	if !strings.Contains(lines[0], `"schema":"metabib.dataset/1"`) || !strings.Contains(lines[1], `"schema":"metabib.record/2"`) {
 		t.Fatalf("output lines = %#v", lines)
 	}
 }
