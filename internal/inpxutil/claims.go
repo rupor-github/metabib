@@ -2,7 +2,9 @@ package inpxutil
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	jsonv2 "encoding/json/v2"
 
@@ -19,6 +21,30 @@ type DatasetRecordView struct {
 	Artifact            DatasetArtifactView
 	HasDatabase         bool
 	HasFB2              bool
+}
+
+func DatasetBookID(rec model.DatasetRecord) string {
+	if rec.Record.Locator.BookID != nil {
+		return strconv.FormatInt(*rec.Record.Locator.BookID, 10)
+	}
+	if rec.Identities != nil {
+		for _, identity := range rec.Identities.Catalog {
+			if identity.Scheme == "flibusta.book" {
+				return identity.Value
+			}
+		}
+	}
+	for _, artifact := range rec.Artifacts {
+		if stem := artifactStem(artifact.Name); stem != "" {
+			return stem
+		}
+		for _, occurrence := range artifact.Occurrences {
+			if stem := artifactStem(occurrence.Entry); stem != "" {
+				return stem
+			}
+		}
+	}
+	return ""
 }
 
 type DatasetBibliographicView struct {
@@ -322,4 +348,12 @@ func hasObservation(observations []model.Observation, id string) bool {
 		}
 	}
 	return false
+}
+
+func artifactStem(name string) string {
+	name = filepath.Base(name)
+	if name == "." || name == string(filepath.Separator) {
+		return ""
+	}
+	return strings.TrimSuffix(name, filepath.Ext(name))
 }

@@ -204,6 +204,70 @@ func TestRecordLineRUKSAppendsMD5AndReplacement(t *testing.T) {
 	}
 }
 
+func TestRecordLineUsesArtifactStemForFB2OnlyLIBID(t *testing.T) {
+	t.Parallel()
+
+	index := 23387
+	number := 2.0
+	rec := model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001", Index: &index},
+		},
+		Artifacts: []model.Artifact{{
+			Name: "31280.fb2",
+			Occurrences: []model.Occurrence{{
+				Archive:          "archive-0001",
+				Entry:            "31280.fb2",
+				Index:            index,
+				UncompressedSize: 1385596,
+				Modified:         "2011-03-24T14:40:10-04:00",
+			}},
+		}},
+		Observations: []model.Observation{
+			{ID: "archive", Source: "archive-0001", Kind: "archive_entry", Status: "present"},
+			{ID: "db", Source: "database", Kind: "database_book", Status: "absent"},
+			{ID: "fb2", Source: "archive-0001", Kind: "fb2_description", Status: "present"},
+		},
+		Claims: model.Claims{Bibliographic: &model.BibliographicClaims{
+			Title: []model.Claim{{Observation: "fb2", Value: "Дорога в Омаху"}},
+			Authors: []model.Claim{{
+				Observation: "fb2",
+				Value:       []model.PersonValue{{FirstName: "Роберт", LastName: "Ладлэм"}},
+			}},
+			Genres: []model.Claim{{Observation: "fb2", Value: []model.GenreValue{{Code: "humor_prose"}}}},
+			Sequences: []model.Claim{{Observation: "fb2", Value: []model.SequenceValue{{
+				Name:   "Маккензи Хаукинз",
+				Number: &model.NumberValue{Text: "02", Value: &number},
+			}}}},
+			Language: []model.Claim{{Observation: "fb2", Value: "ru"}},
+		}},
+	}
+
+	line, _, err := recordLine(rec, Options{
+		Format:        Format2X,
+		SequenceMode:  SequenceAuthor,
+		FB2Preference: PreferComplement,
+		QuickFix:      true,
+		Limits:        DefaultLimits(),
+	})
+	if err != nil {
+		t.Fatalf("recordLine() error = %v", err)
+	}
+	fields := strings.Split(strings.TrimSuffix(line, "\r\n"), fieldSep)
+	if len(fields) != 15 {
+		t.Fatalf("field count = %d fields=%#v line=%q", len(fields), fields, line)
+	}
+	if fields[3] != "Маккензи Хаукинз" || fields[4] != "2" {
+		t.Fatalf("sequence fields = %#v", fields[3:5])
+	}
+	if fields[5] != "31280" || fields[6] != "1385596" ||
+		fields[7] != "31280" || fields[8] != "" || fields[9] != "fb2" {
+		t.Fatalf("file fields = %#v", fields[5:10])
+	}
+}
+
 func TestCleanseRemovesINPLayoutCharacters(t *testing.T) {
 	t.Parallel()
 

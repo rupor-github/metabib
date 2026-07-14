@@ -673,18 +673,7 @@ func sequenceLevel(seq model.SequenceValue) int64 {
 }
 
 func datasetBookID(rec model.DatasetRecord) string {
-	if rec.Record.Locator.BookID != nil {
-		return strconv.FormatInt(*rec.Record.Locator.BookID, 10)
-	}
-	if rec.Identities == nil {
-		return ""
-	}
-	for _, identity := range rec.Identities.Catalog {
-		if identity.Scheme == "flibusta.book" {
-			return identity.Value
-		}
-	}
-	return ""
+	return inpxutil.DatasetBookID(rec)
 }
 
 func keywordsString(value string) string {

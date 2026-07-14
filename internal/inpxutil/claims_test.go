@@ -151,3 +151,51 @@ func TestDatasetRecordClaimsPrefersDatabaseReportedSizeAcrossArtifacts(t *testin
 		t.Fatalf("artifact = %#v", view.Artifact)
 	}
 }
+
+func TestDatasetBookIDFallsBackToArtifactStem(t *testing.T) {
+	t.Parallel()
+
+	bookID := int64(42)
+	tests := []struct {
+		name string
+		rec  model.DatasetRecord
+		want string
+	}{
+		{
+			name: "locator",
+			rec: model.DatasetRecord{Record: model.RecordDescriptor{
+				Locator: model.RecordLocator{BookID: &bookID},
+			}},
+			want: "42",
+		},
+		{
+			name: "catalog identity",
+			rec: model.DatasetRecord{Identities: &model.Identities{Catalog: []model.Identity{{
+				Scheme: "flibusta.book",
+				Value:  "31280",
+			}}}},
+			want: "31280",
+		},
+		{
+			name: "artifact name",
+			rec:  model.DatasetRecord{Artifacts: []model.Artifact{{Name: "31280.fb2"}}},
+			want: "31280",
+		},
+		{
+			name: "occurrence entry",
+			rec: model.DatasetRecord{Artifacts: []model.Artifact{{Occurrences: []model.Occurrence{{
+				Entry: "archive/path/31281.fb2",
+			}}}}},
+			want: "31281",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := DatasetBookID(tt.rec); got != tt.want {
+				t.Fatalf("DatasetBookID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
