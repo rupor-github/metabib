@@ -221,5 +221,18 @@ func validateDatasetHeader(path string, dataset model.Dataset) error {
 	if dataset.Records < 0 {
 		return fmt.Errorf("dataset JSONL %q declares negative record count %d", path, dataset.Records)
 	}
+	seenArchives := make(map[string]struct{}, len(dataset.Archives))
+	for idx, archive := range dataset.Archives {
+		if archive.ID == "" {
+			return fmt.Errorf("dataset JSONL %q archive %d has empty ID", path, idx)
+		}
+		if _, ok := seenArchives[archive.ID]; ok {
+			return fmt.Errorf("dataset JSONL %q declares duplicate archive ID %q", path, archive.ID)
+		}
+		seenArchives[archive.ID] = struct{}{}
+		if archive.Ordinal != idx {
+			return fmt.Errorf("dataset JSONL %q archive %q has ordinal %d, want %d", path, archive.ID, archive.Ordinal, idx)
+		}
+	}
 	return nil
 }

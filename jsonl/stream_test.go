@@ -76,6 +76,60 @@ func TestDatasetValuesRejectsDuplicateHeader(t *testing.T) {
 	}
 }
 
+func TestDatasetValuesRejectsInvalidArchiveHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		archives []model.DatasetArchive
+		want     string
+	}{
+		{
+			name:     "empty id",
+			archives: []model.DatasetArchive{{Ordinal: 0}},
+			want:     "empty ID",
+		},
+		{
+			name: "duplicate id",
+			archives: []model.DatasetArchive{
+				{ID: "archive-0001", Ordinal: 0},
+				{ID: "archive-0001", Ordinal: 1},
+			},
+			want: "duplicate archive ID",
+		},
+		{
+			name:     "non contiguous ordinal",
+			archives: []model.DatasetArchive{{ID: "archive-0001", Ordinal: 1}},
+			want:     "has ordinal 1, want 0",
+		},
+		{
+			name: "array order mismatch",
+			archives: []model.DatasetArchive{
+				{ID: "archive-0002", Ordinal: 1},
+				{ID: "archive-0001", Ordinal: 0},
+			},
+			want: "has ordinal 1, want 0",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dataset := model.Dataset{
+				Schema:       model.DatasetSchemaV1,
+				RecordSchema: model.RecordSchemaV2,
+				Records:      0,
+				Archives:     tt.archives,
+			}
+			path := writeDatasetStream(t, CompressionNone, dataset)
+			_, _, err := readDatasetValues(context.Background(), path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("DatasetValues() error=%v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestDatasetValuesValidatesArchiveOrder(t *testing.T) {
 	t.Parallel()
 
