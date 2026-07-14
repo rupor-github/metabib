@@ -17,14 +17,11 @@ import (
 	"text/template"
 	"time"
 
-	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
 	sprig "github.com/go-task/slim-sprig/v3"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
 	"metabib/internal/inpxutil"
-	"metabib/jsonl"
 	"metabib/model"
 )
 
@@ -95,11 +92,6 @@ type ArchiveStats struct {
 	FB2Records int64
 	Dummy      int64
 	Elapsed    time.Duration
-}
-
-type archiveRows struct {
-	Meta    model.MergeArchiveMetadata
-	Records map[int]model.Record
 }
 
 func DefaultLimits() Limits {
@@ -212,161 +204,6 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	}
 	cleanupTemp = false
 	return stats, nil
-}
-
-func discoverMetadata(prefix string) (string, error) {
-	matches, err := filepath.Glob(prefix + ".meta.json*")
-	if err != nil {
-		return "", err
-	}
-	matches = slices.DeleteFunc(matches, func(path string) bool { return strings.HasSuffix(path, ".tmp") })
-	if len(matches) != 1 {
-		return "", fmt.Errorf("expected one metadata sidecar for %q, found %d", prefix, len(matches))
-	}
-	return matches[0], nil
-}
-
-func discoverInputParts(prefix string, metaPath string, meta model.MergeMetadata, log *zap.Logger) ([]string, error) {
-	if len(meta.Parts) == 0 {
-		return nil, fmt.Errorf("merge metadata %q does not list JSONL parts; rerun metabib merge", metaPath)
-	}
-	baseDir := filepath.Dir(metaPath)
-	parts := make([]string, 0, len(meta.Parts))
-	listed := make(map[string]struct{}, len(meta.Parts))
-	for _, part := range meta.Parts {
-		if strings.TrimSpace(part) == "" {
-			return nil, fmt.Errorf("merge metadata %q contains an empty JSONL part path", metaPath)
-		}
-		path := part
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(baseDir, path)
-		}
-		path = filepath.Clean(path)
-		parts = append(parts, path)
-		listed[comparablePath(path)] = struct{}{}
-	}
-	warnUnlistedInputParts(prefix, listed, log)
-	return parts, nil
-}
-
-func warnUnlistedInputParts(prefix string, listed map[string]struct{}, log *zap.Logger) {
-	if log == nil {
-		return
-	}
-	matches, err := filepath.Glob(prefix + ".*.jsonl*")
-	if err != nil {
-		log.Warn("Unable to scan for unlisted JSONL input parts", zap.String("prefix", prefix), zap.Error(err))
-		return
-	}
-	matches = slices.DeleteFunc(matches, func(path string) bool {
-		base := filepath.Base(path)
-		return strings.Contains(base, ".meta.json") || strings.HasSuffix(base, ".tmp")
-	})
-	sort.Strings(matches)
-	for _, match := range matches {
-		if _, ok := listed[comparablePath(match)]; ok {
-			continue
-		}
-		log.Warn("Ignoring JSONL input part not listed in merge metadata", zap.String("file", match))
-	}
-}
-
-func comparablePath(path string) string {
-	path = filepath.Clean(path)
-	if abs, err := filepath.Abs(path); err == nil {
-		return abs
-	}
-	return path
-}
-
-func readMetadata(path string) (model.MergeMetadata, error) {
-	r, err := jsonl.OpenCompressedFile(path)
-	if err != nil {
-		return model.MergeMetadata{}, err
-	}
-	defer r.Close()
-	var meta model.MergeMetadata
-	if err := jsonv2.UnmarshalRead(r, &meta); err != nil {
-		return meta, fmt.Errorf("decode merge metadata %q: %w", path, err)
-	}
-	return meta, nil
-}
-
-func readRecords(ctx context.Context, parts []string, archives map[string]*archiveRows, log *zap.Logger) (int64, error) {
-	var records int64
-	for _, part := range parts {
-		if err := ctx.Err(); err != nil {
-			return records, err
-		}
-		r, err := jsonl.OpenCompressedFile(part)
-		if err != nil {
-			return records, err
-		}
-		dec := jsontext.NewDecoder(r)
-		for {
-			var rec model.Record
-			if err := jsonv2.UnmarshalDecode(dec, &rec); err != nil {
-				if err == io.EOF {
-					break
-				}
-				r.Close()
-				return records, fmt.Errorf("decode JSONL part %q: %w", part, err)
-			}
-			records++
-			if rec.ID.Archive == nil {
-				if online := archives[inpxutil.OnlineArchivePath]; online != nil {
-					idx := online.Meta.Entries
-					online.Records[idx] = rec
-					online.Meta.Entries++
-				}
-				continue
-			}
-			archive := archives[rec.ID.Archive.Path]
-			if archive == nil {
-				r.Close()
-				return records, fmt.Errorf(
-					"record references archive %q not listed in merge metadata; rebuild merge output before generating MyHomeLib INPX",
-					rec.ID.Archive.Path,
-				)
-			}
-			if existing, ok := archive.Records[rec.ID.Archive.Index]; ok {
-				logDuplicateArchiveIndex(log, part, rec.ID.Archive.Path, rec.ID.Archive.Index, existing, rec)
-				continue
-			}
-			archive.Records[rec.ID.Archive.Index] = rec
-		}
-		if err := r.Close(); err != nil {
-			return records, err
-		}
-	}
-	return records, nil
-}
-
-func newOnlineArchive() *archiveRows {
-	return &archiveRows{
-		Meta:    model.MergeArchiveMetadata{Path: inpxutil.OnlineArchivePath, Name: inpxutil.OnlineArchiveName},
-		Records: make(map[int]model.Record),
-	}
-}
-
-func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, index int, existing model.Record, duplicate model.Record) {
-	if log == nil {
-		return
-	}
-	fields := []zap.Field{
-		zap.String("part", part),
-		zap.String("archive", archivePath),
-		zap.Int("archive_index", index),
-		zap.Int64("existing_book_id", existing.ID.BookID),
-		zap.Int64("duplicate_book_id", duplicate.ID.BookID),
-	}
-	if existing.ID.Archive != nil {
-		fields = append(fields, zap.String("existing_archive_entry", existing.ID.Archive.Entry))
-	}
-	if duplicate.ID.Archive != nil {
-		fields = append(fields, zap.String("duplicate_archive_entry", duplicate.ID.Archive.Entry))
-	}
-	log.Warn("Duplicate archive index in INPX input; keeping first record", fields...)
 }
 
 func writeINPX(
