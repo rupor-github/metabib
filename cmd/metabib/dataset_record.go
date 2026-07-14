@@ -654,7 +654,7 @@ func fb2SequenceValue(sequence model.FB2Sequence) model.SequenceValue {
 }
 
 func fb2DateValue(date model.FB2Date) model.DateValue {
-	return model.DateValue{Text: date.Text, Value: date.Value}
+	return model.DateValue(date)
 }
 
 func yearValue(raw string) model.YearValue {

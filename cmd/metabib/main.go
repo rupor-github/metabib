@@ -561,17 +561,18 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 			return err
 		}
 		var records int64
+		var mergeErr error
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
 			if err != nil {
 				return err
 			}
-			records, err = mergeArchiveManifests(ctx, archivePlan, dbIndex, datasetArchiveSources(dataset), out, env.Log)
+			records, mergeErr = mergeArchiveManifests(ctx, archivePlan, dbIndex, datasetArchiveSources(dataset), out, env.Log)
 		} else {
-			records, err = writeDatabaseManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
+			records, mergeErr = writeDatabaseManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
 		}
-		if err != nil {
-			return err
+		if mergeErr != nil {
+			return mergeErr
 		}
 		if records != dataset.Records {
 			return fmt.Errorf("merge record count mismatch: declared %d, wrote %d", dataset.Records, records)
