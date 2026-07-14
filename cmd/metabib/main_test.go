@@ -20,40 +20,22 @@ import (
 	"metabib/state"
 )
 
-func TestParseSize(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		value string
-		want  int64
-	}{
-		{"", 0},
-		{"1k", 1024},
-		{"1.5m", 1572864},
-		{"2gb", 2 * 1024 * 1024 * 1024},
-	}
-	for _, tt := range tests {
-		t.Run(tt.value, func(t *testing.T) {
-			got, err := parseSize(tt.value)
-			if err != nil {
-				t.Fatalf("parseSize() error = %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("parseSize() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-	if _, err := parseSize("bad"); err == nil {
-		t.Fatal("parseSize(bad) error = nil")
-	}
-}
-
 func TestRollupCommandHasNoKeepUpdatesFlag(t *testing.T) {
 	t.Parallel()
 
 	for _, flag := range rollupCommand().Flags {
 		if slices.Contains(flag.Names(), "keep-updates") {
 			t.Fatal("rollup command still exposes --keep-updates")
+		}
+	}
+}
+
+func TestMergeCommandHasNoOutputPartSizeFlag(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range mergeCommand().Flags {
+		if slices.Contains(flag.Names(), "output-part-size") {
+			t.Fatal("merge command still exposes --output-part-size")
 		}
 	}
 }
@@ -109,7 +91,7 @@ func TestWriteOutput(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "out")
-	err := writeOutput(context.Background(), path, "", "", nil, func(out *jsonl.Writer) error {
+	err := writeOutput(context.Background(), path, "", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
 	})
 	if err != nil {
@@ -128,7 +110,7 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "out")
-	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
+	err := writeOutput(context.Background(), path, "none", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
 	})
 	if err != nil {
@@ -147,7 +129,7 @@ func TestWriteOutputWritesDatasetHeaderFirst(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "all")
-	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
+	err := writeOutput(context.Background(), path, "none", nil, func(out *jsonl.Writer) error {
 		if err := out.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}); err != nil {
 			return err
 		}
@@ -174,7 +156,7 @@ func TestWriteOutputReturnsCloseError(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "out")
-	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
+	err := writeOutput(context.Background(), path, "none", nil, func(out *jsonl.Writer) error {
 		if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}}); err != nil {
 			return err
 		}
@@ -194,7 +176,7 @@ func TestWriteOutputAbortsOnWriteError(t *testing.T) {
 
 	dir := t.TempDir()
 	writeErr := assertErr("write failed")
-	err := writeOutput(context.Background(), filepath.Join(dir, "out"), "1b", "none", nil, func(out *jsonl.Writer) error {
+	err := writeOutput(context.Background(), filepath.Join(dir, "out"), "none", nil, func(out *jsonl.Writer) error {
 		for _, id := range []int64{41, 42} {
 			if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: id}}); err != nil {
 				return err

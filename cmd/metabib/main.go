@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -284,9 +283,8 @@ func mergeCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "database-dumps", Usage: "directory containing SQL dumps for database manifest validation"},
 			&cli.StringSliceFlag{Name: "archives", Aliases: []string{"a"}, Usage: "archive file or directory with archives; can be repeated"},
-			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write range-named JSONL files using `PREFIX`", Required: true},
+			&cli.StringFlag{Name: "output", Aliases: []string{"o"}, Usage: "write JSONL output using `PREFIX`", Required: true},
 			&cli.StringFlag{Name: "output-compression", Value: string(jsonl.CompressionZstd), Usage: "compress JSONL output as `MODE` (zstd, gz, zip, none)"},
-			&cli.StringFlag{Name: "output-part-size", Usage: "split JSONL into range-named parts of approximate `SIZE` (supports k, m, g)"},
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in manifests"},
 			&cli.BoolFlag{Name: "allow-stale", Usage: "warn but continue when manifests are stale"},
 		},
@@ -559,7 +557,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	err = writeOutput(ctx, outputPrefix, cmd.String("output-part-size"), compressionValue, env.Log, func(out *jsonl.Writer) error {
+	err = writeOutput(ctx, outputPrefix, compressionValue, env.Log, func(out *jsonl.Writer) error {
 		if err := out.WriteValue(dataset); err != nil {
 			return err
 		}
@@ -712,7 +710,6 @@ func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
 func writeOutput(
 	ctx context.Context,
 	path string,
-	partSizeValue string,
 	compressionValue string,
 	log *zap.Logger,
 	write func(*jsonl.Writer) error,
@@ -720,15 +717,11 @@ func writeOutput(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	partSize, err := parseSize(partSizeValue)
-	if err != nil {
-		return err
-	}
 	compression, err := jsonl.ParseCompression(compressionValue)
 	if err != nil {
 		return err
 	}
-	out, err := jsonl.CreateCompressed(path, partSize, compression)
+	out, err := jsonl.CreateCompressed(path, 0, compression)
 	if err != nil {
 		return err
 	}
@@ -1006,34 +999,6 @@ func applyCacheOverrides(cfg *config.Config, cmd *cli.Command) {
 	if cmd.Bool("rebuild") {
 		cfg.Processing.Rebuild = true
 	}
-}
-
-func parseSize(value string) (int64, error) {
-	value = strings.TrimSpace(strings.ToLower(value))
-	if value == "" {
-		return 0, nil
-	}
-	multiplier := int64(1)
-	for _, suffix := range []struct {
-		suffix string
-		mul    int64
-	}{
-		{"kb", 1024}, {"k", 1024},
-		{"mb", 1024 * 1024}, {"m", 1024 * 1024},
-		{"gb", 1024 * 1024 * 1024}, {"g", 1024 * 1024 * 1024},
-		{"b", 1},
-	} {
-		if strings.HasSuffix(value, suffix.suffix) {
-			multiplier = suffix.mul
-			value = strings.TrimSpace(strings.TrimSuffix(value, suffix.suffix))
-			break
-		}
-	}
-	n, err := strconv.ParseFloat(value, 64)
-	if err != nil || n < 0 {
-		return 0, fmt.Errorf("invalid output part size %q", value)
-	}
-	return int64(n * float64(multiplier)), nil
 }
 
 func outputConfiguration(ctx context.Context, cmd *cli.Command) (retErr error) {
