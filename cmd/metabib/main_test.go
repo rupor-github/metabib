@@ -111,7 +111,7 @@ func TestWriteOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out")
 	err := writeOutput(context.Background(), path, "", "", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
@@ -130,7 +130,7 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out")
 	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
@@ -143,23 +143,29 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	}
 }
 
-func TestWriteOutputWithPartsReportsCommittedParts(t *testing.T) {
+func TestWriteOutputWritesDatasetHeaderFirst(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "out")
-	var metadataParts []string
+	path := filepath.Join(t.TempDir(), "all")
 	err := writeOutput(context.Background(), path, "", "none", nil, func(out *jsonl.Writer) error {
+		if err := out.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}); err != nil {
+			return err
+		}
 		return out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}})
-	}, func(parts []string) error {
-		var err error
-		metadataParts, err = mergeMetadataPartPaths(path, jsonl.CompressionNone, parts)
-		return err
 	})
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
-	if len(metadataParts) != 1 || metadataParts[0] != "out.jsonl" {
-		t.Fatalf("metadata parts = %#v", metadataParts)
+	data, err := os.ReadFile(path + ".jsonl")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("lines = %#v, want header and one record", lines)
+	}
+	if !strings.Contains(lines[0], `"schema":"metabib.dataset/1"`) || !strings.Contains(lines[1], `"schema":"metabib.record/1"`) {
+		t.Fatalf("output lines = %#v", lines)
 	}
 }
 
@@ -177,7 +183,7 @@ func TestWriteOutputReturnsCloseError(t *testing.T) {
 			return err
 		}
 		return nil
-	}, nil)
+	})
 	if err == nil {
 		t.Fatal("writeOutput() error = nil, want close rename error")
 	}
@@ -195,7 +201,7 @@ func TestWriteOutputAbortsOnWriteError(t *testing.T) {
 			}
 		}
 		return writeErr
-	}, nil)
+	})
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("writeOutput() error = %v, want write error", err)
 	}
@@ -205,74 +211,6 @@ func TestWriteOutputAbortsOnWriteError(t *testing.T) {
 	}
 	if len(matches) != 0 {
 		t.Fatalf("matches after failed writeOutput = %#v, want none", matches)
-	}
-}
-
-func TestStagedMergeMetadataAbortDoesNotPublish(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	base := filepath.Join(dir, "out")
-	metadata, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
-	if err != nil {
-		t.Fatalf("stageMergeMetadata() error = %v", err)
-	}
-	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json")); err != nil || len(matches) != 0 {
-		t.Fatalf("published metadata before commit = %#v err=%v, want none", matches, err)
-	}
-	if err := metadata.Abort(); err != nil {
-		t.Fatalf("Abort() error = %v", err)
-	}
-	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json*")); err != nil || len(matches) != 0 {
-		t.Fatalf("metadata after abort = %#v err=%v, want none", matches, err)
-	}
-}
-
-func TestStagedMergeMetadataUsesUniqueTempPaths(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	base := filepath.Join(dir, "out")
-	first, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
-	if err != nil {
-		t.Fatalf("stageMergeMetadata(first) error = %v", err)
-	}
-	second, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
-	if err != nil {
-		first.Abort()
-		t.Fatalf("stageMergeMetadata(second) error = %v", err)
-	}
-	defer first.Abort()
-	defer second.Abort()
-	if first.tmpPath == second.tmpPath {
-		t.Fatalf("metadata temp paths collided: %q", first.tmpPath)
-	}
-	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json-*.tmp")); err != nil || len(matches) != 2 {
-		t.Fatalf("metadata temp matches = %#v err=%v, want 2", matches, err)
-	}
-}
-
-func TestStagedMergeMetadataCommitPublishes(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	base := filepath.Join(dir, "out")
-	metadata, err := stageMergeMetadata(base, jsonl.CompressionNone, model.MergeMetadata{Schema: "metabib.merge_metadata/1"}, nil)
-	if err != nil {
-		t.Fatalf("stageMergeMetadata() error = %v", err)
-	}
-	if err := metadata.Commit(); err != nil {
-		t.Fatalf("Commit() error = %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "out.meta.json"))
-	if err != nil {
-		t.Fatalf("ReadFile() error = %v", err)
-	}
-	if !strings.Contains(string(data), "metabib.merge_metadata/1") {
-		t.Fatalf("metadata = %s", data)
-	}
-	if matches, err := filepath.Glob(filepath.Join(dir, "out.meta.json*.tmp")); err != nil || len(matches) != 0 {
-		t.Fatalf("metadata temp after commit = %#v err=%v, want none", matches, err)
 	}
 }
 
@@ -296,7 +234,14 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
-	if err := mergeArchiveManifests(ctx, []library.ArchiveManifestDecision{{ArchivePath: currentPath, ManifestPath: manifestPath}}, databaseIndex{}, out, nil); err != nil {
+	if _, err := mergeArchiveManifests(
+		ctx,
+		[]library.ArchiveManifestDecision{{ArchivePath: currentPath, ManifestPath: manifestPath}},
+		databaseIndex{},
+		map[string]string{currentPath: "archive-0001"},
+		out,
+		nil,
+	); err != nil {
 		t.Fatalf("mergeArchiveManifests() error = %v", err)
 	}
 	if err := out.Close(); err != nil {
@@ -313,8 +258,11 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.Contains(string(data), currentPath) || strings.Contains(string(data), oldPath) {
-		t.Fatalf("merged output = %s, want current path %q only", data, currentPath)
+	if !strings.Contains(string(data), `"schema":"metabib.record/2"`) || !strings.Contains(string(data), `"source":"archive-0001"`) {
+		t.Fatalf("merged output = %s, want v2 archive source", data)
+	}
+	if strings.Contains(string(data), oldPath) || strings.Contains(string(data), currentPath) {
+		t.Fatalf("merged output = %s, should not contain source archive paths", data)
 	}
 }
 

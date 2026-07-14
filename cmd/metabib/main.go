@@ -7,14 +7,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	jsonv2 "encoding/json/v2"
 	mysql "github.com/go-sql-driver/mysql"
 	cli "github.com/urfave/cli/v3"
 	"go.uber.org/zap"
@@ -23,7 +21,6 @@ import (
 	"metabib/db"
 	"metabib/fetch"
 	"metabib/flibinpx"
-	"metabib/internal/fileutil"
 	"metabib/jsonl"
 	"metabib/library"
 	"metabib/mhlinpx"
@@ -554,40 +551,37 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 
 	outputPrefix := cmd.String("output")
 	compressionValue := cmd.String("output-compression")
-	compression, err := jsonl.ParseCompression(compressionValue)
+	_, err := jsonl.ParseCompression(compressionValue)
 	if err != nil {
 		return err
 	}
-	meta, err := library.MergeMetadataFor(ctx, cfg.Database.Name, databaseManifest, archivePlan, string(compression))
+	dataset, err := library.DatasetFor(ctx, cfg.Database.Name, databaseManifest, archivePlan, cfg.Processing, misc.GetVersion())
 	if err != nil {
 		return err
 	}
-	var metadata *stagedMergeMetadata
 	err = writeOutput(ctx, outputPrefix, cmd.String("output-part-size"), compressionValue, env.Log, func(out *jsonl.Writer) error {
+		if err := out.WriteValue(dataset); err != nil {
+			return err
+		}
+		var records int64
 		if selectedArchives {
 			dbIndex, err := loadDatabaseIndex(ctx, databaseManifest.ManifestPath, env.Log)
 			if err != nil {
 				return err
 			}
-			return mergeArchiveManifests(ctx, archivePlan, dbIndex, out, env.Log)
+			records, err = mergeArchiveManifests(ctx, archivePlan, dbIndex, datasetArchiveSources(dataset), out, env.Log)
+		} else {
+			records, err = writeDatabaseManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
 		}
-		_, err := library.CopyManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
-		return err
-	}, func(parts []string) error {
-		meta.Parts, err = mergeMetadataPartPaths(outputPrefix, compression, parts)
 		if err != nil {
 			return err
 		}
-		metadata, err = stageMergeMetadata(outputPrefix, compression, meta, env.Log)
-		return err
+		if records != dataset.Records {
+			return fmt.Errorf("merge record count mismatch: declared %d, wrote %d", dataset.Records, records)
+		}
+		return nil
 	})
-	if err != nil {
-		return errors.Join(err, metadata.Abort())
-	}
-	if err := metadata.Commit(); err != nil {
-		return errors.Join(err, metadata.Abort())
-	}
-	return nil
+	return err
 }
 
 func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
@@ -698,76 +692,6 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-type stagedMergeMetadata struct {
-	tmpPath   string
-	finalPath string
-	log       *zap.Logger
-	committed bool
-}
-
-func stageMergeMetadata(prefix string, compression jsonl.Compression, meta model.MergeMetadata, log *zap.Logger) (*stagedMergeMetadata, error) {
-	path := prefix + ".meta.json"
-	finalPath := jsonl.CompressedPath(path, compression)
-	f, w, closer, err := jsonl.CreateCompressedFile(path, compression)
-	if err != nil {
-		return nil, err
-	}
-	tmpPath := f.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if err := jsonv2.MarshalWrite(w, meta); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("write merge metadata %q: %w", tmpPath, err)
-	}
-	if _, err := w.Write([]byte{'\n'}); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("write merge metadata newline %q: %w", tmpPath, err)
-	}
-	if closer != nil {
-		if err := closer.Close(); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("close merge metadata compressor %q: %w", tmpPath, err)
-		}
-	}
-	if err := f.Close(); err != nil {
-		return nil, fmt.Errorf("close merge metadata %q: %w", tmpPath, err)
-	}
-	cleanup = false
-	return &stagedMergeMetadata{tmpPath: tmpPath, finalPath: finalPath, log: log}, nil
-}
-
-func (m *stagedMergeMetadata) Commit() error {
-	if m == nil || m.committed {
-		return nil
-	}
-	if _, err := os.Stat(m.finalPath); err == nil {
-		if m.log != nil {
-			m.log.Warn("Overwriting existing merge metadata", zap.String("file", m.finalPath))
-		}
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("stat merge metadata %q: %w", m.finalPath, err)
-	}
-	if err := fileutil.ReplaceOutputFile(m.tmpPath, m.finalPath); err != nil {
-		return fmt.Errorf("rename merge metadata %q to %q: %w", m.tmpPath, m.finalPath, err)
-	}
-	m.committed = true
-	return nil
-}
-
-func (m *stagedMergeMetadata) Abort() error {
-	if m == nil || m.committed {
-		return nil
-	}
-	if err := os.Remove(m.tmpPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove merge metadata %q: %w", m.tmpPath, err)
-	}
-	return nil
-}
-
 func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
 	date := ""
 	for _, dump := range dumps {
@@ -792,7 +716,6 @@ func writeOutput(
 	compressionValue string,
 	log *zap.Logger,
 	write func(*jsonl.Writer) error,
-	beforeCommit func([]string) error,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -821,28 +744,10 @@ func writeOutput(
 	if len(parts) == 0 {
 		return errors.Join(errors.New("JSONL output did not produce any parts"), out.Abort())
 	}
-	if beforeCommit != nil {
-		if err := beforeCommit(parts); err != nil {
-			return errors.Join(err, out.Abort())
-		}
-	}
 	if err := out.Commit(); err != nil {
 		return errors.Join(err, out.Abort())
 	}
 	return nil
-}
-
-func mergeMetadataPartPaths(prefix string, compression jsonl.Compression, parts []string) ([]string, error) {
-	metadataDir := filepath.Dir(jsonl.CompressedPath(prefix+".meta.json", compression))
-	out := make([]string, len(parts))
-	for idx, part := range parts {
-		rel, err := filepath.Rel(metadataDir, part)
-		if err != nil {
-			return nil, fmt.Errorf("make JSONL part path relative to metadata: %w", err)
-		}
-		out[idx] = rel
-	}
-	return out, nil
 }
 
 func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger) (databaseIndex, error) {
@@ -878,18 +783,57 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 	return index, nil
 }
 
+func datasetArchiveSources(dataset model.Dataset) map[string]string {
+	sources := make(map[string]string, len(dataset.Archives))
+	for _, archive := range dataset.Archives {
+		if archive.PathHint != "" {
+			sources[archive.PathHint] = archive.ID
+		}
+	}
+	return sources
+}
+
+func writeDatabaseManifestRecords(
+	ctx context.Context,
+	manifestPath string,
+	out *jsonl.Writer,
+	log *zap.Logger,
+) (int64, error) {
+	start := time.Now()
+	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
+		converted, err := datasetRecordFromRecord(rec, nil)
+		if err != nil {
+			return err
+		}
+		return out.WriteValue(converted)
+	})
+	if err != nil {
+		return records, err
+	}
+	if log != nil {
+		log.Info(
+			"Database manifest records merged",
+			zap.String("manifest", manifestPath),
+			zap.Int64("records", records),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	}
+	return records, nil
+}
+
 func mergeArchiveManifests(
 	ctx context.Context,
 	archivePlan []library.ArchiveManifestDecision,
 	dbIndex databaseIndex,
+	archiveSources map[string]string,
 	out *jsonl.Writer,
 	log *zap.Logger,
-) error {
+) (int64, error) {
 	start := time.Now()
 	var records int64
 	for _, decision := range archivePlan {
 		if err := ctx.Err(); err != nil {
-			return err
+			return records, err
 		}
 		count, err := library.ForEachManifestRecord(ctx, decision.ManifestPath, func(rec model.Record) error {
 			if rec.ID.Archive != nil {
@@ -912,10 +856,14 @@ func mergeArchiveManifests(
 					}
 				}
 			}
-			return out.Write(rec)
+			converted, err := datasetRecordFromRecord(rec, archiveSources)
+			if err != nil {
+				return err
+			}
+			return out.WriteValue(converted)
 		})
 		if err != nil {
-			return err
+			return records, err
 		}
 		records += count
 	}
@@ -927,7 +875,104 @@ func mergeArchiveManifests(
 			zap.Duration("elapsed", time.Since(start)),
 		)
 	}
-	return nil
+	return records, nil
+}
+
+func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
+	libraryName := rec.ID.Library
+	out := model.DatasetRecord{
+		Schema:       model.RecordSchemaV2,
+		Observations: make([]model.Observation, 0, 3),
+		Claims:       model.Claims{},
+	}
+	if rec.ID.Archive != nil {
+		source := archiveSources[rec.ID.Archive.Path]
+		if source == "" {
+			return model.DatasetRecord{}, fmt.Errorf("archive %q is not declared in dataset header", rec.ID.Archive.Path)
+		}
+		index := rec.ID.Archive.Index
+		out.Record = model.RecordDescriptor{
+			Library: libraryName,
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
+		}
+		out.Observations = append(out.Observations, model.Observation{
+			ID:       "archive",
+			Source:   source,
+			Kind:     "archive_entry",
+			Status:   "present",
+			Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: &index},
+			Coverage: "inventory",
+		})
+		out.Artifacts = []model.Artifact{{
+			Name:      rec.ID.Archive.Entry,
+			MediaType: mediaType(rec.ID.Extension),
+			Occurrences: []model.Occurrence{{
+				Archive:          source,
+				Entry:            rec.ID.Archive.Entry,
+				Index:            rec.ID.Archive.Index,
+				CompressedSize:   rec.ID.Archive.CompressedSize,
+				UncompressedSize: rec.ID.Archive.UncompressedSize,
+				Modified:         rec.ID.Archive.Modified,
+			}},
+		}}
+		appendDatabaseObservation(&out, rec)
+		appendFB2Observation(&out, rec, source, &index)
+		return out, nil
+	}
+	bookID := rec.ID.BookID
+	out.Record = model.RecordDescriptor{
+		Library: libraryName,
+		Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: positiveBookID(bookID)},
+	}
+	appendDatabaseObservation(&out, rec)
+	return out, nil
+}
+
+func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record) {
+	if !rec.Source.Database.Present {
+		return
+	}
+	bookID := rec.ID.BookID
+	if rec.Source.Database.Book != nil && rec.Source.Database.Book.BookID > 0 {
+		bookID = rec.Source.Database.Book.BookID
+	}
+	out.Observations = append(out.Observations, model.Observation{
+		ID:       "db",
+		Source:   "database",
+		Kind:     "database_book",
+		Status:   "present",
+		Locator:  &model.ObservationLocator{BookID: positiveBookID(bookID)},
+		Coverage: "complete",
+	})
+}
+
+func positiveBookID(bookID int64) *int64 {
+	if bookID <= 0 {
+		return nil
+	}
+	return &bookID
+}
+
+func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source string, index *int) {
+	if !rec.Source.FB2.Present {
+		return
+	}
+	out.Observations = append(out.Observations, model.Observation{
+		ID:       "fb2",
+		Source:   source,
+		Kind:     "fb2_description",
+		Status:   "present",
+		Parent:   "archive",
+		Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
+		Coverage: "description",
+	})
+}
+
+func mediaType(extension string) string {
+	if strings.EqualFold(extension, "fb2") {
+		return "application/fb2+xml"
+	}
+	return ""
 }
 
 func recordFileKeys(rec model.Record) []string {
