@@ -54,6 +54,68 @@ func TestDiscoverInputPartsRequiresMetadataParts(t *testing.T) {
 	}
 }
 
+func TestDiscoverDatasetInputUsesExactPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "all.jsonl.zst")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	got, err := DiscoverDatasetInput(path)
+	if err != nil {
+		t.Fatalf("DiscoverDatasetInput() error = %v", err)
+	}
+	if got != path {
+		t.Fatalf("DiscoverDatasetInput() = %q, want %q", got, path)
+	}
+}
+
+func TestDiscoverDatasetInputUsesPrefixCandidate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	path := prefix + ".jsonl.gz"
+	if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	got, err := DiscoverDatasetInput(prefix)
+	if err != nil {
+		t.Fatalf("DiscoverDatasetInput() error = %v", err)
+	}
+	if got != path {
+		t.Fatalf("DiscoverDatasetInput() = %q, want %q", got, path)
+	}
+}
+
+func TestDiscoverDatasetInputRejectsMissingAndAmbiguousInput(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	if _, err := DiscoverDatasetInput(prefix); err == nil || !strings.Contains(err.Error(), "found 0") {
+		t.Fatalf("DiscoverDatasetInput(missing) error = %v, want found 0", err)
+	}
+	for _, path := range []string{prefix + ".jsonl", prefix + ".jsonl.zst"} {
+		if err := os.WriteFile(path, []byte("{}\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", path, err)
+		}
+	}
+	if _, err := DiscoverDatasetInput(prefix); err == nil || !strings.Contains(err.Error(), "found 2") {
+		t.Fatalf("DiscoverDatasetInput(ambiguous) error = %v, want found 2", err)
+	}
+}
+
+func TestDiscoverDatasetInputRejectsMissingExactPath(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "all.jsonl.zip")
+	if _, err := DiscoverDatasetInput(path); err == nil || !strings.Contains(err.Error(), "stat dataset input") {
+		t.Fatalf("DiscoverDatasetInput() error = %v, want stat error", err)
+	}
+}
+
 func TestCleanse(t *testing.T) {
 	t.Parallel()
 

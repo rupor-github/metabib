@@ -114,6 +114,41 @@ func DiscoverMetadata(prefix string) (string, error) {
 	return matches[0], nil
 }
 
+func DiscoverDatasetInput(input string) (string, error) {
+	if isDatasetInputPath(input) {
+		if _, err := os.Stat(input); err != nil {
+			return "", fmt.Errorf("stat dataset input %q: %w", input, err)
+		}
+		return filepath.Clean(input), nil
+	}
+	candidates := []string{
+		input + ".jsonl",
+		input + ".jsonl.zst",
+		input + ".jsonl.gz",
+		input + ".jsonl.zip",
+	}
+	matches := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			matches = append(matches, filepath.Clean(candidate))
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("stat dataset input %q: %w", candidate, err)
+		}
+	}
+	if len(matches) != 1 {
+		return "", fmt.Errorf("expected one dataset JSONL input for %q, found %d", input, len(matches))
+	}
+	return matches[0], nil
+}
+
+func isDatasetInputPath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.HasSuffix(lower, ".jsonl") ||
+		strings.HasSuffix(lower, ".jsonl.zst") ||
+		strings.HasSuffix(lower, ".jsonl.gz") ||
+		strings.HasSuffix(lower, ".jsonl.zip")
+}
+
 func DiscoverInputParts(prefix string, metaPath string, meta model.MergeMetadata, log *zap.Logger) ([]string, error) {
 	if len(meta.Parts) == 0 {
 		return nil, fmt.Errorf("merge metadata %q does not list JSONL parts; rerun metabib merge", metaPath)
