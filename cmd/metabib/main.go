@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
@@ -869,121 +868,6 @@ func mergeArchiveManifests(
 		)
 	}
 	return records, nil
-}
-
-func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
-	libraryName := rec.ID.Library
-	out := model.DatasetRecord{
-		Schema:       model.RecordSchemaV2,
-		Observations: make([]model.Observation, 0, 3),
-		Claims:       model.Claims{},
-	}
-	if rec.ID.Archive != nil {
-		source := archiveSources[rec.ID.Archive.Path]
-		if source == "" {
-			return model.DatasetRecord{}, fmt.Errorf("archive %q is not declared in dataset header", rec.ID.Archive.Path)
-		}
-		index := rec.ID.Archive.Index
-		out.Record = model.RecordDescriptor{
-			Library: libraryName,
-			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
-		}
-		out.Observations = append(out.Observations, model.Observation{
-			ID:       "archive",
-			Source:   source,
-			Kind:     "archive_entry",
-			Status:   "present",
-			Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: &index},
-			Coverage: "inventory",
-		})
-		out.Artifacts = []model.Artifact{{
-			Name:      rec.ID.Archive.Entry,
-			MediaType: mediaType(rec.ID.Extension),
-			Occurrences: []model.Occurrence{{
-				Archive:          source,
-				Entry:            rec.ID.Archive.Entry,
-				Index:            rec.ID.Archive.Index,
-				CompressedSize:   rec.ID.Archive.CompressedSize,
-				UncompressedSize: rec.ID.Archive.UncompressedSize,
-				Modified:         rec.ID.Archive.Modified,
-			}},
-		}}
-		appendDatabaseObservation(&out, rec)
-		appendFB2Observation(&out, rec, source, &index)
-		return out, nil
-	}
-	bookID := rec.ID.BookID
-	out.Record = model.RecordDescriptor{
-		Library: libraryName,
-		Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: positiveBookID(bookID)},
-	}
-	appendDatabaseObservation(&out, rec)
-	return out, nil
-}
-
-func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record) {
-	if !rec.Source.Database.Present {
-		return
-	}
-	bookID := rec.ID.BookID
-	if rec.Source.Database.Book != nil && rec.Source.Database.Book.BookID > 0 {
-		bookID = rec.Source.Database.Book.BookID
-	}
-	out.Observations = append(out.Observations, model.Observation{
-		ID:       "db",
-		Source:   "database",
-		Kind:     "database_book",
-		Status:   "present",
-		Locator:  &model.ObservationLocator{BookID: positiveBookID(bookID)},
-		Coverage: "complete",
-	})
-}
-
-func positiveBookID(bookID int64) *int64 {
-	if bookID <= 0 {
-		return nil
-	}
-	return &bookID
-}
-
-func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source string, index *int) {
-	if !rec.Source.FB2.Present {
-		return
-	}
-	out.Observations = append(out.Observations, model.Observation{
-		ID:       "fb2",
-		Source:   source,
-		Kind:     "fb2_description",
-		Status:   "present",
-		Parent:   "archive",
-		Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
-		Coverage: "description",
-	})
-}
-
-func mediaType(extension string) string {
-	if strings.EqualFold(extension, "fb2") {
-		return "application/fb2+xml"
-	}
-	return ""
-}
-
-func recordFileKeys(rec model.Record) []string {
-	keys := make([]string, 0, len(rec.Source.Database.Filenames)+2)
-	if rec.ID.FileName != "" {
-		keys = append(keys, fileKey(rec.ID.FileName))
-		if rec.ID.Extension != "" {
-			keys = append(keys, fileKey(rec.ID.FileName+"."+rec.ID.Extension))
-		}
-	}
-	for _, name := range rec.Source.Database.Filenames {
-		keys = append(keys, fileKey(name))
-	}
-	return keys
-}
-
-func fileKey(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func failIfReportsNotReady(reports []library.ManifestReport, allowStale bool) error {
