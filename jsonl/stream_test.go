@@ -130,6 +130,74 @@ func TestDatasetValuesRejectsInvalidArchiveHeader(t *testing.T) {
 	}
 }
 
+func TestDatasetValuesRejectsInvalidOrderingHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dataset model.Dataset
+		want    string
+	}{
+		{
+			name: "unsupported mode",
+			dataset: model.Dataset{
+				Schema:       model.DatasetSchemaV1,
+				RecordSchema: model.RecordSchemaV2,
+				Ordering:     model.DatasetOrdering{Mode: "unknown", Direction: "ascending"},
+			},
+			want: "unsupported ordering mode",
+		},
+		{
+			name: "unsupported direction",
+			dataset: model.Dataset{
+				Schema:       model.DatasetSchemaV1,
+				RecordSchema: model.RecordSchemaV2,
+				Ordering:     model.DatasetOrdering{Mode: "database_book_id", Source: "database", Direction: "descending"},
+			},
+			want: "ordering direction",
+		},
+		{
+			name: "archive ordering without archives",
+			dataset: model.Dataset{
+				Schema:       model.DatasetSchemaV1,
+				RecordSchema: model.RecordSchemaV2,
+				Ordering:     model.DatasetOrdering{Mode: "archive_entry", ArchiveKey: "ordinal", EntryKey: "index", Direction: "ascending"},
+			},
+			want: "archive_entry ordering without archives",
+		},
+		{
+			name: "archive ordering wrong key",
+			dataset: model.Dataset{
+				Schema:       model.DatasetSchemaV1,
+				RecordSchema: model.RecordSchemaV2,
+				Archives:     []model.DatasetArchive{{ID: "archive-0001", Ordinal: 0}},
+				Ordering:     model.DatasetOrdering{Mode: "archive_entry", ArchiveKey: "name", EntryKey: "index", Direction: "ascending"},
+			},
+			want: "archive key",
+		},
+		{
+			name: "database ordering wrong source",
+			dataset: model.Dataset{
+				Schema:       model.DatasetSchemaV1,
+				RecordSchema: model.RecordSchemaV2,
+				Ordering:     model.DatasetOrdering{Mode: "database_book_id", Source: "catalog", Direction: "ascending"},
+			},
+			want: "database_book_id source",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeDatasetStream(t, CompressionNone, tt.dataset)
+			_, _, err := readDatasetValues(context.Background(), path)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("DatasetValues() error=%v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestDatasetValuesValidatesArchiveOrder(t *testing.T) {
 	t.Parallel()
 

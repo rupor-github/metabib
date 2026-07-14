@@ -234,5 +234,37 @@ func validateDatasetHeader(path string, dataset model.Dataset) error {
 			return fmt.Errorf("dataset JSONL %q archive %q has ordinal %d, want %d", path, archive.ID, archive.Ordinal, idx)
 		}
 	}
+	return validateDatasetOrdering(path, dataset)
+}
+
+func validateDatasetOrdering(path string, dataset model.Dataset) error {
+	ordering := dataset.Ordering
+	if ordering.Mode == "" {
+		return nil
+	}
+	if ordering.Direction != "ascending" {
+		return fmt.Errorf("dataset JSONL %q declares ordering direction %q, want ascending", path, ordering.Direction)
+	}
+	switch ordering.Mode {
+	case "archive_entry":
+		if len(dataset.Archives) == 0 {
+			return fmt.Errorf("dataset JSONL %q declares archive_entry ordering without archives", path)
+		}
+		if ordering.ArchiveKey != "ordinal" {
+			return fmt.Errorf("dataset JSONL %q declares archive_entry archive key %q, want ordinal", path, ordering.ArchiveKey)
+		}
+		if ordering.EntryKey != "index" {
+			return fmt.Errorf("dataset JSONL %q declares archive_entry entry key %q, want index", path, ordering.EntryKey)
+		}
+	case "database_book_id":
+		if ordering.Source != "database" {
+			return fmt.Errorf("dataset JSONL %q declares database_book_id source %q, want database", path, ordering.Source)
+		}
+		if ordering.ArchiveKey != "" || ordering.EntryKey != "" {
+			return fmt.Errorf("dataset JSONL %q declares archive keys for database_book_id ordering", path)
+		}
+	default:
+		return fmt.Errorf("dataset JSONL %q declares unsupported ordering mode %q", path, ordering.Mode)
+	}
 	return nil
 }
