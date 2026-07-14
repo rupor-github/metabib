@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rupor-github/metabib/docs/metabib-dataset.schema.json",
+  "title": "metabib dataset header",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "record_schema",
+    "library",
+    "created",
+    "records",
+    "generator",
+    "normalization",
+    "ordering",
+    "processing"
+  ],
+  "properties": {
+    "schema": {"const": "metabib.dataset/1"},
+    "id": {"type": "string"},
+    "record_schema": {"const": "metabib.record/2"},
+    "library": {"type": "string"},
+    "created": {"type": "string", "format": "date-time"},
+    "records": {"type": "integer", "minimum": 0},
+    "generator": {"$ref": "#/$defs/generator"},
+    "normalization": {"$ref": "#/$defs/normalization"},
+    "database": {"$ref": "#/$defs/database"},
+    "archives": {"type": "array", "items": {"$ref": "#/$defs/archive"}},
+    "ordering": {"$ref": "#/$defs/ordering"},
+    "processing": {"$ref": "#/$defs/processing"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "generator": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": {"type": "string"},
+        "version": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "normalization": {
+      "type": "object",
+      "required": ["model"],
+      "properties": {
+        "model": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string"},
+        "format": {"type": "string"},
+        "dump_dir_hint": {"type": "string"},
+        "dump_date": {"type": "string"},
+        "dumps": {"type": "array", "items": {"$ref": "#/$defs/dump"}}
+      },
+      "additionalProperties": false
+    },
+    "dump": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "path_hint": {"type": "string"},
+        "dump_completed": {"type": "string", "format": "date-time"},
+        "modified": {"type": "string", "format": "date-time"},
+        "checksum": {"$ref": "#/$defs/checksum"}
+      },
+      "additionalProperties": false
+    },
+    "archive": {
+      "type": "object",
+      "required": ["id", "ordinal", "name", "entries", "fb2_entries"],
+      "properties": {
+        "id": {"type": "string"},
+        "ordinal": {"type": "integer", "minimum": 0},
+        "name": {"type": "string"},
+        "path_hint": {"type": "string"},
+        "modified": {"type": "string", "format": "date-time"},
+        "checksum": {"$ref": "#/$defs/checksum"},
+        "entries": {"type": "integer", "minimum": 0},
+        "fb2_entries": {"type": "integer", "minimum": 0},
+        "ignored": {"type": "array", "items": {"$ref": "#/$defs/index_range"}},
+        "dummy": {"type": "array", "items": {"$ref": "#/$defs/index_range"}}
+      },
+      "additionalProperties": false
+    },
+    "checksum": {
+      "type": "object",
+      "required": ["algorithm", "value"],
+      "properties": {
+        "algorithm": {"type": "string"},
+        "scope": {"type": "string"},
+        "value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "index_range": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": {"type": "integer", "minimum": 0},
+        "end": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "ordering": {
+      "type": "object",
+      "required": ["mode", "direction"],
+      "properties": {
+        "mode": {"enum": ["archive_entry", "database_book_id"]},
+        "archive_key": {"type": "string"},
+        "entry_key": {"type": "string"},
+        "source": {"type": "string"},
+        "direction": {"enum": ["ascending"]}
+      },
+      "additionalProperties": false
+    },
+    "processing": {
+      "type": "object",
+      "required": ["parse_fb2", "archive_content_checksum"],
+      "properties": {
+        "parse_fb2": {"type": "boolean"},
+        "fb2_coverage": {"enum": ["title_info", "description"]},
+        "archive_content_checksum": {"$ref": "#/$defs/checksum_option"}
+      },
+      "additionalProperties": false
+    },
+    "checksum_option": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "algorithm": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

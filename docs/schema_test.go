@@ -182,6 +182,122 @@ func TestMetabibSchemaUsesTypedReferences(t *testing.T) {
 	}
 }
 
+func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
+	t.Parallel()
+
+	schema := readSchema(t, "metabib-dataset.schema.json")
+	for _, want := range []string{
+		`"schema"`,
+		`"metabib.dataset/1"`,
+		`"id"`,
+		`"record_schema"`,
+		`"metabib.record/2"`,
+		`"library"`,
+		`"created"`,
+		`"records"`,
+		`"generator"`,
+		`"normalization"`,
+		`"database"`,
+		`"archives"`,
+		`"ordering"`,
+		`"processing"`,
+		`"dump_dir_hint"`,
+		`"dump_date"`,
+		`"path_hint"`,
+		`"checksum"`,
+		`"ordinal"`,
+		`"fb2_entries"`,
+		`"ignored"`,
+		`"dummy"`,
+		`"archive_content_checksum"`,
+	} {
+		assertSchemaContains(t, schema, want)
+	}
+}
+
+func TestRecordSchemaCoversDatasetRecordModelFields(t *testing.T) {
+	t.Parallel()
+
+	schema := readSchema(t, "metabib-record.schema.json")
+	for _, want := range []string{
+		`"schema"`,
+		`"metabib.record/2"`,
+		`"record"`,
+		`"locator"`,
+		`"identities"`,
+		`"artifacts"`,
+		`"observations"`,
+		`"claims"`,
+		`"relations"`,
+		`"issues"`,
+		`"archive_entry"`,
+		`"database_book"`,
+		`"catalog"`,
+		`"document"`,
+		`"publication"`,
+		`"basis"`,
+		`"status"`,
+		`"coverage"`,
+		`"match"`,
+		`"bibliographic"`,
+		`"original"`,
+		`"source_language"`,
+		`"bibliographic_date"`,
+		`"book_name"`,
+		`"source_urls"`,
+		`"source_ocr"`,
+		`"file_author"`,
+		`"media_type"`,
+		`"occurrences"`,
+		`"compressed_size"`,
+		`"uncompressed_size"`,
+		`"participants"`,
+		`"retryable"`,
+	} {
+		assertSchemaContains(t, schema, want)
+	}
+}
+
+func TestFullDatasetValidatesAgainstDatasetSchema(t *testing.T) {
+	t.Parallel()
+
+	datasetData, err := jsonv2.Marshal(fullDataset())
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var dataset any
+	if err := jsonstd.Unmarshal(datasetData, &dataset); err != nil {
+		t.Fatalf("Unmarshal(dataset) error = %v", err)
+	}
+	var schema map[string]any
+	if err := jsonstd.Unmarshal([]byte(readSchema(t, "metabib-dataset.schema.json")), &schema); err != nil {
+		t.Fatalf("Unmarshal(schema) error = %v", err)
+	}
+	if err := validateJSONSchema(schema, dataset); err != nil {
+		t.Fatalf("validate dataset against schema: %v\ndataset=%s", err, datasetData)
+	}
+}
+
+func TestFullDatasetRecordValidatesAgainstRecordSchema(t *testing.T) {
+	t.Parallel()
+
+	recordData, err := jsonv2.Marshal(fullDatasetRecord())
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var record any
+	if err := jsonstd.Unmarshal(recordData, &record); err != nil {
+		t.Fatalf("Unmarshal(record) error = %v", err)
+	}
+	var schema map[string]any
+	if err := jsonstd.Unmarshal([]byte(readSchema(t, "metabib-record.schema.json")), &schema); err != nil {
+		t.Fatalf("Unmarshal(schema) error = %v", err)
+	}
+	if err := validateJSONSchema(schema, record); err != nil {
+		t.Fatalf("validate record against schema: %v\nrecord=%s", err, recordData)
+	}
+}
+
 func TestFullRecordValidatesAgainstMetabibSchema(t *testing.T) {
 	t.Parallel()
 
@@ -199,6 +315,177 @@ func TestFullRecordValidatesAgainstMetabibSchema(t *testing.T) {
 	}
 	if err := validateJSONSchema(schema, record); err != nil {
 		t.Fatalf("validate record against schema: %v\nrecord=%s", err, recordData)
+	}
+}
+
+func fullDataset() model.Dataset {
+	return model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		ID:           "urn:uuid:7bbf64c3-8bb9-4c0f-b183-6ef31da26335",
+		RecordSchema: model.RecordSchemaV2,
+		Library:      "flibusta",
+		Created:      "2026-07-14T12:00:00Z",
+		Records:      1,
+		Generator:    model.DatasetGenerator{Name: "metabib", Version: "2.0.0"},
+		Normalization: model.DatasetNormalization{
+			Model: "metabib.claims/1",
+		},
+		Database: &model.DatasetDatabase{
+			ID:          "database",
+			Format:      "flibusta-current",
+			DumpDirHint: "/data/flibusta_20260714",
+			DumpDate:    "2026-07-14",
+			Dumps: []model.DatasetDump{{
+				Name:          "libbook.sql",
+				PathHint:      "/data/flibusta_20260714/libbook.sql",
+				DumpCompleted: "2026-07-14T04:05:06Z",
+				Modified:      "2026-07-14T04:06:00Z",
+				Checksum:      &model.Checksum{Algorithm: "md5", Value: "0123456789abcdef0123456789abcdef"},
+			}},
+		},
+		Archives: []model.DatasetArchive{{
+			ID:         "archive-0001",
+			Ordinal:    0,
+			Name:       "fb2-0000000001-0000001000.zip",
+			PathHint:   "/data/flibusta/fb2-0000000001-0000001000.zip",
+			Modified:   "2026-07-14T05:00:00Z",
+			Checksum:   &model.Checksum{Algorithm: "md5", Scope: "container", Value: "abcdef0123456789abcdef0123456789"},
+			Entries:    1002,
+			FB2Entries: 1000,
+			Ignored:    []model.IndexRange{{Start: 0, End: 0}},
+			Dummy:      []model.IndexRange{{Start: 1001, End: 1001}},
+		}},
+		Ordering: model.DatasetOrdering{
+			Mode:       "archive_entry",
+			ArchiveKey: "ordinal",
+			EntryKey:   "index",
+			Direction:  "ascending",
+		},
+		Processing: model.DatasetProcessing{
+			ParseFB2:               true,
+			FB2Coverage:            "description",
+			ArchiveContentChecksum: model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
+		},
+	}
+}
+
+func fullDatasetRecord() model.DatasetRecord {
+	index := 17
+	bookID := int64(42)
+	candidate := int64(42)
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001", Index: &index},
+		},
+		Identities: &model.Identities{
+			Catalog: []model.Identity{
+				{Scheme: "flibusta.book", Value: "42", Observation: "archive", Basis: "numeric_entry_stem"},
+				{Scheme: "flibusta.book", Value: "42", Observation: "db"},
+			},
+			Document:    []model.Identity{{Scheme: "fb2.document", Value: "urn:uuid:document", Observation: "fb2"}},
+			Publication: []model.Identity{{Scheme: "isbn", Value: "9780000000000", Observation: "fb2"}},
+		},
+		Artifacts: []model.Artifact{{
+			Name:      "42.fb2",
+			MediaType: "application/fb2+xml",
+			Size: []model.ArtifactSize{
+				{Observation: "db", Value: 123456, Kind: "reported"},
+				{Observation: "archive", Value: 123456, Kind: "uncompressed"},
+			},
+			Checksums: []model.ArtifactChecksum{{
+				Observation: "archive",
+				Algorithm:   "md5",
+				Scope:       "content",
+				Origin:      "calculated",
+				Value:       "0123456789abcdef0123456789abcdef",
+			}},
+			Occurrences: []model.Occurrence{{
+				Archive:          "archive-0001",
+				Entry:            "42.fb2",
+				Index:            17,
+				CompressedSize:   45678,
+				UncompressedSize: 123456,
+				Modified:         "2026-07-13T00:00:00Z",
+			}},
+		}},
+		Observations: []model.Observation{
+			{
+				ID:       "archive",
+				Source:   "archive-0001",
+				Kind:     "archive_entry",
+				Status:   "present",
+				Locator:  &model.ObservationLocator{Entry: "42.fb2", Index: &index},
+				Coverage: "inventory",
+			},
+			{
+				ID:       "db",
+				Source:   "database",
+				Kind:     "database_book",
+				Status:   "present",
+				Locator:  &model.ObservationLocator{BookID: &bookID},
+				Coverage: "complete",
+				Match: &model.Match{
+					Method:    "numeric_entry_stem",
+					Input:     "42.fb2",
+					Candidate: &candidate,
+				},
+			},
+			{
+				ID:       "fb2",
+				Source:   "archive-0001",
+				Kind:     "fb2_description",
+				Status:   "present",
+				Parent:   "archive",
+				Locator:  &model.ObservationLocator{Entry: "42.fb2", Index: &index},
+				Coverage: "description",
+			},
+		},
+		Claims: model.Claims{
+			Bibliographic: &model.BibliographicClaims{
+				Title: []model.Claim{
+					{Observation: "db", Value: "Database title"},
+					{Observation: "fb2", Value: "FB2 title"},
+				},
+				Authors: []model.Claim{{Observation: "fb2", Value: []any{
+					map[string]any{"given": "Arkady", "family": "Strugatsky"},
+					map[string]any{"given": "Boris", "family": "Strugatsky"},
+				}}},
+				Language:          []model.Claim{{Observation: "fb2", Value: "ru"}},
+				SourceLanguage:    []model.Claim{{Observation: "db", Value: "en"}},
+				BibliographicDate: []model.Claim{{Observation: "fb2", Value: map[string]any{"text": "1972", "value": "1972-01-01"}}},
+			},
+			Publication: &model.PublicationClaims{
+				BookName:  []model.Claim{{Observation: "fb2", Value: "Paper book"}},
+				Publisher: []model.Claim{{Observation: "fb2", Value: "Publisher"}},
+				Year:      []model.Claim{{Observation: "db", Value: 1972}},
+				ISBN:      []model.Claim{{Observation: "fb2", Value: "9780000000000"}},
+			},
+			Document: &model.DocumentClaims{
+				ProgramUsed: []model.Claim{{Observation: "fb2", Value: "metabib"}},
+				SourceURLs:  []model.Claim{{Observation: "fb2", Value: []any{"https://example.org/1"}}},
+				Version:     []model.Claim{{Observation: "fb2", Value: "1.0"}},
+			},
+			Catalog: &model.CatalogClaims{
+				Time:    []model.Claim{{Observation: "db", Value: "2026-07-14T04:05:06Z"}},
+				Aliases: []model.Claim{{Observation: "db", Value: []any{"42.fb2"}}},
+				Rating:  []model.Claim{{Observation: "db", Value: map[string]any{"average": 4, "count": 5}}},
+			},
+		},
+		Relations: []model.Relation{{
+			Type:        "replaced_by",
+			Observation: "db",
+			Target:      &model.IdentityTarget{Scheme: "flibusta.book", Value: "43"},
+		}},
+		Issues: []model.Issue{{
+			Observation: "fb2",
+			Stage:       "parse",
+			Code:        "invalid_xml",
+			Path:        "/description/title-info",
+			Message:     "unexpected XML token",
+			Retryable:   false,
+		}},
 	}
 }
 
@@ -323,6 +610,12 @@ func validateSchemaNode(schema map[string]any, value any, defs map[string]any, p
 			if !ok {
 				continue
 			}
+			if allowed, ok := childSchema.(bool); ok {
+				if !allowed {
+					return fmt.Errorf("%s.%s: boolean schema is false", path, name)
+				}
+				continue
+			}
 			child, ok := childSchema.(map[string]any)
 			if !ok {
 				return fmt.Errorf("%s.%s: invalid schema node", path, name)
@@ -397,7 +690,12 @@ func stringList(value any) []string {
 
 func readMetabibSchema(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile("metabib.schema.json")
+	return readSchema(t, "metabib.schema.json")
+}
+
+func readSchema(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}

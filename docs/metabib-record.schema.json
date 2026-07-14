@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/rupor-github/metabib/docs/metabib-record.schema.json",
+  "title": "metabib provenance-aware record",
+  "type": "object",
+  "required": ["schema", "record", "observations", "claims"],
+  "properties": {
+    "schema": {"const": "metabib.record/2"},
+    "record": {"$ref": "#/$defs/record_descriptor"},
+    "identities": {"$ref": "#/$defs/identities"},
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+    "observations": {"type": "array", "items": {"$ref": "#/$defs/observation"}},
+    "claims": {"$ref": "#/$defs/claims"},
+    "relations": {"type": "array", "items": {"$ref": "#/$defs/relation"}},
+    "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "record_descriptor": {
+      "type": "object",
+      "required": ["library", "locator"],
+      "properties": {
+        "library": {"type": "string"},
+        "locator": {"$ref": "#/$defs/record_locator"}
+      },
+      "additionalProperties": false
+    },
+    "record_locator": {
+      "type": "object",
+      "required": ["kind", "source"],
+      "properties": {
+        "kind": {"enum": ["archive_entry", "database_book"]},
+        "source": {"type": "string"},
+        "index": {"type": "integer", "minimum": 0},
+        "book_id": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "identities": {
+      "type": "object",
+      "properties": {
+        "catalog": {"type": "array", "items": {"$ref": "#/$defs/identity"}},
+        "document": {"type": "array", "items": {"$ref": "#/$defs/identity"}},
+        "publication": {"type": "array", "items": {"$ref": "#/$defs/identity"}}
+      },
+      "additionalProperties": false
+    },
+    "identity": {
+      "type": "object",
+      "required": ["scheme", "value", "observation"],
+      "properties": {
+        "scheme": {"type": "string"},
+        "value": {"type": "string"},
+        "observation": {"type": "string"},
+        "basis": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "observation": {
+      "type": "object",
+      "required": ["id", "source", "kind", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "source": {"type": "string"},
+        "kind": {"enum": ["archive_entry", "database_book", "fb2_description"]},
+        "status": {"enum": ["present", "absent", "not_collected", "error", "unknown"]},
+        "locator": {"$ref": "#/$defs/observation_locator"},
+        "coverage": {"type": "string"},
+        "parent": {"type": "string"},
+        "match": {"$ref": "#/$defs/match"}
+      },
+      "additionalProperties": false
+    },
+    "observation_locator": {
+      "type": "object",
+      "properties": {
+        "entry": {"type": "string"},
+        "index": {"type": "integer", "minimum": 0},
+        "book_id": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "match": {
+      "type": "object",
+      "required": ["method"],
+      "properties": {
+        "method": {"enum": ["numeric_entry_stem", "filename_alias"]},
+        "input": {"type": "string"},
+        "normalized": {"type": "string"},
+        "candidate": {"type": "integer", "minimum": 1},
+        "book_id": {"type": "integer", "minimum": 1}
+      },
+      "additionalProperties": false
+    },
+    "claims": {
+      "type": "object",
+      "properties": {
+        "bibliographic": {"$ref": "#/$defs/bibliographic_claims"},
+        "original": {"$ref": "#/$defs/bibliographic_claims"},
+        "publication": {"$ref": "#/$defs/publication_claims"},
+        "document": {"$ref": "#/$defs/document_claims"},
+        "catalog": {"$ref": "#/$defs/catalog_claims"}
+      },
+      "additionalProperties": false
+    },
+    "bibliographic_claims": {
+      "type": "object",
+      "properties": {
+        "title": {"$ref": "#/$defs/claim_array"},
+        "authors": {"$ref": "#/$defs/claim_array"},
+        "translators": {"$ref": "#/$defs/claim_array"},
+        "illustrators": {"$ref": "#/$defs/claim_array"},
+        "genres": {"$ref": "#/$defs/claim_array"},
+        "annotation": {"$ref": "#/$defs/claim_array"},
+        "keywords": {"$ref": "#/$defs/claim_array"},
+        "language": {"$ref": "#/$defs/claim_array"},
+        "source_language": {"$ref": "#/$defs/claim_array"},
+        "bibliographic_date": {"$ref": "#/$defs/claim_array"},
+        "sequences": {"$ref": "#/$defs/claim_array"}
+      },
+      "additionalProperties": false
+    },
+    "publication_claims": {
+      "type": "object",
+      "properties": {
+        "book_name": {"$ref": "#/$defs/claim_array"},
+        "publisher": {"$ref": "#/$defs/claim_array"},
+        "city": {"$ref": "#/$defs/claim_array"},
+        "year": {"$ref": "#/$defs/claim_array"},
+        "isbn": {"$ref": "#/$defs/claim_array"},
+        "sequences": {"$ref": "#/$defs/claim_array"}
+      },
+      "additionalProperties": false
+    },
+    "document_claims": {
+      "type": "object",
+      "properties": {
+        "authors": {"$ref": "#/$defs/claim_array"},
+        "program_used": {"$ref": "#/$defs/claim_array"},
+        "date": {"$ref": "#/$defs/claim_array"},
+        "source_urls": {"$ref": "#/$defs/claim_array"},
+        "source_ocr": {"$ref": "#/$defs/claim_array"},
+        "version": {"$ref": "#/$defs/claim_array"},
+        "history": {"$ref": "#/$defs/claim_array"},
+        "publishers": {"$ref": "#/$defs/claim_array"},
+        "custom_info": {"$ref": "#/$defs/claim_array"},
+        "output": {"$ref": "#/$defs/claim_array"}
+      },
+      "additionalProperties": false
+    },
+    "catalog_claims": {
+      "type": "object",
+      "properties": {
+        "time": {"$ref": "#/$defs/claim_array"},
+        "modified": {"$ref": "#/$defs/claim_array"},
+        "rating": {"$ref": "#/$defs/claim_array"},
+        "deleted": {"$ref": "#/$defs/claim_array"},
+        "aliases": {"$ref": "#/$defs/claim_array"},
+        "file_author": {"$ref": "#/$defs/claim_array"},
+        "status": {"$ref": "#/$defs/claim_array"}
+      },
+      "additionalProperties": false
+    },
+    "claim_array": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/claim"}
+    },
+    "claim": {
+      "type": "object",
+      "required": ["observation", "value"],
+      "properties": {
+        "observation": {"type": "string"},
+        "value": true,
+        "raw": true
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"},
+        "media_type": {"type": "string"},
+        "size": {"type": "array", "items": {"$ref": "#/$defs/artifact_size"}},
+        "checksums": {"type": "array", "items": {"$ref": "#/$defs/artifact_checksum"}},
+        "occurrences": {"type": "array", "items": {"$ref": "#/$defs/occurrence"}}
+      },
+      "additionalProperties": false
+    },
+    "artifact_size": {
+      "type": "object",
+      "required": ["observation", "value", "kind"],
+      "properties": {
+        "observation": {"type": "string"},
+        "value": {"type": "integer", "minimum": 0},
+        "kind": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "artifact_checksum": {
+      "type": "object",
+      "required": ["observation", "algorithm", "scope", "origin", "value"],
+      "properties": {
+        "observation": {"type": "string"},
+        "algorithm": {"type": "string"},
+        "scope": {"type": "string"},
+        "origin": {"type": "string"},
+        "value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "required": ["archive", "entry", "index"],
+      "properties": {
+        "archive": {"type": "string"},
+        "entry": {"type": "string"},
+        "index": {"type": "integer", "minimum": 0},
+        "compressed_size": {"type": "integer", "minimum": 0},
+        "uncompressed_size": {"type": "integer", "minimum": 0},
+        "modified": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "required": ["type", "observation"],
+      "properties": {
+        "type": {"type": "string"},
+        "observation": {"type": "string"},
+        "target": {"$ref": "#/$defs/identity_target"},
+        "event_id": {"type": "string"},
+        "time": {"type": "string", "format": "date-time"},
+        "participants": {"type": "object", "additionalProperties": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "identity_target": {
+      "type": "object",
+      "required": ["scheme", "value"],
+      "properties": {
+        "scheme": {"type": "string"},
+        "value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["stage", "code", "retryable"],
+      "properties": {
+        "observation": {"type": "string"},
+        "stage": {"enum": ["match", "open", "read", "parse", "normalize", "validate"]},
+        "code": {"type": "string"},
+        "path": {"type": "string"},
+        "message": {"type": "string"},
+        "retryable": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  }
+}
