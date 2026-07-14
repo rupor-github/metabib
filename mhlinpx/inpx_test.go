@@ -37,7 +37,7 @@ func TestGenerate(t *testing.T) {
 			Entries: 3,
 			Ignored: []model.IndexRange{{Start: 1, End: 1}},
 		}},
-		Parts: []string{"all.0000000001-0000000001.jsonl"},
+		Parts: []string{"all.jsonl"},
 	})
 	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
 	if err != nil {
@@ -149,7 +149,7 @@ func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
 			DumpDate:    "20260713",
 			DumpDateISO: "2026-07-13",
 		},
-		Parts: []string{"online.0000000001-0000000001.jsonl"},
+		Parts: []string{"online.jsonl"},
 	})
 	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
 	if err != nil {
@@ -344,7 +344,7 @@ func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	part := filepath.Join(dir, "all.0000000001-0000000004.jsonl")
+	part := filepath.Join(dir, "all.jsonl")
 	archives := map[string]*archiveRows{
 		archivePath: {Meta: model.MergeArchiveMetadata{Path: archivePath, Name: filepath.Base(archivePath)}, Records: make(map[int]model.Record)},
 	}
@@ -381,7 +381,7 @@ func TestReadRecordsRejectsArchiveMissingFromMetadata(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	part := filepath.Join(dir, "all.0000000001-0000000001.jsonl")
+	part := filepath.Join(dir, "all.jsonl")
 
 	_, err = readRecords(context.Background(), []string{part}, map[string]*archiveRows{}, nil)
 	if err == nil || !strings.Contains(err.Error(), "rebuild merge output") {

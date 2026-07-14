@@ -3,7 +3,6 @@ package jsonl
 import (
 	"archive/zip"
 	"compress/gzip"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,7 +16,7 @@ import (
 	"metabib/model"
 )
 
-func TestWriterRangeRenameAndSplit(t *testing.T) {
+func TestWriterPublishesSingleFileAndIgnoresPartSize(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
@@ -33,22 +32,16 @@ func TestWriterRangeRenameAndSplit(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(base), "out.*.jsonl"))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	if len(matches) != 2 {
-		t.Fatalf("matches = %#v, want 2 files", matches)
-	}
-	if !strings.Contains(filepath.Base(matches[0]), "0000000010-0000000010") {
-		t.Fatalf("first file name = %q", matches[0])
-	}
-	data, err := os.ReadFile(matches[0])
+	path := filepath.Join(filepath.Dir(base), "out.jsonl")
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.Contains(string(data), `"book_id":10`) {
-		t.Fatalf("first file content = %s", data)
+	if !strings.Contains(string(data), `"book_id":10`) || !strings.Contains(string(data), `"book_id":20`) {
+		t.Fatalf("output content = %s", data)
+	}
+	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 0 {
+		t.Fatalf("range-named matches = %#v, want none", matches)
 	}
 }
 
@@ -60,29 +53,27 @@ func TestWriterStageDoesNotPublishUntilCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	for _, id := range []int64{10, 20} {
-		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: id}}); err != nil {
-			t.Fatalf("Write(%d) error = %v", id, err)
-		}
+	if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 10}}); err != nil {
+		t.Fatalf("Write() error = %v", err)
 	}
-	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 0 {
+	if matches := globOutput(t, filepath.Dir(base), "out.jsonl"); len(matches) != 0 {
 		t.Fatalf("published matches before stage = %#v, want none", matches)
 	}
 	if err := w.Stage(); err != nil {
 		t.Fatalf("Stage() error = %v", err)
 	}
-	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 0 {
+	if matches := globOutput(t, filepath.Dir(base), "out.jsonl"); len(matches) != 0 {
 		t.Fatalf("published matches before commit = %#v, want none", matches)
 	}
 	if err := w.Commit(); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-	if matches := globOutput(t, filepath.Dir(base), "out.*.jsonl"); len(matches) != 2 {
-		t.Fatalf("published matches after commit = %#v, want 2", matches)
+	if matches := globOutput(t, filepath.Dir(base), "out.jsonl"); len(matches) != 1 {
+		t.Fatalf("published matches after commit = %#v, want 1", matches)
 	}
 }
 
-func TestWriterAbortRemovesStagedParts(t *testing.T) {
+func TestWriterAbortRemovesStagedOutput(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
@@ -90,10 +81,8 @@ func TestWriterAbortRemovesStagedParts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	for _, id := range []int64{10, 20} {
-		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: id}}); err != nil {
-			t.Fatalf("Write(%d) error = %v", id, err)
-		}
+	if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 10}}); err != nil {
+		t.Fatalf("Write() error = %v", err)
 	}
 	if err := w.Stage(); err != nil {
 		t.Fatalf("Stage() error = %v", err)
@@ -129,7 +118,7 @@ func TestWritersUseUniqueStagingPaths(t *testing.T) {
 	if first.stagedParts[0].stagePath == second.stagedParts[0].stagePath {
 		t.Fatalf("staging paths collided: %q", first.stagedParts[0].stagePath)
 	}
-	if matches := globOutput(t, filepath.Dir(base), "out.part-000001-*.tmp"); len(matches) != 2 {
+	if matches := globOutput(t, filepath.Dir(base), "out.jsonl-*.tmp"); len(matches) != 2 {
 		t.Fatalf("staging matches = %#v, want 2", matches)
 	}
 	if err := first.Abort(); err != nil {
@@ -140,78 +129,23 @@ func TestWritersUseUniqueStagingPaths(t *testing.T) {
 	}
 }
 
-func TestRangedPathDefaultExtension(t *testing.T) {
+func TestWriterWriteValueSupportsHeaderOnlyDataset(t *testing.T) {
 	t.Parallel()
 
-	got := rangedPath("out", 1, 2)
-	if got != "out.0000000001-0000000002.jsonl" {
-		t.Fatalf("rangedPath() = %q", got)
-	}
-}
-
-func TestWriterSplitUsesUniqueNamesForZeroBookID(t *testing.T) {
-	t.Parallel()
-
-	base := filepath.Join(t.TempDir(), "out")
-	core, logs := observer.New(zap.WarnLevel)
-	w, err := Create(base, 1)
+	base := filepath.Join(t.TempDir(), "all")
+	w, err := Create(base, 0)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	w.WithLogger(zap.New(core))
-	for range 2 {
-		if err := w.Write(model.Record{Schema: "metabib.record/1"}); err != nil {
-			t.Fatalf("Write() error = %v", err)
-		}
+	if err := w.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 0}); err != nil {
+		t.Fatalf("WriteValue() error = %v", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(base), "out.*.jsonl"))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	if len(matches) != 2 {
-		t.Fatalf("matches = %#v, want 2 files", matches)
-	}
-	for idx, match := range matches {
-		if !strings.Contains(filepath.Base(match), fmt.Sprintf("part-%06d", idx+1)) {
-			t.Fatalf("file %d name = %q", idx, match)
-		}
-	}
-	if logs.FilterMessage("Changing JSONL output path to avoid overwriting a non-unique range").Len() != 2 {
-		t.Fatalf("logs = %#v, want zero-id path change warnings", logs.All())
-	}
-}
-
-func TestWriterSplitUsesUniqueNamesForRepeatedRanges(t *testing.T) {
-	t.Parallel()
-
-	base := filepath.Join(t.TempDir(), "out")
-	core, logs := observer.New(zap.WarnLevel)
-	w, err := Create(base, 1)
-	if err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	w.WithLogger(zap.New(core))
-	for range 2 {
-		if err := w.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 10}}); err != nil {
-			t.Fatalf("Write() error = %v", err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-	plain := filepath.Join(filepath.Dir(base), "out.0000000010-0000000010.jsonl")
-	if _, err := os.Stat(plain); err != nil {
-		t.Fatalf("Stat(%q) error = %v", plain, err)
-	}
-	part := filepath.Join(filepath.Dir(base), "out.0000000010-0000000010.part-000002.jsonl")
-	if _, err := os.Stat(part); err != nil {
-		t.Fatalf("Stat(%q) error = %v", part, err)
-	}
-	if logs.FilterMessage("Changing JSONL output path to avoid overwriting a non-unique range").Len() != 1 {
-		t.Fatalf("logs = %#v, want repeated-range path change warning", logs.All())
+	data := readPlainFile(t, filepath.Join(filepath.Dir(base), "all.jsonl"))
+	if !strings.Contains(data, `"schema":"metabib.dataset/1"`) || strings.Contains(data, "metabib.record/2\n{") {
+		t.Fatalf("header-only output = %q", data)
 	}
 }
 
@@ -221,13 +155,13 @@ func TestWriterCompression(t *testing.T) {
 	tests := []struct {
 		name        string
 		compression Compression
-		pattern     string
+		path        string
 		read        func(*testing.T, string) string
 	}{
-		{name: "none", compression: CompressionNone, pattern: "out.*.jsonl", read: readPlainFile},
-		{name: "gzip", compression: CompressionGzip, pattern: "out.*.jsonl.gz", read: readGzipFile},
-		{name: "zstd", compression: CompressionZstd, pattern: "out.*.jsonl.zst", read: readZstdFile},
-		{name: "zip", compression: CompressionZip, pattern: "out.*.jsonl.zip", read: readZipFile},
+		{name: "none", compression: CompressionNone, path: "out.jsonl", read: readPlainFile},
+		{name: "gzip", compression: CompressionGzip, path: "out.jsonl.gz", read: readGzipFile},
+		{name: "zstd", compression: CompressionZstd, path: "out.jsonl.zst", read: readZstdFile},
+		{name: "zip", compression: CompressionZip, path: "out.jsonl.zip", read: readZipFile},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -245,21 +179,15 @@ func TestWriterCompression(t *testing.T) {
 				t.Fatalf("Close() error = %v", err)
 			}
 
-			matches, err := filepath.Glob(filepath.Join(filepath.Dir(base), tt.pattern))
-			if err != nil {
-				t.Fatalf("Glob() error = %v", err)
-			}
-			if len(matches) != 1 {
-				t.Fatalf("matches = %#v, want 1 file", matches)
-			}
-			if got := tt.read(t, matches[0]); !strings.Contains(got, `"book_id":10`) {
+			path := filepath.Join(filepath.Dir(base), tt.path)
+			if got := tt.read(t, path); !strings.Contains(got, `"book_id":10`) {
 				t.Fatalf("decompressed output = %q", got)
 			}
 		})
 	}
 }
 
-func TestWriterZipEntryUsesRangedName(t *testing.T) {
+func TestWriterZipEntryUsesJSONLName(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "all")
@@ -273,21 +201,13 @@ func TestWriterZipEntryUsesRangedName(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(base), "all.*.jsonl.zip"))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	if len(matches) != 1 {
-		t.Fatalf("matches = %#v, want 1 file", matches)
-	}
-	zr, err := zip.OpenReader(matches[0])
+	zr, err := zip.OpenReader(filepath.Join(filepath.Dir(base), "all.jsonl.zip"))
 	if err != nil {
 		t.Fatalf("OpenReader() error = %v", err)
 	}
 	defer zr.Close()
-	want := strings.TrimSuffix(filepath.Base(matches[0]), ".zip")
-	if len(zr.File) != 1 || zr.File[0].Name != want {
-		t.Fatalf("zip entries = %#v, want %q", zr.File, want)
+	if len(zr.File) != 1 || zr.File[0].Name != "all.jsonl" {
+		t.Fatalf("zip entries = %#v, want all.jsonl", zr.File)
 	}
 }
 
@@ -322,19 +242,10 @@ func TestParseCompression(t *testing.T) {
 	}
 }
 
-func globOutput(t *testing.T, dir string, pattern string) []string {
-	t.Helper()
-	matches, err := filepath.Glob(filepath.Join(dir, pattern))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	return matches
-}
-
 func TestNormalizeBasePathRemovesCompressionSuffix(t *testing.T) {
 	t.Parallel()
 
-	w, err := CreateCompressed(filepath.Join(t.TempDir(), "out.zst"), 0, CompressionZstd)
+	w, err := CreateCompressed(filepath.Join(t.TempDir(), "out.jsonl.zst"), 0, CompressionZstd)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
@@ -344,11 +255,7 @@ func TestNormalizeBasePathRemovesCompressionSuffix(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(w.basePath), "out.*.jsonl.zst"))
-	if err != nil {
-		t.Fatalf("Glob() error = %v", err)
-	}
-	if len(matches) != 1 {
+	if matches := globOutput(t, filepath.Dir(w.basePath), "out.jsonl.zst"); len(matches) != 1 {
 		t.Fatalf("matches = %#v, want 1 file", matches)
 	}
 }
@@ -357,7 +264,7 @@ func TestWriterWarnsOnOverwrite(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
-	path := filepath.Join(filepath.Dir(base), "out.0000000010-0000000010.jsonl")
+	path := filepath.Join(filepath.Dir(base), "out.jsonl")
 	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -379,6 +286,15 @@ func TestWriterWarnsOnOverwrite(t *testing.T) {
 	if logs.FilterMessage("Overwriting existing JSONL output").Len() != 1 {
 		t.Fatalf("logs = %#v, want overwrite warning", logs.All())
 	}
+}
+
+func globOutput(t *testing.T, dir string, pattern string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(dir, pattern))
+	if err != nil {
+		t.Fatalf("Glob() error = %v", err)
+	}
+	return matches
 }
 
 func readPlainFile(t *testing.T, path string) string {
@@ -440,7 +356,7 @@ func readZipFile(t *testing.T, path string) string {
 	}
 	r, err := zr.File[0].Open()
 	if err != nil {
-		t.Fatalf("Open zip entry error = %v", err)
+		t.Fatalf("Open entry error = %v", err)
 	}
 	defer r.Close()
 	data, err := io.ReadAll(r)

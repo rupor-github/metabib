@@ -115,7 +115,7 @@ func TestWriteOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "out.*.jsonl.zst"))
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "out.jsonl.zst"))
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestWriteOutputNoCompression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "out.*.jsonl"))
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "out.jsonl"))
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestWriteOutputWithPartsReportsCommittedParts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("writeOutput() error = %v", err)
 	}
-	if len(metadataParts) != 1 || metadataParts[0] != "out.0000000042-0000000042.jsonl" {
+	if len(metadataParts) != 1 || metadataParts[0] != "out.jsonl" {
 		t.Fatalf("metadata parts = %#v", metadataParts)
 	}
 }
@@ -172,7 +172,7 @@ func TestWriteOutputReturnsCloseError(t *testing.T) {
 		if err := out.Write(model.Record{Schema: "metabib.record/1", ID: model.RecordID{BookID: 42}}); err != nil {
 			return err
 		}
-		finalPath := filepath.Join(dir, "out.0000000042-0000000042.jsonl")
+		finalPath := filepath.Join(dir, "out.jsonl")
 		if err := os.Mkdir(finalPath, 0o755); err != nil {
 			return err
 		}
@@ -302,7 +302,7 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	if err := out.Close(); err != nil {
 		t.Fatalf("Close output error = %v", err)
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "out.*.jsonl"))
+	matches, err := filepath.Glob(filepath.Join(dir, "out.jsonl"))
 	if err != nil {
 		t.Fatalf("Glob() error = %v", err)
 	}

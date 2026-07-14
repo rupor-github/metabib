@@ -36,7 +36,7 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 			Entries: 2,
 			Ignored: []model.IndexRange{{Start: 1, End: 1}},
 		}},
-		Parts: []string{"all.0000000001-0000000002.jsonl"},
+		Parts: []string{"all.jsonl"},
 	})
 	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
 	if err != nil {
@@ -125,7 +125,7 @@ func TestGenerateFLibraryDatabaseOnlyWritesOnlineINP(t *testing.T) {
 			DumpDate:    "20260713",
 			DumpDateISO: "2026-07-13",
 		},
-		Parts: []string{"online.0000000001-0000000001.jsonl"},
+		Parts: []string{"online.jsonl"},
 	})
 	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
 	if err != nil {

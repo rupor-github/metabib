@@ -207,7 +207,7 @@ func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	part := filepath.Join(dir, "all.0000000001-0000000004.jsonl")
+	part := filepath.Join(dir, "all.jsonl")
 	archives := map[string]*ArchiveRows{
 		archivePath: {Meta: model.MergeArchiveMetadata{Path: archivePath, Name: filepath.Base(archivePath)}, Records: make(map[int]model.Record)},
 	}
@@ -249,7 +249,7 @@ func TestReadRecordsIgnoresArchiveLessRecordsWhenArchivesExist(t *testing.T) {
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	part := filepath.Join(dir, "all.0000000001-0000000002.jsonl")
+	part := filepath.Join(dir, "all.jsonl")
 	archives := map[string]*ArchiveRows{
 		archivePath: {Meta: model.MergeArchiveMetadata{Path: archivePath, Name: filepath.Base(archivePath)}, Records: make(map[int]model.Record)},
 	}
@@ -284,7 +284,7 @@ func TestReadRecordsBucketsArchiveLessRecordsForDatabaseOnlyInput(t *testing.T) 
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	part := filepath.Join(dir, "all.0000000001-0000000001.jsonl")
+	part := filepath.Join(dir, "all.jsonl")
 	archives := map[string]*ArchiveRows{OnlineArchivePath: newOnlineArchive()}
 
 	loaded, err := ReadRecords(context.Background(), []string{part}, archives, nil)
