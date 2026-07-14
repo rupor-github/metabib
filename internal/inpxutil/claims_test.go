@@ -122,3 +122,32 @@ func TestDatasetRecordClaimsDecodesJSONClaimValues(t *testing.T) {
 		t.Fatalf("artifact = %#v", view.Artifact)
 	}
 }
+
+func TestDatasetRecordClaimsPrefersDatabaseReportedSizeAcrossArtifacts(t *testing.T) {
+	t.Parallel()
+
+	rec := model.DatasetRecord{Artifacts: []model.Artifact{
+		{
+			Name: "2271.fb2",
+			Occurrences: []model.Occurrence{{
+				Archive:          "archive-0001",
+				Entry:            "2271.fb2",
+				Index:            746,
+				UncompressedSize: 23171,
+				Modified:         "2016-10-09T11:53:18-04:00",
+			}},
+		},
+		{
+			MediaType: "application/fb2+xml",
+			Size:      []model.ArtifactSize{{Observation: "db", Value: 13533, Kind: "reported"}},
+		},
+	}}
+
+	view, err := DatasetRecordClaims(rec)
+	if err != nil {
+		t.Fatalf("DatasetRecordClaims() error = %v", err)
+	}
+	if view.Artifact.Name != "2271.fb2" || view.Artifact.Size != 13533 || view.Artifact.Date != "2016-10-09" {
+		t.Fatalf("artifact = %#v", view.Artifact)
+	}
+}

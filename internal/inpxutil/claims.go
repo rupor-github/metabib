@@ -164,22 +164,38 @@ func catalogView(claims model.CatalogClaims, observation string) (DatasetCatalog
 }
 
 func artifactView(artifacts []model.Artifact) DatasetArtifactView {
-	if len(artifacts) == 0 {
-		return DatasetArtifactView{}
-	}
-	artifact := artifacts[0]
-	view := DatasetArtifactView{Name: artifact.Name}
-	for _, size := range artifact.Size {
-		if size.Value > 0 {
-			view.Size = size.Value
-			break
+	var view DatasetArtifactView
+	var reportedSize uint64
+	var fallbackSize uint64
+	for _, artifact := range artifacts {
+		if view.Name == "" {
+			view.Name = artifact.Name
+		}
+		for _, size := range artifact.Size {
+			if size.Value == 0 {
+				continue
+			}
+			if fallbackSize == 0 {
+				fallbackSize = size.Value
+			}
+			if reportedSize == 0 && size.Observation == "db" {
+				reportedSize = size.Value
+			}
+		}
+		if len(artifact.Occurrences) == 0 {
+			continue
+		}
+		if fallbackSize == 0 {
+			fallbackSize = artifact.Occurrences[0].UncompressedSize
+		}
+		if view.Date == "" {
+			view.Date = DateOnly(artifact.Occurrences[0].Modified)
 		}
 	}
-	if view.Size == 0 && len(artifact.Occurrences) > 0 {
-		view.Size = artifact.Occurrences[0].UncompressedSize
-	}
-	if len(artifact.Occurrences) > 0 {
-		view.Date = DateOnly(artifact.Occurrences[0].Modified)
+	if reportedSize > 0 {
+		view.Size = reportedSize
+	} else {
+		view.Size = fallbackSize
 	}
 	return view
 }
