@@ -289,6 +289,25 @@ func TestOutputPathValidatesCompactDumpDate(t *testing.T) {
 	}
 }
 
+func TestDatasetMetadataNormalizesISODumpDate(t *testing.T) {
+	t.Parallel()
+
+	meta := DatasetMetadata(model.Dataset{
+		Library:  "flibusta",
+		Database: &model.DatasetDatabase{DumpDate: "2026-07-13"},
+	})
+	if meta.Library != "flibusta" || meta.DumpDate != "20260713" || meta.DumpDateISO != "2026-07-13" {
+		t.Fatalf("DatasetMetadata() = %#v", meta)
+	}
+	path, err := OutputPath("all_mhl", meta)
+	if err != nil {
+		t.Fatalf("OutputPath() error = %v", err)
+	}
+	if path != "all_mhl_20260713.inpx" {
+		t.Fatalf("OutputPath() = %q", path)
+	}
+}
+
 func TestEnsureDumpDateUsesCurrentDateAndWarns(t *testing.T) {
 	t.Parallel()
 

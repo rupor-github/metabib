@@ -69,7 +69,10 @@ func DatasetMetadata(dataset model.Dataset) Metadata {
 		return meta
 	}
 	meta.DumpDate = dataset.Database.DumpDate
-	if len(meta.DumpDate) == 8 {
+	if _, err := time.Parse("2006-01-02", meta.DumpDate); err == nil {
+		meta.DumpDateISO = meta.DumpDate
+		meta.DumpDate = strings.ReplaceAll(meta.DumpDate, "-", "")
+	} else if len(meta.DumpDate) == 8 {
 		meta.DumpDateISO = meta.DumpDate[:4] + "-" + meta.DumpDate[4:6] + "-" + meta.DumpDate[6:8]
 	}
 	return meta
