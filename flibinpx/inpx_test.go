@@ -10,8 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	jsonv2 "encoding/json/v2"
-
 	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
@@ -23,37 +21,24 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	dir := t.TempDir()
 	archivePath := filepath.Join(dir, "fb2-0000000001-0000000002.zip")
 	prefix := filepath.Join(dir, "all")
-	writeFLibMetadata(t, prefix, model.MergeMetadata{
-		Schema:  "metabib.merge_metadata/1",
-		Library: "flibusta",
-		Database: model.MergeDatabaseMetadata{
-			DumpDate:    "20260603",
-			DumpDateISO: "2026-06-03",
-		},
-		Archives: []model.MergeArchiveMetadata{{
-			Path:    archivePath,
-			Name:    filepath.Base(archivePath),
-			Entries: 2,
-			Ignored: []model.IndexRange{{Start: 1, End: 1}},
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Library:      "flibusta",
+		Records:      3,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     filepath.Base(archivePath),
+			PathHint: archivePath,
+			Entries:  2,
+			Ignored:  []model.IndexRange{{Start: 1, End: 1}},
 		}},
-		Parts: []string{"all.jsonl"},
-	})
-	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
-	if err != nil {
-		t.Fatalf("CreateCompressed() error = %v", err)
-	}
-	if err := w.Write(flibRecord(archivePath, 0, "fb2")); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if err := w.Write(flibRecord(archivePath, 1, "fb2")); err != nil {
-		t.Fatalf("Write() ignored error = %v", err)
-	}
-	if err := w.Write(flibOnlineRecord(2)); err != nil {
-		t.Fatalf("Write() online-only error = %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	},
+		flibRecord("archive-0001", 0, "1.fb2"),
+		flibRecord("archive-0001", 1, "2.fb2"),
+		flibOnlineRecord(2),
+	)
 	fixedTmp := filepath.Join(dir, "flibusta_20260603.inpx.tmp")
 	if err := os.WriteFile(fixedTmp, []byte("stale fixed tmp"), 0o644); err != nil {
 		t.Fatalf("write fixed temp file: %v", err)
@@ -118,25 +103,13 @@ func TestGenerateFLibraryDatabaseOnlyWritesOnlineINP(t *testing.T) {
 
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "online")
-	writeFLibMetadata(t, prefix, model.MergeMetadata{
-		Schema:  "metabib.merge_metadata/1",
-		Library: "librusec",
-		Database: model.MergeDatabaseMetadata{
-			DumpDate:    "20260713",
-			DumpDateISO: "2026-07-13",
-		},
-		Parts: []string{"online.jsonl"},
-	})
-	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
-	if err != nil {
-		t.Fatalf("CreateCompressed() error = %v", err)
-	}
-	if err := w.Write(flibOnlineRecord(1)); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Library:      "librusec",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260713"},
+	}, flibOnlineRecord(1))
 
 	stats, err := Generate(context.Background(), Options{
 		InputPrefix:     prefix,
@@ -163,11 +136,12 @@ func TestGenerateFLibraryDatabaseOnlyWritesOnlineINP(t *testing.T) {
 func TestFlattenFB2Sequences(t *testing.T) {
 	t.Parallel()
 
-	sequences := []model.FB2Sequence{{
+	value := 2.5
+	sequences := []model.SequenceValue{{
 		Name: "Universe",
-		Nested: []model.FB2Sequence{{
+		Sequences: []model.SequenceValue{{
 			Name:   "Cycle",
-			Number: "2.5",
+			Number: &model.NumberValue{Text: "2.5", Value: &value},
 		}},
 	}}
 	tests := []struct {
@@ -204,87 +178,135 @@ func TestFlattenFB2Sequences(t *testing.T) {
 	}
 }
 
-func flibRecord(archivePath string, index int, ext string) model.Record {
-	return model.Record{
-		Schema: "metabib.record/1",
-		ID: model.RecordID{
-			Library:   "flibusta",
-			BookID:    int64(index + 1),
-			FileName:  strconv.Itoa(index + 1),
-			Extension: ext,
-			Archive: &model.ArchiveInfo{
-				Path: archivePath, Entry: "1.fb2", Index: index, UncompressedSize: 123, Modified: "2026-06-03T00:00:00Z",
-			},
+func flibRecord(source string, index int, entry string) model.DatasetRecord {
+	bookID := int64(index + 1)
+	sequenceTypeAuthor := int64(0)
+	sequenceTypePublisher := int64(1)
+	sequenceLevelAuthor := int64(1)
+	sequenceLevelPublisher := int64(101)
+	dbSequenceNumber := 1.0
+	dbPublisherSequenceNumber := 10.0
+	fb2SequenceNumber := 7.0
+	year := int64(2025)
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
 		},
-		Source: model.RecordSources{
-			Database: model.DatabaseSource{
-				Present: true,
-				Book: &model.DBBook{
-					BookID:   int64(index + 1),
-					FileSize: 123,
-					Title:    "Title",
-					FileType: "fb2",
-					Time:     "2026-06-03T00:00:00Z",
-					Lang:     "ru",
-					Keywords: "one,two;three",
-					Year:     2025,
-				},
-				Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
-				Genres:  []model.DBGenre{{Code: "sf"}},
-				Sequences: []model.DBSequence{
-					{Name: "Cycle", Number: 1, Level: 1, Type: 0},
-					{Name: "Publisher Series", Number: 10, Level: 101, Type: 1},
-				},
-			},
-			FB2: model.FB2Source{Present: true, Description: &model.FB2Description{
-				TitleInfo: &model.FB2TitleInfo{
-					Title:    "FB2 Title",
-					Language: "ru",
-					Sequences: []model.FB2Sequence{{
-						Name:   "Universe",
-						Nested: []model.FB2Sequence{{Name: "Cycle", Number: "7"}},
-					}},
-				},
+		Identities: &model.Identities{Catalog: []model.Identity{{
+			Scheme:      "flibusta.book",
+			Value:       bookIDString(bookID),
+			Observation: "db",
+		}}},
+		Artifacts: []model.Artifact{{
+			Name:      entry,
+			MediaType: "application/fb2+xml",
+			Size:      []model.ArtifactSize{{Observation: "db", Value: 123, Kind: "reported"}},
+			Occurrences: []model.Occurrence{{
+				Archive:          source,
+				Entry:            entry,
+				Index:            index,
+				UncompressedSize: 123,
+				Modified:         "2026-06-03T00:00:00Z",
 			}},
-		},
-	}
-}
-
-func flibOnlineRecord(bookID int64) model.Record {
-	return model.Record{
-		Schema: "metabib.record/1",
-		ID: model.RecordID{
-			Library:   "librusec",
-			BookID:    bookID,
-			FileName:  strconv.FormatInt(bookID, 10),
-			Extension: "fb2",
-		},
-		Source: model.RecordSources{Database: model.DatabaseSource{
-			Present: true,
-			Book: &model.DBBook{
-				BookID:   bookID,
-				FileSize: 123,
-				Title:    "Online Title",
-				FileType: "fb2",
-				Time:     "2026-07-13T00:00:00Z",
-				Lang:     "ru",
-			},
-			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
-			Genres:  []model.DBGenre{{Code: "sf"}},
 		}},
+		Observations: []model.Observation{
+			{ID: "db", Source: "database", Kind: "database_book", Status: "present"},
+			{ID: "fb2", Source: source, Kind: "fb2_description", Status: "present"},
+		},
+		Claims: model.Claims{
+			Bibliographic: &model.BibliographicClaims{
+				Title:    []model.Claim{{Observation: "db", Value: "Title"}, {Observation: "fb2", Value: "FB2 Title"}},
+				Authors:  []model.Claim{{Observation: "db", Value: []model.PersonValue{{FirstName: "First", LastName: "Last"}}}},
+				Genres:   []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf"}}}},
+				Language: []model.Claim{{Observation: "db", Value: "ru"}, {Observation: "fb2", Value: "ru"}},
+				Keywords: []model.Claim{{Observation: "db", Value: "one,two;three"}},
+				Sequences: []model.Claim{
+					{Observation: "db", Value: []model.SequenceValue{
+						{
+							Name:   "Cycle",
+							Number: &model.NumberValue{Value: &dbSequenceNumber},
+							Level:  &sequenceLevelAuthor,
+							Type:   &sequenceTypeAuthor,
+						},
+						{
+							Name:   "Publisher Series",
+							Number: &model.NumberValue{Value: &dbPublisherSequenceNumber},
+							Level:  &sequenceLevelPublisher,
+							Type:   &sequenceTypePublisher,
+						},
+					}},
+					{Observation: "fb2", Value: []model.SequenceValue{{
+						Name: "Universe",
+						Sequences: []model.SequenceValue{{
+							Name:   "Cycle",
+							Number: &model.NumberValue{Text: "7", Value: &fb2SequenceNumber},
+						}},
+					}}},
+				},
+			},
+			Publication: &model.PublicationClaims{Year: []model.Claim{{Observation: "db", Value: model.YearValue{Value: &year}}}},
+			Catalog: &model.CatalogClaims{
+				Time:   []model.Claim{{Observation: "db", Value: "2026-06-03T00:00:00Z"}},
+				Status: []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2"}}},
+			},
+		},
 	}
 }
 
-func writeFLibMetadata(t *testing.T, prefix string, meta model.MergeMetadata) {
-	t.Helper()
-	data, err := jsonv2.Marshal(meta)
-	if err != nil {
-		t.Fatalf("Marshal() error = %v", err)
-	}
-	if err := os.WriteFile(prefix+".meta.json", append(data, '\n'), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
+func flibOnlineRecord(bookID int64) model.DatasetRecord {
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "librusec",
+			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
+		},
+		Identities: &model.Identities{Catalog: []model.Identity{{
+			Scheme:      "flibusta.book",
+			Value:       bookIDString(bookID),
+			Observation: "db",
+		}}},
+		Artifacts: []model.Artifact{{
+			Name: bookIDString(bookID) + ".fb2",
+			Size: []model.ArtifactSize{{Observation: "db", Value: 123, Kind: "reported"}},
+		}},
+		Observations: []model.Observation{{ID: "db", Source: "database", Kind: "database_book", Status: "present"}},
+		Claims: model.Claims{
+			Bibliographic: &model.BibliographicClaims{
+				Title:    []model.Claim{{Observation: "db", Value: "Online Title"}},
+				Authors:  []model.Claim{{Observation: "db", Value: []model.PersonValue{{FirstName: "First", LastName: "Last"}}}},
+				Genres:   []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf"}}}},
+				Language: []model.Claim{{Observation: "db", Value: "ru"}},
+			},
+			Catalog: &model.CatalogClaims{
+				Time:   []model.Claim{{Observation: "db", Value: "2026-07-13T00:00:00Z"}},
+				Status: []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2"}}},
+			},
+		},
 	}
 }
+
+func writeFLibDataset(t *testing.T, prefix string, dataset model.Dataset, records ...model.DatasetRecord) {
+	t.Helper()
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if err := w.WriteValue(dataset); err != nil {
+		t.Fatalf("WriteValue(dataset) error = %v", err)
+	}
+	for _, rec := range records {
+		if err := w.WriteValue(rec); err != nil {
+			t.Fatalf("WriteValue(record) error = %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func bookIDString(bookID int64) string { return strconv.FormatInt(bookID, 10) }
 
 func readZipEntries(t *testing.T, path string) map[string]string {
 	t.Helper()
