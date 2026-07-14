@@ -61,6 +61,15 @@ func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string)
 
 func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record) {
 	if !rec.Source.Database.Present {
+		if rec.ID.Archive != nil {
+			out.Observations = append(out.Observations, model.Observation{
+				ID:      "db",
+				Source:  "database",
+				Kind:    "database_book",
+				Status:  "absent",
+				Locator: &model.ObservationLocator{BookID: positiveBookID(rec.ID.BookID)},
+			})
+		}
 		return
 	}
 	bookID := rec.ID.BookID

@@ -210,3 +210,35 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 		t.Fatalf("document claims = %#v", converted.Claims.Document)
 	}
 }
+
+func TestDatasetRecordFromArchiveRecordRecordsAbsentDatabase(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:  "flibusta",
+			BookID:   42,
+			FileName: "42",
+			Archive:  &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "42.fb2", Index: 5},
+		},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Observations) != 2 {
+		t.Fatalf("observations = %#v, want archive and absent database", converted.Observations)
+	}
+	db := converted.Observations[1]
+	if db.ID != "db" || db.Source != "database" || db.Kind != "database_book" || db.Status != "absent" {
+		t.Fatalf("database observation = %#v", db)
+	}
+	if db.Locator == nil || db.Locator.BookID == nil || *db.Locator.BookID != 42 {
+		t.Fatalf("database locator = %#v, want book ID 42", db.Locator)
+	}
+	if converted.Claims.Bibliographic != nil || converted.Identities != nil {
+		t.Fatalf("unexpected database claims or identities: claims=%#v identities=%#v", converted.Claims, converted.Identities)
+	}
+}
