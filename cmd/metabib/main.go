@@ -721,7 +721,7 @@ func writeOutput(
 	if err != nil {
 		return err
 	}
-	out, err := jsonl.CreateCompressed(path, 0, compression)
+	out, err := jsonl.CreateCompressed(path, compression)
 	if err != nil {
 		return err
 	}

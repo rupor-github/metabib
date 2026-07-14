@@ -16,11 +16,11 @@ import (
 	"metabib/model"
 )
 
-func TestWriterPublishesSingleFileAndIgnoresPartSize(t *testing.T) {
+func TestWriterPublishesSingleFile(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
-	w, err := Create(base, 1)
+	w, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -49,7 +49,7 @@ func TestWriterStageDoesNotPublishUntilCommit(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
-	w, err := Create(base, 1)
+	w, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestWriterAbortRemovesStagedOutput(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
-	w, err := Create(base, 1)
+	w, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -99,11 +99,11 @@ func TestWritersUseUniqueStagingPaths(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "out")
-	first, err := Create(base, 0)
+	first, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("Create(first) error = %v", err)
 	}
-	second, err := Create(base, 0)
+	second, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("Create(second) error = %v", err)
 	}
@@ -133,7 +133,7 @@ func TestWriterWriteValueSupportsHeaderOnlyDataset(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "all")
-	w, err := Create(base, 0)
+	w, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -168,7 +168,7 @@ func TestWriterCompression(t *testing.T) {
 			t.Parallel()
 
 			base := filepath.Join(t.TempDir(), "out")
-			w, err := CreateCompressed(base, 0, tt.compression)
+			w, err := CreateCompressed(base, tt.compression)
 			if err != nil {
 				t.Fatalf("CreateCompressed() error = %v", err)
 			}
@@ -191,7 +191,7 @@ func TestWriterZipEntryUsesJSONLName(t *testing.T) {
 	t.Parallel()
 
 	base := filepath.Join(t.TempDir(), "all")
-	w, err := CreateCompressed(base, 0, CompressionZip)
+	w, err := CreateCompressed(base, CompressionZip)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
@@ -245,7 +245,7 @@ func TestParseCompression(t *testing.T) {
 func TestNormalizeBasePathRemovesCompressionSuffix(t *testing.T) {
 	t.Parallel()
 
-	w, err := CreateCompressed(filepath.Join(t.TempDir(), "out.jsonl.zst"), 0, CompressionZstd)
+	w, err := CreateCompressed(filepath.Join(t.TempDir(), "out.jsonl.zst"), CompressionZstd)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
@@ -269,7 +269,7 @@ func TestWriterWarnsOnOverwrite(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	core, logs := observer.New(zap.WarnLevel)
-	w, err := CreateCompressed(base, 0, CompressionNone)
+	w, err := CreateCompressed(base, CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}

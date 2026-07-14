@@ -212,7 +212,7 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	})
 
 	currentPath := filepath.Join(dir, "new", "books.zip")
-	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), 0, jsonl.CompressionNone)
+	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}

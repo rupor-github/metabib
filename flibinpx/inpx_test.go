@@ -38,7 +38,7 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 		}},
 		Parts: []string{"all.jsonl"},
 	})
-	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestGenerateFLibraryDatabaseOnlyWritesOnlineINP(t *testing.T) {
 		},
 		Parts: []string{"online.jsonl"},
 	})
-	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}

@@ -252,7 +252,7 @@ func TestReadRecordsWarnsAndKeepsFirstDuplicateArchiveIndex(t *testing.T) {
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "all")
 	archivePath := filepath.Join(dir, "books.zip")
-	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
@@ -296,7 +296,7 @@ func TestReadRecordsIgnoresArchiveLessRecordsWhenArchivesExist(t *testing.T) {
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "all")
 	archivePath := filepath.Join(dir, "books.zip")
-	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
@@ -336,7 +336,7 @@ func TestReadRecordsBucketsArchiveLessRecordsForDatabaseOnlyInput(t *testing.T) 
 
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "all")
-	w, err := jsonl.CreateCompressed(prefix, 0, jsonl.CompressionNone)
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}

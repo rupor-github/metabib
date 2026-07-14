@@ -126,7 +126,7 @@ func readDatasetValues(ctx context.Context, path string) (model.Dataset, int64, 
 func writeDatasetStream(t *testing.T, compression Compression, values ...any) string {
 	t.Helper()
 	base := filepath.Join(t.TempDir(), "all")
-	w, err := CreateCompressed(base, 0, compression)
+	w, err := CreateCompressed(base, compression)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}

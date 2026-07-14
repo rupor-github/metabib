@@ -42,11 +42,7 @@ type stagedPart struct {
 	finalPath string
 }
 
-func Create(path string, maxBytes int64) (*Writer, error) {
-	return CreateCompressed(path, maxBytes, CompressionNone)
-}
-
-func CreateCompressed(path string, _ int64, compression Compression) (*Writer, error) {
+func CreateCompressed(path string, compression Compression) (*Writer, error) {
 	path = normalizeBasePath(path, compression)
 	return &Writer{basePath: path, compression: compression}, nil
 }
