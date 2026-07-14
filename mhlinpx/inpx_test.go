@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -24,61 +25,20 @@ func TestGenerate(t *testing.T) {
 	dir := t.TempDir()
 	archivePath := filepath.Join(dir, "fb2-0000000001-0000000003.zip")
 	prefix := filepath.Join(dir, "all")
-	writeMetadata(t, prefix, model.MergeMetadata{
-		Schema:  "metabib.merge_metadata/1",
-		Library: "flibusta",
-		Database: model.MergeDatabaseMetadata{
-			DumpDate:    "20260603",
-			DumpDateISO: "2026-06-03",
-		},
-		Archives: []model.MergeArchiveMetadata{{
-			Path:    archivePath,
-			Name:    filepath.Base(archivePath),
-			Entries: 3,
-			Ignored: []model.IndexRange{{Start: 1, End: 1}},
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Library:      "flibusta",
+		Records:      2,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     filepath.Base(archivePath),
+			PathHint: archivePath,
+			Entries:  3,
+			Ignored:  []model.IndexRange{{Start: 1, End: 1}},
 		}},
-		Parts: []string{"all.jsonl"},
-	})
-	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
-	if err != nil {
-		t.Fatalf("CreateCompressed() error = %v", err)
-	}
-	if err := w.Write(model.Record{
-		Schema: "metabib.record/1",
-		ID: model.RecordID{
-			Library:   "flibusta",
-			BookID:    1,
-			FileName:  "1",
-			Extension: "fb2",
-			Archive:   &model.ArchiveInfo{Path: archivePath, Entry: "1.fb2", Index: 0, UncompressedSize: 123, Modified: "2026-06-03T00:00:00Z"},
-		},
-		Source: model.RecordSources{Database: model.DatabaseSource{
-			Present: true,
-			Book:    &model.DBBook{BookID: 1, FileSize: 123, Title: "Title", FileType: "fb2", Time: "2026-06-03T00:00:00Z", Lang: "ru", Deleted: "1"},
-			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
-			Genres:  []model.DBGenre{{Code: "sf"}},
-		}},
-	}); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if err := w.Write(model.Record{
-		Schema: "metabib.record/1",
-		ID: model.RecordID{
-			Library:   "flibusta",
-			BookID:    1,
-			FileName:  "online-only",
-			Extension: "fb2",
-		},
-		Source: model.RecordSources{Database: model.DatabaseSource{
-			Present: true,
-			Book:    &model.DBBook{BookID: 1, FileSize: 321, Title: "Online Only", FileType: "fb2", Time: "2026-06-03T00:00:00Z"},
-		}},
-	}); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	}, mhlDatasetRecord("archive-0001", 0, "1.fb2", 1), mhlOnlineDatasetRecord(1, "Online Only"))
 	fixedTmp := filepath.Join(dir, "flibusta_20260603.inpx.tmp")
 	if err := os.WriteFile(fixedTmp, []byte("stale fixed tmp"), 0o644); err != nil {
 		t.Fatalf("write fixed temp file: %v", err)
@@ -142,39 +102,13 @@ func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
 
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "online")
-	writeMetadata(t, prefix, model.MergeMetadata{
-		Schema:  "metabib.merge_metadata/1",
-		Library: "librusec",
-		Database: model.MergeDatabaseMetadata{
-			DumpDate:    "20260713",
-			DumpDateISO: "2026-07-13",
-		},
-		Parts: []string{"online.jsonl"},
-	})
-	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
-	if err != nil {
-		t.Fatalf("CreateCompressed() error = %v", err)
-	}
-	if err := w.Write(model.Record{
-		Schema: "metabib.record/1",
-		ID: model.RecordID{
-			Library:   "librusec",
-			BookID:    1,
-			FileName:  "1",
-			Extension: "fb2",
-		},
-		Source: model.RecordSources{Database: model.DatabaseSource{
-			Present: true,
-			Book:    &model.DBBook{BookID: 1, FileSize: 123, Title: "Online Title", FileType: "fb2", Time: "2026-07-13T00:00:00Z", Lang: "ru"},
-			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
-			Genres:  []model.DBGenre{{Code: "sf"}},
-		}},
-	}); err != nil {
-		t.Fatalf("Write() error = %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Library:      "librusec",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260713"},
+	}, mhlOnlineDatasetRecord(1, "Online Title"))
 
 	stats, err := Generate(context.Background(), Options{
 		InputPrefix:     prefix,
@@ -228,7 +162,13 @@ func TestInfoTemplates(t *testing.T) {
 func TestDBSequenceEmitsZeroNumber(t *testing.T) {
 	t.Parallel()
 
-	name, num := dbSequence([]model.DBSequence{{Name: "Series", Number: 0}}, SequenceAuthor)
+	sequenceType := int64(0)
+	number := 0.0
+	name, num := dbSequence([]model.SequenceValue{{
+		Name:   "Series",
+		Number: &model.NumberValue{Value: &number},
+		Type:   &sequenceType,
+	}}, SequenceAuthor)
 	if name != "Series" || num != "0" {
 		t.Fatalf("dbSequence() = %q, %q", name, num)
 	}
@@ -237,8 +177,8 @@ func TestDBSequenceEmitsZeroNumber(t *testing.T) {
 func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 	t.Parallel()
 
-	titleInfo := &model.FB2TitleInfo{Authors: []model.FB2Person{{FirstName: "неизвестен", LastName: "Автор"}}}
-	got := authorsString(true, nil, titleInfo, Options{FB2Preference: PreferComplement, Limits: DefaultLimits()})
+	fb2Authors := []model.PersonValue{{FirstName: "неизвестен", LastName: "Автор"}}
+	got := authorsString(true, nil, fb2Authors, Options{FB2Preference: PreferComplement, Limits: DefaultLimits()})
 	if got != "неизвестный,автор,:" {
 		t.Fatalf("authorsString() = %q", got)
 	}
@@ -247,23 +187,20 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 func TestRecordLineRUKSAppendsMD5AndReplacement(t *testing.T) {
 	t.Parallel()
 
-	rec := model.Record{
-		ID: model.RecordID{BookID: 1, FileName: "1", Extension: "fb2"},
-		Source: model.RecordSources{Database: model.DatabaseSource{
-			Present: true,
-			Book: &model.DBBook{
-				BookID:     1,
-				FileSize:   123,
-				Title:      "Title",
-				FileType:   "fb2",
-				MD5:        "0123456789abcdef0123456789abcdef",
-				ReplacedBy: 42,
-			},
-			Authors: []model.Contributor{{FirstName: "First", LastName: "Last"}},
-			Genres:  []model.DBGenre{{Code: "sf"}},
-		}},
+	rec := mhlOnlineDatasetRecord(1, "Title")
+	rec.Claims.Catalog.Status = []model.Claim{{
+		Observation: "db",
+		Value:       model.CatalogStatusValue{FileType: "fb2", MD5: "0123456789abcdef0123456789abcdef"},
+	}}
+	rec.Relations = []model.Relation{{
+		Type:        "replaced_by",
+		Observation: "db",
+		Target:      &model.IdentityTarget{Scheme: "flibusta.book", Value: "42"},
+	}}
+	line, _, err := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
+	if err != nil {
+		t.Fatalf("recordLine() error = %v", err)
 	}
-	line := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
 	fields := strings.Split(strings.TrimSuffix(line, "\r\n"), fieldSep)
 	if len(fields) != 17 {
 		t.Fatalf("field count = %d fields=%#v line=%q", len(fields), fields, line)
@@ -288,28 +225,22 @@ func TestCleanseRemovesINPLayoutCharacters(t *testing.T) {
 func TestRecordLineSanitizesFieldSeparators(t *testing.T) {
 	t.Parallel()
 
-	rec := model.Record{
-		ID: model.RecordID{BookID: 1, FileName: "file" + fieldSep + "name", Extension: "fb2" + fieldSep + "bad"},
-		Source: model.RecordSources{Database: model.DatabaseSource{
-			Present: true,
-			Book: &model.DBBook{
-				BookID:   1,
-				Title:    "bad" + fieldSep + "title",
-				Time:     "bad" + fieldSep + "date",
-				Lang:     "en" + fieldSep + "ru",
-				Deleted:  "bad\rdelete",
-				Keywords: "bad\rkeywords",
-				MD5:      "md5" + fieldSep + "bad",
-			},
-			Authors: []model.Contributor{{FirstName: "First" + fieldSep + "Name", LastName: "Last\rName"}},
-			Genres:  []model.DBGenre{{Code: "sf" + fieldSep + "bad"}},
-			Sequences: []model.DBSequence{{
-				Name:   "seq" + fieldSep + "bad",
-				Number: 7,
-			}},
-		}},
+	rec := mhlOnlineDatasetRecord(1, "bad"+fieldSep+"title")
+	rec.Artifacts[0].Name = "file" + fieldSep + "name.fb2"
+	rec.Claims.Bibliographic.Authors = []model.Claim{{Observation: "db", Value: []model.PersonValue{{
+		FirstName: "First" + fieldSep + "Name",
+		LastName:  "Last\rName",
+	}}}}
+	rec.Claims.Bibliographic.Genres = []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf" + fieldSep + "bad"}}}}
+	rec.Claims.Bibliographic.Language = []model.Claim{{Observation: "db", Value: "en" + fieldSep + "ru"}}
+	rec.Claims.Bibliographic.Keywords = []model.Claim{{Observation: "db", Value: "bad\rkeywords"}}
+	rec.Claims.Catalog.Time = []model.Claim{{Observation: "db", Value: "bad" + fieldSep + "date"}}
+	rec.Claims.Catalog.Deleted = []model.Claim{{Observation: "db", Value: model.DeletionValue{Raw: "bad\rdelete"}}}
+	rec.Claims.Catalog.Status = []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2" + fieldSep + "bad"}}}
+	line, _, err := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
+	if err != nil {
+		t.Fatalf("recordLine() error = %v", err)
 	}
-	line := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
 	fields := strings.Split(strings.TrimSuffix(line, "\r\n"), fieldSep)
 	if len(fields) != 17 {
 		t.Fatalf("field count = %d fields=%#v line=%q", len(fields), fields, line)
@@ -411,6 +342,73 @@ func writeMetadata(t *testing.T, prefix string, meta model.MergeMetadata) {
 	}
 	if err := os.WriteFile(prefix+".meta.json", append(data, '\n'), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
+	}
+}
+
+func writeDataset(t *testing.T, prefix string, dataset model.Dataset, records ...model.DatasetRecord) {
+	t.Helper()
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if err := w.WriteValue(dataset); err != nil {
+		t.Fatalf("WriteValue(dataset) error = %v", err)
+	}
+	for _, rec := range records {
+		if err := w.WriteValue(rec); err != nil {
+			t.Fatalf("WriteValue(record) error = %v", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func mhlDatasetRecord(source string, index int, entry string, bookID int64) model.DatasetRecord {
+	rec := mhlOnlineDatasetRecord(bookID, "Title")
+	rec.Record.Locator = model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index}
+	rec.Artifacts[0].Name = entry
+	rec.Artifacts[0].Occurrences = []model.Occurrence{{
+		Archive:          source,
+		Entry:            entry,
+		Index:            index,
+		UncompressedSize: 123,
+		Modified:         "2026-06-03T00:00:00Z",
+	}}
+	rec.Claims.Catalog.Deleted = []model.Claim{{Observation: "db", Value: model.DeletionValue{Raw: "1"}}}
+	return rec
+}
+
+func mhlOnlineDatasetRecord(bookID int64, title string) model.DatasetRecord {
+	bookIDText := strconv.FormatInt(bookID, 10)
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
+		},
+		Identities: &model.Identities{Catalog: []model.Identity{{
+			Scheme:      "flibusta.book",
+			Value:       bookIDText,
+			Observation: "db",
+		}}},
+		Artifacts: []model.Artifact{{
+			Name: bookIDText + ".fb2",
+			Size: []model.ArtifactSize{{Observation: "db", Value: 123, Kind: "reported"}},
+		}},
+		Observations: []model.Observation{{ID: "db", Source: "database", Kind: "database_book", Status: "present"}},
+		Claims: model.Claims{
+			Bibliographic: &model.BibliographicClaims{
+				Title:    []model.Claim{{Observation: "db", Value: title}},
+				Authors:  []model.Claim{{Observation: "db", Value: []model.PersonValue{{FirstName: "First", LastName: "Last"}}}},
+				Genres:   []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf"}}}},
+				Language: []model.Claim{{Observation: "db", Value: "ru"}},
+			},
+			Catalog: &model.CatalogClaims{
+				Time:   []model.Claim{{Observation: "db", Value: "2026-07-13T00:00:00Z"}},
+				Status: []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2"}}},
+			},
+		},
 	}
 }
 

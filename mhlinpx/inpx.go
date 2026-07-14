@@ -156,45 +156,15 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if opts.Limits == (Limits{}) {
 		opts.Limits = DefaultLimits()
 	}
-	metaPath, err := discoverMetadata(opts.InputPrefix)
+	dataset, archives, loaded, err := inpxutil.LoadDatasetInput(ctx, opts.InputPrefix, opts.Log)
 	if err != nil {
 		return stats, err
 	}
-	if opts.Log != nil {
-		opts.Log.Info("INPX metadata selected", zap.String("metadata", metaPath))
-	}
-	meta, err := readMetadata(metaPath)
-	if err != nil {
-		return stats, err
-	}
+	meta := datasetMetadata(dataset)
 	inpxutil.EnsureDumpDate(&meta, opts.Log)
 	stats.DumpDate = meta.Database.DumpDate
-	parts, err := discoverInputParts(opts.InputPrefix, metaPath, meta, opts.Log)
-	if err != nil {
-		return stats, err
-	}
 	if opts.Log != nil {
-		opts.Log.Info(
-			"INPX input parts selected",
-			zap.Int("parts", len(parts)),
-			zap.Int("archives", len(meta.Archives)),
-			zap.String("dump_date", meta.Database.DumpDate),
-		)
-	}
-	archives := make(map[string]*archiveRows, len(meta.Archives))
-	for _, archive := range meta.Archives {
-		archives[archive.Path] = &archiveRows{Meta: archive, Records: make(map[int]model.Record)}
-	}
-	if len(meta.Archives) == 0 {
-		archives[inpxutil.OnlineArchivePath] = newOnlineArchive()
-	}
-	loadStart := time.Now()
-	loaded, err := readRecords(ctx, parts, archives, opts.Log)
-	if err != nil {
-		return stats, err
-	}
-	if opts.Log != nil {
-		opts.Log.Info("INPX records loaded", zap.Int64("records", loaded), zap.Int("parts", len(parts)), zap.Duration("elapsed", time.Since(loadStart)))
+		opts.Log.Info("INPX records loaded", zap.Int64("records", loaded), zap.Int("archives", len(archives)))
 	}
 	outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
 	if err != nil {
@@ -399,7 +369,13 @@ func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, 
 	log.Warn("Duplicate archive index in INPX input; keeping first record", fields...)
 }
 
-func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archives map[string]*archiveRows, opts Options) (Stats, error) {
+func writeINPX(
+	ctx context.Context,
+	path string,
+	meta model.MergeMetadata,
+	archives map[string]*inpxutil.DatasetArchiveRows,
+	opts Options,
+) (Stats, error) {
 	stats := Stats{DumpDate: meta.Database.DumpDate}
 	f, err := os.Create(path)
 	if err != nil {
@@ -407,7 +383,7 @@ func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archi
 	}
 	zw := zip.NewWriter(f)
 	zw.SetComment(zipComment(meta))
-	archiveList := make([]*archiveRows, 0, len(archives))
+	archiveList := make([]*inpxutil.DatasetArchiveRows, 0, len(archives))
 	for _, archive := range archives {
 		archiveList = append(archiveList, archive)
 	}
@@ -463,7 +439,7 @@ func writeINPX(ctx context.Context, path string, meta model.MergeMetadata, archi
 	return stats, nil
 }
 
-func writeArchiveINP(zw *zip.Writer, archive *archiveRows, opts Options) (Stats, error) {
+func writeArchiveINP(zw *zip.Writer, archive *inpxutil.DatasetArchiveRows, opts Options) (Stats, error) {
 	start := time.Now()
 	stats := Stats{}
 	name := strings.TrimSuffix(archive.Meta.Name, filepath.Ext(archive.Meta.Name)) + ".inp"
@@ -479,15 +455,20 @@ func writeArchiveINP(zw *zip.Writer, archive *archiveRows, opts Options) (Stats,
 		stats.Files++
 		rec, ok := archive.Records[idx]
 		line := ""
+		var view inpxutil.DatasetRecordView
 		if ok {
-			line = recordLine(rec, opts)
+			var err error
+			line, view, err = recordLine(rec, opts)
+			if err != nil {
+				return stats, err
+			}
 		}
 		if line == "" {
 			line = dummyLine(idx + 1)
 			stats.Dummy++
 		} else {
 			stats.Records++
-			if rec.Source.Database.Present {
+			if view.HasDatabase {
 				stats.DBRecords++
 			} else {
 				stats.FB2Records++
@@ -524,65 +505,40 @@ func writeZipText(zw *zip.Writer, name string, text string) error {
 	return err
 }
 
-func recordLine(rec model.Record, opts Options) string {
-	db := rec.Source.Database
-	fb2 := rec.Source.FB2
-	titleInfo := fb2TitleInfo(fb2)
-	book := db.Book
-	if book == nil && titleInfo == nil {
-		return ""
+func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.DatasetRecordView, error) {
+	view, err := inpxutil.DatasetRecordClaims(rec)
+	if err != nil {
+		return "", view, err
 	}
-	title := ""
-	if book != nil {
-		title = book.Title
+	if !view.HasDatabase && !view.HasFB2 {
+		return "", view, nil
 	}
-	if title == "" && titleInfo != nil {
-		title = titleInfo.Title
+	title := view.Database.Title
+	if title == "" {
+		title = view.FB2.Title
 	}
-	authors := authorsString(db.Present, db.Authors, titleInfo, opts)
-	genres := genresString(db.Genres, titleInfo)
-	sequence, seqNum := sequenceString(db.Sequences, titleInfo, opts)
-	fileName := rec.ID.FileName
-	if fileName == "" && rec.ID.BookID > 0 {
-		fileName = strconv.FormatInt(rec.ID.BookID, 10)
+	authors := authorsString(view.HasDatabase, view.Database.Authors, view.FB2.Authors, opts)
+	genres := genresString(view.Database.Genres, view.FB2.Genres)
+	sequence, seqNum := sequenceString(view.Database.Sequences, view.FB2.Sequences, opts)
+	fileName := strings.TrimSuffix(view.Artifact.Name, filepath.Ext(view.Artifact.Name))
+	if fileName == "" {
+		fileName = datasetBookID(rec)
 	}
-	size := int64(0)
-	deleted := ""
-	ext := rec.ID.Extension
-	date := ""
-	lang := ""
-	rate := ""
-	keywords := ""
-	md5 := ""
-	replaced := ""
-	if book != nil {
-		size = book.FileSize
-		deleted = book.Deleted
-		if ext == "" {
-			ext = book.FileType
-		}
-		date = dateOnly(book.Time)
-		lang = book.Lang
-		keywords = book.Keywords
-		md5 = book.MD5
-		if book.ReplacedBy > 0 {
-			replaced = strconv.FormatInt(book.ReplacedBy, 10)
-		}
+	ext := view.Catalog.FileType
+	if ext == "" {
+		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
 	}
-	if size == 0 && rec.ID.Archive != nil {
-		size = int64(rec.ID.Archive.UncompressedSize)
+	date := dateOnly(view.Catalog.Time)
+	if date == "" {
+		date = view.Artifact.Date
 	}
-	if date == "" && rec.ID.Archive != nil {
-		date = dateOnly(rec.ID.Archive.Modified)
+	lang := view.Database.Language
+	if lang == "" {
+		lang = view.FB2.Language
 	}
-	if lang == "" && titleInfo != nil {
-		lang = titleInfo.Language
-	}
-	if keywords == "" && titleInfo != nil {
-		keywords = titleInfo.Keywords
-	}
-	if db.Rating != nil && db.Rating.Count > 0 {
-		rate = strconv.FormatInt(int64(db.Rating.Average), 10)
+	keywords := view.Database.Keywords
+	if keywords == "" {
+		keywords = view.FB2.Keywords
 	}
 	fields := []string{
 		authors,
@@ -591,61 +547,45 @@ func recordLine(rec model.Record, opts Options) string {
 		fix(sequence, opts.QuickFix, opts.Limits.Sequence),
 		seqNum,
 		fileName,
-		strconv.FormatInt(size, 10),
-		strconv.FormatInt(rec.ID.BookID, 10),
-		deleted,
+		strconv.FormatUint(view.Artifact.Size, 10),
+		datasetBookID(rec),
+		view.Catalog.Deleted,
 		ext,
 		date,
 		strings.TrimSpace(lang),
-		rate,
+		ruksRate(view.Catalog.Rating),
 		fix(keywords, opts.QuickFix, opts.Limits.Keywords),
 	}
 	if opts.Format == FormatRUKS {
-		fields = append(fields, md5, replaced)
+		fields = append(fields, view.Catalog.MD5, datasetReplacedBy(rec))
 	}
-	return joinINPFields(fields)
+	return joinINPFields(fields), view, nil
 }
 
-func fb2TitleInfo(src model.FB2Source) *model.FB2TitleInfo {
-	if src.Description == nil {
-		return nil
-	}
-	return src.Description.TitleInfo
-}
-
-func authorsString(dbPresent bool, authors []model.Contributor, titleInfo *model.FB2TitleInfo, opts Options) string {
-	if opts.FB2Preference == PreferReplace && titleInfo != nil && len(titleInfo.Authors) > 0 {
-		return fb2AuthorsString(titleInfo.Authors, opts)
+func authorsString(dbPresent bool, authors []model.PersonValue, fb2Authors []model.PersonValue, opts Options) string {
+	if opts.FB2Preference == PreferReplace && len(fb2Authors) > 0 {
+		return peopleString(fb2Authors, opts)
 	}
 	if dbPresent && len(authors) == 0 {
 		return "неизвестный,автор,:"
 	}
-	if len(authors) == 0 && titleInfo != nil && len(titleInfo.Authors) > 0 {
-		return fb2AuthorsString(titleInfo.Authors, opts)
+	if len(authors) == 0 && len(fb2Authors) > 0 {
+		return peopleString(fb2Authors, opts)
 	}
 	if len(authors) == 0 {
 		return "неизвестный,автор,:"
 	}
-	var b strings.Builder
-	for _, author := range authors {
-		b.WriteString(fix(author.LastName, opts.QuickFix, opts.Limits.AuthorFamily))
-		b.WriteByte(',')
-		b.WriteString(fix(author.FirstName, opts.QuickFix, opts.Limits.AuthorName))
-		b.WriteByte(',')
-		b.WriteString(fix(author.MiddleName, opts.QuickFix, opts.Limits.AuthorMiddle))
-		b.WriteByte(':')
-	}
-	return b.String()
+	return peopleString(authors, opts)
 }
 
-func fb2AuthorsString(authors []model.FB2Person, opts Options) string {
+func peopleString(people []model.PersonValue, opts Options) string {
 	var b strings.Builder
-	for _, author := range authors {
-		b.WriteString(fix(author.LastName, opts.QuickFix, opts.Limits.AuthorFamily))
+	for _, person := range people {
+		b.WriteString(fix(person.LastName, opts.QuickFix, opts.Limits.AuthorFamily))
 		b.WriteByte(',')
-		b.WriteString(fix(author.FirstName, opts.QuickFix, opts.Limits.AuthorName))
+		b.WriteString(fix(person.FirstName, opts.QuickFix, opts.Limits.AuthorName))
 		b.WriteByte(',')
-		b.WriteString(fix(author.MiddleName, opts.QuickFix, opts.Limits.AuthorMiddle))
+		b.WriteString(fix(person.MiddleName, opts.QuickFix, opts.Limits.AuthorMiddle))
 		b.WriteByte(':')
 	}
 	if b.Len() == 0 {
@@ -654,7 +594,7 @@ func fb2AuthorsString(authors []model.FB2Person, opts Options) string {
 	return b.String()
 }
 
-func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string {
+func genresString(genres []model.GenreValue, fb2Genres []model.GenreValue) string {
 	if len(genres) > 0 {
 		var b strings.Builder
 		for _, genre := range genres {
@@ -663,9 +603,9 @@ func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string 
 		}
 		return b.String()
 	}
-	if titleInfo != nil && len(titleInfo.Genres) > 0 {
+	if len(fb2Genres) > 0 {
 		var b strings.Builder
-		for _, genre := range titleInfo.Genres {
+		for _, genre := range fb2Genres {
 			b.WriteString(genre.Code)
 			b.WriteByte(':')
 		}
@@ -674,9 +614,9 @@ func genresString(genres []model.DBGenre, titleInfo *model.FB2TitleInfo) string 
 	return "other:"
 }
 
-func sequenceString(sequences []model.DBSequence, titleInfo *model.FB2TitleInfo, opts Options) (string, string) {
+func sequenceString(sequences []model.SequenceValue, fb2Sequences []model.SequenceValue, opts Options) (string, string) {
 	dbName, dbNum := dbSequence(sequences, opts.SequenceMode)
-	fbName, fbNum := fb2Sequence(titleInfo)
+	fbName, fbNum := fb2Sequence(fb2Sequences)
 	switch opts.FB2Preference {
 	case PreferReplace:
 		if fbName != "" {
@@ -694,46 +634,104 @@ func sequenceString(sequences []model.DBSequence, titleInfo *model.FB2TitleInfo,
 	return dbName, dbNum
 }
 
-func dbSequence(sequences []model.DBSequence, mode SequenceMode) (string, string) {
+func dbSequence(sequences []model.SequenceValue, mode SequenceMode) (string, string) {
 	if mode == SequenceIgnore || len(sequences) == 0 {
 		return "", ""
 	}
-	slices.SortFunc(sequences, func(a, b model.DBSequence) int {
-		if a.Type != b.Type {
+	sequences = slices.DeleteFunc(slices.Clone(sequences), func(seq model.SequenceValue) bool { return seq.Type == nil })
+	if len(sequences) == 0 {
+		return "", ""
+	}
+	slices.SortFunc(sequences, func(a, b model.SequenceValue) int {
+		if *a.Type != *b.Type {
 			if mode == SequencePublisher {
-				return int(b.Type - a.Type)
+				return int(*b.Type - *a.Type)
 			}
-			return int(a.Type - b.Type)
+			return int(*a.Type - *b.Type)
 		}
-		if a.Level != b.Level {
-			return int(a.Level - b.Level)
+		if sequenceLevel(a) != sequenceLevel(b) {
+			return int(sequenceLevel(a) - sequenceLevel(b))
 		}
 		return strings.Compare(a.Name, b.Name)
 	})
 	seq := sequences[0]
-	num := strconv.FormatInt(seq.Number, 10)
-	return seq.Name, num
+	return seq.Name, sequenceNumber(seq.Number)
 }
 
-func fb2Sequence(titleInfo *model.FB2TitleInfo) (string, string) {
-	if titleInfo == nil || len(titleInfo.Sequences) == 0 {
+func fb2Sequence(sequences []model.SequenceValue) (string, string) {
+	if len(sequences) == 0 {
 		return "", ""
 	}
-	seq := titleInfo.Sequences[0]
-	num := ""
-	if seq.Number != "" {
-		if value, err := strconv.ParseFloat(seq.Number, 64); err == nil {
-			num = strconv.Itoa(int(value))
-		} else {
-			num = seq.Number
-		}
-	}
-	return seq.Name, num
+	seq := sequences[0]
+	return seq.Name, sequenceNumber(seq.Number)
 }
 
 func dummyLine(index int) string {
 	fields := []string{"dummy:", "other:", "dummy record", "", "", "", "1", strconv.Itoa(index), "1", "EXT", "2000-01-01", "en", "0", ""}
 	return joinINPFields(fields)
+}
+
+func sequenceLevel(seq model.SequenceValue) int64 {
+	if seq.Level == nil {
+		return 0
+	}
+	return *seq.Level
+}
+
+func sequenceNumber(value *model.NumberValue) string {
+	if value == nil {
+		return ""
+	}
+	if value.Value != nil {
+		return strconv.Itoa(int(*value.Value))
+	}
+	return value.Text
+}
+
+func datasetBookID(rec model.DatasetRecord) string {
+	if rec.Record.Locator.BookID != nil {
+		return strconv.FormatInt(*rec.Record.Locator.BookID, 10)
+	}
+	if rec.Identities == nil {
+		return ""
+	}
+	for _, identity := range rec.Identities.Catalog {
+		if identity.Scheme == "flibusta.book" {
+			return identity.Value
+		}
+	}
+	return ""
+}
+
+func datasetReplacedBy(rec model.DatasetRecord) string {
+	for _, relation := range rec.Relations {
+		if relation.Type == "replaced_by" && relation.Target != nil {
+			return relation.Target.Value
+		}
+	}
+	return ""
+}
+
+func ruksRate(value string) string {
+	if value == "" {
+		return ""
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return value
+	}
+	return strconv.FormatInt(int64(parsed), 10)
+}
+
+func datasetMetadata(dataset model.Dataset) model.MergeMetadata {
+	meta := model.MergeMetadata{Library: dataset.Library}
+	if dataset.Database != nil {
+		meta.Database.DumpDate = dataset.Database.DumpDate
+		if len(dataset.Database.DumpDate) == 8 {
+			meta.Database.DumpDateISO = dataset.Database.DumpDate[:4] + "-" + dataset.Database.DumpDate[4:6] + "-" + dataset.Database.DumpDate[6:8]
+		}
+	}
+	return meta
 }
 
 func joinINPFields(fields []string) string {
