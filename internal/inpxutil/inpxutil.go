@@ -56,6 +56,24 @@ type TemplateOptions struct {
 	VersionTemplate string
 }
 
+type Metadata struct {
+	Library     string
+	DumpDate    string
+	DumpDateISO string
+}
+
+func DatasetMetadata(dataset model.Dataset) Metadata {
+	meta := Metadata{Library: dataset.Library}
+	if dataset.Database == nil {
+		return meta
+	}
+	meta.DumpDate = dataset.Database.DumpDate
+	if len(meta.DumpDate) == 8 {
+		meta.DumpDateISO = meta.DumpDate[:4] + "-" + meta.DumpDate[4:6] + "-" + meta.DumpDate[6:8]
+	}
+	return meta
+}
+
 func LoadDatasetInput(ctx context.Context, inputPrefix string, log *zap.Logger) (model.Dataset, map[string]*DatasetArchiveRows, int64, error) {
 	inputPath, err := DiscoverDatasetInput(inputPrefix)
 	if err != nil {
@@ -163,18 +181,18 @@ func isDatasetInputPath(path string) bool {
 		strings.HasSuffix(lower, ".jsonl.zip")
 }
 
-func EnsureDumpDate(meta *model.MergeMetadata, log *zap.Logger) {
-	if meta == nil || meta.Database.DumpDate != "" {
+func EnsureDumpDate(meta *Metadata, log *zap.Logger) {
+	if meta == nil || meta.DumpDate != "" {
 		return
 	}
 	now := time.Now().UTC()
-	meta.Database.DumpDate = now.Format("20060102")
-	meta.Database.DumpDateISO = now.Format("2006-01-02")
+	meta.DumpDate = now.Format("20060102")
+	meta.DumpDateISO = now.Format("2006-01-02")
 	if log != nil {
 		log.Warn(
 			"INPX input metadata has empty dump date; using current date",
-			zap.String("dump_date", meta.Database.DumpDate),
-			zap.String("display_date", meta.Database.DumpDateISO),
+			zap.String("dump_date", meta.DumpDate),
+			zap.String("display_date", meta.DumpDateISO),
 		)
 	}
 }
@@ -207,9 +225,9 @@ func logDuplicateDatasetArchiveIndex(
 	)
 }
 
-func OutputPath(prefix string, meta model.MergeMetadata) (string, error) {
+func OutputPath(prefix string, meta Metadata) (string, error) {
 	base := prefix
-	date := meta.Database.DumpDate
+	date := meta.DumpDate
 	if date != "" && !isCompactDumpDate(date) {
 		return "", fmt.Errorf("invalid compact dump date %q: expected exactly 8 digits", date)
 	}
@@ -231,25 +249,25 @@ func isCompactDumpDate(value string) bool {
 	return true
 }
 
-func ZipComment(meta model.MergeMetadata) string {
+func ZipComment(meta Metadata) string {
 	return meta.Library + " - " + DisplayDate(meta)
 }
 
-func CollectionInfo(meta model.MergeMetadata, opts TemplateOptions) (string, error) {
+func CollectionInfo(meta Metadata, opts TemplateOptions) (string, error) {
 	if opts.CommentTemplate == "" {
 		return "", errors.New("collection.info comment template is empty")
 	}
 	return RenderInfoTemplate("comment_template", opts.CommentTemplate, meta)
 }
 
-func VersionInfo(meta model.MergeMetadata, opts TemplateOptions) (string, error) {
+func VersionInfo(meta Metadata, opts TemplateOptions) (string, error) {
 	if opts.VersionTemplate == "" {
 		return "", errors.New("version.info template is empty")
 	}
 	return RenderInfoTemplate("version_template", opts.VersionTemplate, meta)
 }
 
-func RenderInfoTemplate(name string, text string, meta model.MergeMetadata) (string, error) {
+func RenderInfoTemplate(name string, text string, meta Metadata) (string, error) {
 	tmpl, err := template.New(name).Funcs(sprig.FuncMap()).Parse(text)
 	if err != nil {
 		return "", fmt.Errorf("parse %s: %w", name, err)
@@ -260,7 +278,7 @@ func RenderInfoTemplate(name string, text string, meta model.MergeMetadata) (str
 		DisplayDate  string
 	}{
 		DatabaseName: meta.Library,
-		DumpDate:     meta.Database.DumpDate,
+		DumpDate:     meta.DumpDate,
 		DisplayDate:  DisplayDate(meta),
 	}
 	var buf bytes.Buffer
@@ -312,11 +330,11 @@ func CloseZipFile(path string, zw *zip.Writer, f *os.File) error {
 	return nil
 }
 
-func DisplayDate(meta model.MergeMetadata) string {
-	if meta.Database.DumpDateISO != "" {
-		return meta.Database.DumpDateISO
+func DisplayDate(meta Metadata) string {
+	if meta.DumpDateISO != "" {
+		return meta.DumpDateISO
 	}
-	date := meta.Database.DumpDate
+	date := meta.DumpDate
 	if len(date) == 8 {
 		return date[:4] + "-" + date[4:6] + "-" + date[6:8]
 	}

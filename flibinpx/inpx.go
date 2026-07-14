@@ -179,12 +179,12 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if err != nil {
 		return stats, err
 	}
-	meta := datasetMetadata(dataset)
+	meta := inpxutil.DatasetMetadata(dataset)
 	inpxutil.EnsureDumpDate(&meta, opts.Log)
 	if opts.SourceLib == "" {
 		opts.SourceLib = dataset.Library
 	}
-	stats.DumpDate = meta.Database.DumpDate
+	stats.DumpDate = meta.DumpDate
 	outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
 	if err != nil {
 		return stats, err
@@ -236,11 +236,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 func writeINPX(
 	ctx context.Context,
 	path string,
-	meta model.MergeMetadata,
+	meta inpxutil.Metadata,
 	archives map[string]*inpxutil.DatasetArchiveRows,
 	opts Options,
 ) (Stats, error) {
-	stats := Stats{DumpDate: meta.Database.DumpDate}
+	stats := Stats{DumpDate: meta.DumpDate}
 	f, err := os.Create(path)
 	if err != nil {
 		return stats, fmt.Errorf("create FLibrary INPX %q: %w", path, err)
@@ -685,17 +685,6 @@ func datasetBookID(rec model.DatasetRecord) string {
 		}
 	}
 	return ""
-}
-
-func datasetMetadata(dataset model.Dataset) model.MergeMetadata {
-	meta := model.MergeMetadata{Library: dataset.Library}
-	if dataset.Database != nil {
-		meta.Database.DumpDate = dataset.Database.DumpDate
-		if len(dataset.Database.DumpDate) == 8 {
-			meta.Database.DumpDateISO = dataset.Database.DumpDate[:4] + "-" + dataset.Database.DumpDate[4:6] + "-" + dataset.Database.DumpDate[6:8]
-		}
-	}
-	return meta
 }
 
 func datasetArchiveList(archives map[string]*inpxutil.DatasetArchiveRows) []*inpxutil.DatasetArchiveRows {

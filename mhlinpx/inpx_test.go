@@ -132,12 +132,10 @@ func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
 func TestInfoTemplates(t *testing.T) {
 	t.Parallel()
 
-	meta := model.MergeMetadata{
-		Library: "flibusta",
-		Database: model.MergeDatabaseMetadata{
-			DumpDate:    "20260603",
-			DumpDateISO: "2026-06-03",
-		},
+	meta := inpxutil.Metadata{
+		Library:     "flibusta",
+		DumpDate:    "20260603",
+		DumpDateISO: "2026-06-03",
 	}
 	got, err := collectionInfo(meta, Options{CommentTemplate: "\ufeff{{ .DatabaseName | upper }} {{ .DumpDate }} {{ .DisplayDate }}"})
 	if err != nil {

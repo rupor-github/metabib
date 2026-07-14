@@ -251,7 +251,7 @@ func TestOutputPathValidatesCompactDumpDate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := OutputPath(tt.prefix, model.MergeMetadata{Database: model.MergeDatabaseMetadata{DumpDate: tt.date}})
+			got, err := OutputPath(tt.prefix, Metadata{DumpDate: tt.date})
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("OutputPath() error = nil, want error")
@@ -272,15 +272,15 @@ func TestEnsureDumpDateUsesCurrentDateAndWarns(t *testing.T) {
 	t.Parallel()
 
 	core, logs := observer.New(zap.WarnLevel)
-	meta := model.MergeMetadata{}
+	meta := Metadata{}
 	before := time.Now().UTC().Format("20060102")
 	EnsureDumpDate(&meta, zap.New(core))
 	after := time.Now().UTC().Format("20060102")
 
-	if meta.Database.DumpDate != before && meta.Database.DumpDate != after {
-		t.Fatalf("DumpDate = %q, want current date %q or %q", meta.Database.DumpDate, before, after)
+	if meta.DumpDate != before && meta.DumpDate != after {
+		t.Fatalf("DumpDate = %q, want current date %q or %q", meta.DumpDate, before, after)
 	}
-	if meta.Database.DumpDateISO == "" {
+	if meta.DumpDateISO == "" {
 		t.Fatal("DumpDateISO is empty")
 	}
 	if logs.FilterMessage("INPX input metadata has empty dump date; using current date").Len() != 1 {
@@ -292,11 +292,11 @@ func TestEnsureDumpDateKeepsExistingDate(t *testing.T) {
 	t.Parallel()
 
 	core, logs := observer.New(zap.WarnLevel)
-	meta := model.MergeMetadata{Database: model.MergeDatabaseMetadata{DumpDate: "20260603", DumpDateISO: "2026-06-03"}}
+	meta := Metadata{DumpDate: "20260603", DumpDateISO: "2026-06-03"}
 	EnsureDumpDate(&meta, zap.New(core))
 
-	if meta.Database.DumpDate != "20260603" || meta.Database.DumpDateISO != "2026-06-03" {
-		t.Fatalf("metadata changed: %#v", meta.Database)
+	if meta.DumpDate != "20260603" || meta.DumpDateISO != "2026-06-03" {
+		t.Fatalf("metadata changed: %#v", meta)
 	}
 	if logs.Len() != 0 {
 		t.Fatalf("logs = %#v, want no warnings", logs.All())

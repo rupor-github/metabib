@@ -3,21 +3,17 @@ package mhlinpx
 import (
 	"archive/zip"
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-	"text/template"
 	"time"
 
-	sprig "github.com/go-task/slim-sprig/v3"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
@@ -152,9 +148,9 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if err != nil {
 		return stats, err
 	}
-	meta := datasetMetadata(dataset)
+	meta := inpxutil.DatasetMetadata(dataset)
 	inpxutil.EnsureDumpDate(&meta, opts.Log)
-	stats.DumpDate = meta.Database.DumpDate
+	stats.DumpDate = meta.DumpDate
 	if opts.Log != nil {
 		opts.Log.Info("INPX records loaded", zap.Int64("records", loaded), zap.Int("archives", len(archives)))
 	}
@@ -209,11 +205,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 func writeINPX(
 	ctx context.Context,
 	path string,
-	meta model.MergeMetadata,
+	meta inpxutil.Metadata,
 	archives map[string]*inpxutil.DatasetArchiveRows,
 	opts Options,
 ) (Stats, error) {
-	stats := Stats{DumpDate: meta.Database.DumpDate}
+	stats := Stats{DumpDate: meta.DumpDate}
 	f, err := os.Create(path)
 	if err != nil {
 		return stats, fmt.Errorf("create INPX %q: %w", path, err)
@@ -250,7 +246,7 @@ func writeINPX(
 		f.Close()
 		return stats, err
 	}
-	if err := writeZipText(zw, "collection.info", collection); err != nil {
+	if err := inpxutil.WriteZipText(zw, "collection.info", collection); err != nil {
 		zw.Close()
 		f.Close()
 		return stats, err
@@ -261,7 +257,7 @@ func writeINPX(
 		f.Close()
 		return stats, err
 	}
-	if err := writeZipText(zw, "version.info", version); err != nil {
+	if err := inpxutil.WriteZipText(zw, "version.info", version); err != nil {
 		zw.Close()
 		f.Close()
 		return stats, err
@@ -331,15 +327,6 @@ func writeArchiveINP(zw *zip.Writer, archive *inpxutil.DatasetArchiveRows, opts 
 		)
 	}
 	return stats, nil
-}
-
-func writeZipText(zw *zip.Writer, name string, text string) error {
-	w, err := zw.Create(name)
-	if err != nil {
-		return fmt.Errorf("create INPX entry %q: %w", name, err)
-	}
-	_, err = io.WriteString(w, text)
-	return err
 }
 
 func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.DatasetRecordView, error) {
@@ -560,17 +547,6 @@ func ruksRate(value string) string {
 	return strconv.FormatInt(int64(parsed), 10)
 }
 
-func datasetMetadata(dataset model.Dataset) model.MergeMetadata {
-	meta := model.MergeMetadata{Library: dataset.Library}
-	if dataset.Database != nil {
-		meta.Database.DumpDate = dataset.Database.DumpDate
-		if len(dataset.Database.DumpDate) == 8 {
-			meta.Database.DumpDateISO = dataset.Database.DumpDate[:4] + "-" + dataset.Database.DumpDate[4:6] + "-" + dataset.Database.DumpDate[6:8]
-		}
-	}
-	return meta
-}
-
 func joinINPFields(fields []string) string {
 	for i := range fields {
 		fields[i] = inpxutil.Cleanse(fields[i])
@@ -587,56 +563,16 @@ func inRanges(ranges []model.IndexRange, idx int) bool {
 	return false
 }
 
-func zipComment(meta model.MergeMetadata) string {
-	return meta.Library + " - " + displayDate(meta)
+func zipComment(meta inpxutil.Metadata) string {
+	return inpxutil.ZipComment(meta)
 }
 
-type commentTemplateContext struct {
-	DatabaseName string
-	DumpDate     string
-	DisplayDate  string
+func collectionInfo(meta inpxutil.Metadata, opts Options) (string, error) {
+	return inpxutil.CollectionInfo(meta, inpxutil.TemplateOptions{CommentTemplate: opts.CommentTemplate})
 }
 
-func collectionInfo(meta model.MergeMetadata, opts Options) (string, error) {
-	if opts.CommentTemplate == "" {
-		return "", errors.New("collection.info comment template is empty")
-	}
-	return renderInfoTemplate("comment_template", opts.CommentTemplate, meta)
-}
-
-func versionInfo(meta model.MergeMetadata, opts Options) (string, error) {
-	if opts.VersionTemplate == "" {
-		return "", errors.New("version.info template is empty")
-	}
-	return renderInfoTemplate("version_template", opts.VersionTemplate, meta)
-}
-
-func renderInfoTemplate(name string, text string, meta model.MergeMetadata) (string, error) {
-	tmpl, err := template.New(name).Funcs(sprig.FuncMap()).Parse(text)
-	if err != nil {
-		return "", fmt.Errorf("parse %s: %w", name, err)
-	}
-	values := commentTemplateContext{
-		DatabaseName: meta.Library,
-		DumpDate:     meta.Database.DumpDate,
-		DisplayDate:  displayDate(meta),
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, values); err != nil {
-		return "", fmt.Errorf("execute %s: %w", name, err)
-	}
-	return buf.String(), nil
-}
-
-func displayDate(meta model.MergeMetadata) string {
-	if meta.Database.DumpDateISO != "" {
-		return meta.Database.DumpDateISO
-	}
-	date := meta.Database.DumpDate
-	if len(date) == 8 {
-		return date[:4] + "-" + date[4:6] + "-" + date[6:8]
-	}
-	return date
+func versionInfo(meta inpxutil.Metadata, opts Options) (string, error) {
+	return inpxutil.VersionInfo(meta, inpxutil.TemplateOptions{VersionTemplate: opts.VersionTemplate})
 }
 
 func fix(value string, enabled bool, maxLen int) string {

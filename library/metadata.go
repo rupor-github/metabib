@@ -88,7 +88,7 @@ func datasetDatabase(database DatabaseManifestDecision) *model.DatasetDatabase {
 }
 
 func datasetArchive(ordinal int, decision ArchiveManifestDecision) (model.DatasetArchive, error) {
-	meta, err := archiveMetadata(decision.ArchivePath, decision.ManifestPath)
+	meta, err := archiveMetadata(decision.ArchivePath)
 	if err != nil {
 		return model.DatasetArchive{}, err
 	}
@@ -167,17 +167,23 @@ func newDatasetID() (string, error) {
 	return "urn:uuid:" + string(out), nil
 }
 
-func archiveMetadata(path string, manifestPath string) (model.MergeArchiveMetadata, error) {
+type archiveLayout struct {
+	Name       string
+	Entries    int
+	FB2Entries int
+	Ignored    []model.IndexRange
+	Dummy      []model.IndexRange
+}
+
+func archiveMetadata(path string) (archiveLayout, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
-		return model.MergeArchiveMetadata{}, fmt.Errorf("open archive %q for metadata: %w", path, err)
+		return archiveLayout{}, fmt.Errorf("open archive %q for metadata: %w", path, err)
 	}
 	defer zr.Close()
-	meta := model.MergeArchiveMetadata{
-		Path:         path,
-		Name:         filepath.Base(path),
-		Entries:      len(zr.File),
-		ManifestPath: manifestPath,
+	meta := archiveLayout{
+		Name:    filepath.Base(path),
+		Entries: len(zr.File),
 	}
 	var dummy []int
 	for idx, file := range zr.File {
