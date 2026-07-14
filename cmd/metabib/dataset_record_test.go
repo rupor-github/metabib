@@ -88,3 +88,125 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 		t.Fatalf("relations = %#v", converted.Relations)
 	}
 }
+
+func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			FileName:  "book",
+			Extension: "fb2",
+			Archive: &model.ArchiveInfo{
+				Path:             "/archives/books.zip",
+				Entry:            "book.fb2",
+				Index:            5,
+				CompressedSize:   123,
+				UncompressedSize: 456,
+			},
+		},
+		Source: model.RecordSources{FB2: model.FB2Source{
+			Present: true,
+			Description: &model.FB2Description{
+				TitleInfo: &model.FB2TitleInfo{
+					Genres:     []model.FB2Genre{{Code: "sf", Match: "exact"}},
+					Authors:    []model.FB2Person{{ID: "person-1", FirstName: "Arkady", LastName: "Strugatsky"}},
+					Title:      "FB2 title",
+					Annotation: "Annotation",
+					Keywords:   "one, two",
+					Date:       &model.FB2Date{Text: "1972", Value: "1972-01-01"},
+					Language:   "ru",
+					SourceLang: "en",
+					Translators: []model.FB2Person{{
+						FirstName: "Translator",
+						Emails:    []string{"translator@example.org"},
+					}},
+					Sequences: []model.FB2Sequence{{
+						Name:   "Cycle",
+						Number: "7.5",
+						Lang:   "ru",
+						Nested: []model.FB2Sequence{{
+							Name:   "Subcycle",
+							Number: "2",
+							Nested: []model.FB2Sequence{{Name: "Sub-subcycle", Number: "1"}},
+						}},
+					}},
+				},
+				SrcTitleInfo: &model.FB2TitleInfo{Title: "Original title"},
+				DocumentInfo: &model.FB2DocumentInfo{
+					ID:          "urn:uuid:document",
+					Authors:     []model.FB2Person{{FirstName: "Doc", LastName: "Author"}},
+					ProgramUsed: "metabib",
+					Date:        &model.FB2Date{Text: "2026-07-14", Value: "2026-07-14"},
+					SrcURLs:     []string{"https://example.org/source"},
+					SrcOCR:      "ocr",
+					Version:     "1.0",
+					History:     "history",
+					Publishers:  []model.FB2Person{{FirstName: "Doc", LastName: "Publisher"}},
+				},
+				PublishInfo: &model.FB2PublishInfo{
+					BookName:  "Paper book",
+					Publisher: "Publisher",
+					City:      "City",
+					Year:      "1972",
+					ISBN:      "9780000000000",
+					Sequences: []model.FB2Sequence{{Name: "Publication cycle", Number: "1"}},
+				},
+				CustomInfo: []model.FB2CustomInfo{{Type: "note", Text: "custom"}},
+				Output:     []model.FB2Output{{Mode: "paid"}},
+			},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if converted.Record.Locator.Kind != "archive_entry" || converted.Record.Locator.Source != "archive-0001" {
+		t.Fatalf("record locator = %#v", converted.Record.Locator)
+	}
+	if converted.Identities == nil || len(converted.Identities.Document) != 1 || len(converted.Identities.Publication) != 1 {
+		t.Fatalf("identities = %#v", converted.Identities)
+	}
+	if got := converted.Claims.Bibliographic.Title[0].Value; got != "FB2 title" {
+		t.Fatalf("FB2 title claim = %#v", got)
+	}
+	if got := converted.Claims.Original.Title[0].Value; got != "Original title" {
+		t.Fatalf("original title claim = %#v", got)
+	}
+	authors, ok := converted.Claims.Bibliographic.Authors[0].Value.([]model.PersonValue)
+	if !ok || len(authors) != 1 || len(authors[0].Identities) != 1 || authors[0].Position == nil || *authors[0].Position != 1 {
+		t.Fatalf("FB2 authors claim = %#v", converted.Claims.Bibliographic.Authors[0].Value)
+	}
+	genres, ok := converted.Claims.Bibliographic.Genres[0].Value.([]model.GenreValue)
+	if !ok || len(genres) != 1 || genres[0].Code != "sf" || genres[0].Match != "exact" {
+		t.Fatalf("FB2 genres claim = %#v", converted.Claims.Bibliographic.Genres[0].Value)
+	}
+	sequences, ok := converted.Claims.Bibliographic.Sequences[0].Value.([]model.SequenceValue)
+	if !ok || len(sequences) != 1 || sequences[0].Number == nil || sequences[0].Number.Text != "7.5" {
+		t.Fatalf("FB2 sequences claim = %#v", converted.Claims.Bibliographic.Sequences[0].Value)
+	}
+	if sequences[0].Number.Value == nil || *sequences[0].Number.Value != 7.5 || len(sequences[0].Sequences) != 1 {
+		t.Fatalf("FB2 sequence value = %#v", sequences[0])
+	}
+	if sequences[0].Sequences[0].Name != "Subcycle" || len(sequences[0].Sequences[0].Sequences) != 1 {
+		t.Fatalf("FB2 nested sequence = %#v", sequences[0].Sequences[0])
+	}
+	if sequences[0].Sequences[0].Sequences[0].Name != "Sub-subcycle" {
+		t.Fatalf("FB2 deep nested sequence = %#v", sequences[0].Sequences[0].Sequences[0])
+	}
+	if got := converted.Claims.Document.ProgramUsed[0].Value; got != "metabib" {
+		t.Fatalf("program used claim = %#v", got)
+	}
+	year, ok := converted.Claims.Publication.Year[0].Value.(model.YearValue)
+	if !ok || year.Text != "1972" || year.Value == nil || *year.Value != 1972 {
+		t.Fatalf("publication year claim = %#v", converted.Claims.Publication.Year[0].Value)
+	}
+	if got := converted.Claims.Publication.ISBN[0].Value; got != "9780000000000" {
+		t.Fatalf("ISBN claim = %#v", got)
+	}
+	if len(converted.Claims.Document.CustomInfo) != 1 || len(converted.Claims.Document.Output) != 1 {
+		t.Fatalf("document claims = %#v", converted.Claims.Document)
+	}
+}

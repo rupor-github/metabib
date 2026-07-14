@@ -47,6 +47,7 @@ func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string)
 		}}
 		appendDatabaseObservation(&out, rec)
 		appendFB2Observation(&out, rec, source, &index)
+		appendFB2Claims(&out, rec.Source.FB2)
 		return out, nil
 	}
 	bookID := rec.ID.BookID
@@ -298,6 +299,13 @@ func catalogClaims(out *model.DatasetRecord) *model.CatalogClaims {
 	return out.Claims.Catalog
 }
 
+func documentClaims(out *model.DatasetRecord) *model.DocumentClaims {
+	if out.Claims.Document == nil {
+		out.Claims.Document = &model.DocumentClaims{}
+	}
+	return out.Claims.Document
+}
+
 func contributorValues(contributors []model.Contributor) []model.PersonValue {
 	values := make([]model.PersonValue, 0, len(contributors))
 	for _, contributor := range contributors {
@@ -437,6 +445,237 @@ func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source str
 		Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
 		Coverage: "description",
 	})
+}
+
+func appendFB2Claims(out *model.DatasetRecord, src model.FB2Source) {
+	if !src.Present || src.Description == nil {
+		return
+	}
+	appendFB2Identities(out, src.Description)
+	if hasFB2TitleInfoClaims(src.Description.TitleInfo) {
+		appendFB2TitleInfoClaims(src.Description.TitleInfo, bibliographicClaims(out))
+	}
+	if hasFB2TitleInfoClaims(src.Description.SrcTitleInfo) {
+		appendFB2TitleInfoClaims(src.Description.SrcTitleInfo, originalClaims(out))
+	}
+	appendFB2DocumentClaims(out, src.Description)
+	appendFB2PublicationClaims(out, src.Description.PublishInfo)
+}
+
+func appendFB2Identities(out *model.DatasetRecord, desc *model.FB2Description) {
+	if desc.DocumentInfo != nil && desc.DocumentInfo.ID != "" {
+		if out.Identities == nil {
+			out.Identities = &model.Identities{}
+		}
+		out.Identities.Document = append(out.Identities.Document, model.Identity{
+			Scheme:      "fb2.document",
+			Value:       desc.DocumentInfo.ID,
+			Observation: "fb2",
+		})
+	}
+	if desc.PublishInfo != nil && desc.PublishInfo.ISBN != "" {
+		if out.Identities == nil {
+			out.Identities = &model.Identities{}
+		}
+		out.Identities.Publication = append(out.Identities.Publication, model.Identity{
+			Scheme:      "isbn",
+			Value:       desc.PublishInfo.ISBN,
+			Observation: "fb2",
+		})
+	}
+}
+
+func originalClaims(out *model.DatasetRecord) *model.BibliographicClaims {
+	if out.Claims.Original == nil {
+		out.Claims.Original = &model.BibliographicClaims{}
+	}
+	return out.Claims.Original
+}
+
+func hasFB2TitleInfoClaims(titleInfo *model.FB2TitleInfo) bool {
+	return titleInfo != nil && (titleInfo.Title != "" || len(titleInfo.Authors) > 0 || len(titleInfo.Translators) > 0 ||
+		len(titleInfo.Genres) > 0 || titleInfo.Annotation != "" || titleInfo.Keywords != "" || titleInfo.Date != nil ||
+		titleInfo.Language != "" || titleInfo.SourceLang != "" || len(titleInfo.Sequences) > 0)
+}
+
+func appendFB2TitleInfoClaims(titleInfo *model.FB2TitleInfo, claims *model.BibliographicClaims) {
+	if titleInfo.Title != "" {
+		claims.Title = append(claims.Title, model.Claim{Observation: "fb2", Value: titleInfo.Title})
+	}
+	if len(titleInfo.Authors) > 0 {
+		claims.Authors = append(claims.Authors, model.Claim{Observation: "fb2", Value: fb2PersonValues(titleInfo.Authors)})
+	}
+	if len(titleInfo.Translators) > 0 {
+		claims.Translators = append(claims.Translators, model.Claim{Observation: "fb2", Value: fb2PersonValues(titleInfo.Translators)})
+	}
+	if len(titleInfo.Genres) > 0 {
+		claims.Genres = append(claims.Genres, model.Claim{Observation: "fb2", Value: fb2GenreValues(titleInfo.Genres)})
+	}
+	if titleInfo.Annotation != "" {
+		claims.Annotation = append(claims.Annotation, model.Claim{Observation: "fb2", Value: titleInfo.Annotation})
+	}
+	if titleInfo.Keywords != "" {
+		claims.Keywords = append(claims.Keywords, model.Claim{Observation: "fb2", Value: titleInfo.Keywords})
+	}
+	if titleInfo.Date != nil {
+		claims.BibliographicDate = append(claims.BibliographicDate, model.Claim{Observation: "fb2", Value: fb2DateValue(*titleInfo.Date)})
+	}
+	if titleInfo.Language != "" {
+		claims.Language = append(claims.Language, model.Claim{Observation: "fb2", Value: titleInfo.Language})
+	}
+	if titleInfo.SourceLang != "" {
+		claims.SourceLanguage = append(claims.SourceLanguage, model.Claim{Observation: "fb2", Value: titleInfo.SourceLang})
+	}
+	if len(titleInfo.Sequences) > 0 {
+		claims.Sequences = append(claims.Sequences, model.Claim{Observation: "fb2", Value: fb2SequenceValues(titleInfo.Sequences)})
+	}
+}
+
+func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Description) {
+	if desc.DocumentInfo != nil {
+		docInfo := desc.DocumentInfo
+		if len(docInfo.Authors) > 0 {
+			claims := documentClaims(out)
+			claims.Authors = append(claims.Authors, model.Claim{Observation: "fb2", Value: fb2PersonValues(docInfo.Authors)})
+		}
+		if docInfo.ProgramUsed != "" {
+			claims := documentClaims(out)
+			claims.ProgramUsed = append(claims.ProgramUsed, model.Claim{Observation: "fb2", Value: docInfo.ProgramUsed})
+		}
+		if docInfo.Date != nil {
+			claims := documentClaims(out)
+			claims.Date = append(claims.Date, model.Claim{Observation: "fb2", Value: fb2DateValue(*docInfo.Date)})
+		}
+		if len(docInfo.SrcURLs) > 0 {
+			claims := documentClaims(out)
+			claims.SourceURLs = append(claims.SourceURLs, model.Claim{Observation: "fb2", Value: docInfo.SrcURLs})
+		}
+		if docInfo.SrcOCR != "" {
+			claims := documentClaims(out)
+			claims.SourceOCR = append(claims.SourceOCR, model.Claim{Observation: "fb2", Value: docInfo.SrcOCR})
+		}
+		if docInfo.Version != "" {
+			claims := documentClaims(out)
+			claims.Version = append(claims.Version, model.Claim{Observation: "fb2", Value: docInfo.Version})
+		}
+		if docInfo.History != "" {
+			claims := documentClaims(out)
+			claims.History = append(claims.History, model.Claim{Observation: "fb2", Value: docInfo.History})
+		}
+		if len(docInfo.Publishers) > 0 {
+			claims := documentClaims(out)
+			claims.Publishers = append(claims.Publishers, model.Claim{Observation: "fb2", Value: fb2PersonValues(docInfo.Publishers)})
+		}
+	}
+	if len(desc.CustomInfo) > 0 {
+		claims := documentClaims(out)
+		claims.CustomInfo = append(claims.CustomInfo, model.Claim{Observation: "fb2", Value: desc.CustomInfo})
+	}
+	if len(desc.Output) > 0 {
+		claims := documentClaims(out)
+		claims.Output = append(claims.Output, model.Claim{Observation: "fb2", Value: desc.Output})
+	}
+}
+
+func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2PublishInfo) {
+	if publishInfo == nil {
+		return
+	}
+	if publishInfo.BookName != "" {
+		claims := publicationClaims(out)
+		claims.BookName = append(claims.BookName, model.Claim{Observation: "fb2", Value: publishInfo.BookName})
+	}
+	if publishInfo.Publisher != "" {
+		claims := publicationClaims(out)
+		claims.Publisher = append(claims.Publisher, model.Claim{Observation: "fb2", Value: publishInfo.Publisher})
+	}
+	if publishInfo.City != "" {
+		claims := publicationClaims(out)
+		claims.City = append(claims.City, model.Claim{Observation: "fb2", Value: publishInfo.City})
+	}
+	if publishInfo.Year != "" {
+		claims := publicationClaims(out)
+		claims.Year = append(claims.Year, model.Claim{Observation: "fb2", Value: yearValue(publishInfo.Year)})
+	}
+	if publishInfo.ISBN != "" {
+		claims := publicationClaims(out)
+		claims.ISBN = append(claims.ISBN, model.Claim{Observation: "fb2", Value: publishInfo.ISBN})
+	}
+	if len(publishInfo.Sequences) > 0 {
+		claims := publicationClaims(out)
+		claims.Sequences = append(claims.Sequences, model.Claim{Observation: "fb2", Value: fb2SequenceValues(publishInfo.Sequences)})
+	}
+}
+
+func fb2PersonValues(people []model.FB2Person) []model.PersonValue {
+	values := make([]model.PersonValue, 0, len(people))
+	for i, person := range people {
+		position := int64(i + 1)
+		value := model.PersonValue{
+			FirstName:  person.FirstName,
+			MiddleName: person.MiddleName,
+			LastName:   person.LastName,
+			NickName:   person.NickName,
+			Emails:     person.Emails,
+			Homepages:  person.HomePages,
+			Position:   &position,
+		}
+		if person.ID != "" {
+			value.Identities = append(value.Identities, model.IdentityTarget{Scheme: "fb2.person", Value: person.ID})
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func fb2GenreValues(genres []model.FB2Genre) []model.GenreValue {
+	values := make([]model.GenreValue, 0, len(genres))
+	for _, genre := range genres {
+		values = append(values, model.GenreValue{Code: genre.Code, Match: genre.Match})
+	}
+	return values
+}
+
+func fb2SequenceValues(sequences []model.FB2Sequence) []model.SequenceValue {
+	values := make([]model.SequenceValue, 0, len(sequences))
+	for _, sequence := range sequences {
+		values = append(values, fb2SequenceValue(sequence))
+	}
+	return values
+}
+
+func fb2SequenceValue(sequence model.FB2Sequence) model.SequenceValue {
+	return model.SequenceValue{
+		Name:      sequence.Name,
+		Number:    numberValue(sequence.Number),
+		Language:  sequence.Lang,
+		Sequences: fb2SequenceValues(sequence.Nested),
+	}
+}
+
+func fb2DateValue(date model.FB2Date) model.DateValue {
+	return model.DateValue{Text: date.Text, Value: date.Value}
+}
+
+func yearValue(raw string) model.YearValue {
+	value := model.YearValue{Text: raw}
+	parsed, err := strconv.ParseInt(raw, 10, 64)
+	if err == nil {
+		value.Value = &parsed
+	}
+	return value
+}
+
+func numberValue(raw string) *model.NumberValue {
+	if raw == "" {
+		return nil
+	}
+	value := model.NumberValue{Text: raw}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err == nil {
+		value.Value = &parsed
+	}
+	return &value
 }
 
 func mediaType(extension string) string {
