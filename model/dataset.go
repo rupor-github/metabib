@@ -158,6 +158,75 @@ type Claim struct {
 	Raw         any    `json:"raw,omitempty"`
 }
 
+type PersonValue struct {
+	Identities []IdentityTarget `json:"identities,omitempty"`
+	FirstName  string           `json:"first_name,omitempty"`
+	MiddleName string           `json:"middle_name,omitempty"`
+	LastName   string           `json:"last_name,omitempty"`
+	NickName   string           `json:"nick_name,omitempty"`
+	Email      string           `json:"email,omitempty"`
+	Emails     []string         `json:"emails,omitempty"`
+	Homepage   string           `json:"homepage,omitempty"`
+	Homepages  []string         `json:"homepages,omitempty"`
+	Gender     string           `json:"gender,omitempty"`
+	MasterID   string           `json:"master_id,omitempty"`
+	Position   *int64           `json:"position,omitempty"`
+}
+
+type GenreValue struct {
+	Code           string `json:"code"`
+	TranslatedCode string `json:"translated_code,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Meta           string `json:"meta,omitempty"`
+	Match          string `json:"match,omitempty"`
+}
+
+type SequenceValue struct {
+	Identities []IdentityTarget `json:"identities,omitempty"`
+	Name       string           `json:"name"`
+	Number     *NumberValue     `json:"number,omitempty"`
+	Level      *int64           `json:"level,omitempty"`
+	Type       *int64           `json:"type,omitempty"`
+	Language   string           `json:"language,omitempty"`
+	Sequences  []SequenceValue  `json:"sequences,omitempty"`
+}
+
+type NumberValue struct {
+	Text  string   `json:"text,omitempty"`
+	Value *float64 `json:"value,omitempty"`
+}
+
+type DateValue struct {
+	Text  string `json:"text,omitempty"`
+	Value string `json:"value,omitempty"`
+}
+
+type YearValue struct {
+	Text  string `json:"text,omitempty"`
+	Value *int64 `json:"value,omitempty"`
+}
+
+type RatingValue struct {
+	Average *float64 `json:"average,omitempty"`
+	Count   int64    `json:"count"`
+	Min     *int64   `json:"min,omitempty"`
+	Max     *int64   `json:"max,omitempty"`
+}
+
+type DeletionValue struct {
+	Raw   string `json:"raw,omitempty"`
+	State string `json:"state,omitempty"`
+}
+
+type AliasValue struct {
+	Name string `json:"name"`
+}
+
+type CatalogStatusValue struct {
+	FileType string `json:"file_type,omitempty"`
+	MD5      string `json:"md5,omitempty"`
+}
+
 type BibliographicClaims struct {
 	Title             []Claim `json:"title,omitempty"`
 	Authors           []Claim `json:"authors,omitempty"`

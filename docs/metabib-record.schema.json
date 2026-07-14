@@ -175,6 +175,109 @@
       },
       "additionalProperties": false
     },
+    "person_value": {
+      "type": "object",
+      "properties": {
+        "identities": {"type": "array", "items": {"$ref": "#/$defs/identity_target"}},
+        "first_name": {"type": "string"},
+        "middle_name": {"type": "string"},
+        "last_name": {"type": "string"},
+        "nick_name": {"type": "string"},
+        "email": {"type": "string"},
+        "emails": {"type": "array", "items": {"type": "string"}},
+        "homepage": {"type": "string"},
+        "homepages": {"type": "array", "items": {"type": "string"}},
+        "gender": {"type": "string"},
+        "master_id": {"type": "string"},
+        "position": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "genre_value": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {"type": "string"},
+        "translated_code": {"type": "string"},
+        "description": {"type": "string"},
+        "meta": {"type": "string"},
+        "match": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "sequence_value": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "identities": {"type": "array", "items": {"$ref": "#/$defs/identity_target"}},
+        "name": {"type": "string"},
+        "number": {"$ref": "#/$defs/number_value"},
+        "level": {"type": "integer"},
+        "type": {"type": "integer"},
+        "language": {"type": "string"},
+        "sequences": {"type": "array", "items": {"$ref": "#/$defs/sequence_value"}}
+      },
+      "additionalProperties": false
+    },
+    "number_value": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "value": {"type": "number"}
+      },
+      "additionalProperties": false
+    },
+    "date_value": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "value": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "year_value": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "value": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "rating_value": {
+      "type": "object",
+      "required": ["count"],
+      "properties": {
+        "average": {"type": "number"},
+        "count": {"type": "integer"},
+        "min": {"type": "integer"},
+        "max": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "deletion_value": {
+      "type": "object",
+      "properties": {
+        "raw": {"type": "string"},
+        "state": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "alias_value": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "catalog_status_value": {
+      "type": "object",
+      "properties": {
+        "file_type": {"type": "string"},
+        "md5": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
     "artifact": {
       "type": "object",
       "required": ["name"],

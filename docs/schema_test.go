@@ -253,6 +253,21 @@ func TestRecordSchemaCoversDatasetRecordModelFields(t *testing.T) {
 		`"uncompressed_size"`,
 		`"participants"`,
 		`"retryable"`,
+		`"identities"`,
+		`"first_name"`,
+		`"middle_name"`,
+		`"last_name"`,
+		`"nick_name"`,
+		`"homepages"`,
+		`"gender"`,
+		`"master_id"`,
+		`"translated_code"`,
+		`"level"`,
+		`"text"`,
+		`"average"`,
+		`"state"`,
+		`"file_type"`,
+		`"md5"`,
 	} {
 		assertSchemaContains(t, schema, want)
 	}
@@ -373,6 +388,14 @@ func fullDatasetRecord() model.DatasetRecord {
 	index := 17
 	bookID := int64(42)
 	candidate := int64(42)
+	position := int64(1)
+	sequenceID := int64(10)
+	sequenceLevel := int64(1)
+	sequenceNumber := 7.5
+	year := int64(1972)
+	ratingAverage := 4.5
+	ratingMin := int64(1)
+	ratingMax := int64(5)
 	return model.DatasetRecord{
 		Schema: model.RecordSchemaV2,
 		Record: model.RecordDescriptor{
@@ -448,18 +471,31 @@ func fullDatasetRecord() model.DatasetRecord {
 					{Observation: "db", Value: "Database title"},
 					{Observation: "fb2", Value: "FB2 title"},
 				},
-				Authors: []model.Claim{{Observation: "fb2", Value: []any{
-					map[string]any{"given": "Arkady", "family": "Strugatsky"},
-					map[string]any{"given": "Boris", "family": "Strugatsky"},
+				Authors: []model.Claim{{Observation: "fb2", Value: []model.PersonValue{
+					{
+						FirstName: "Arkady",
+						LastName:  "Strugatsky",
+						Position:  &position,
+						Emails:    []string{"arkady@example.org"},
+					},
+					{FirstName: "Boris", LastName: "Strugatsky"},
 				}}},
+				Genres:            []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf", TranslatedCode: "sci-fi"}}}},
 				Language:          []model.Claim{{Observation: "fb2", Value: "ru"}},
 				SourceLanguage:    []model.Claim{{Observation: "db", Value: "en"}},
-				BibliographicDate: []model.Claim{{Observation: "fb2", Value: map[string]any{"text": "1972", "value": "1972-01-01"}}},
+				BibliographicDate: []model.Claim{{Observation: "fb2", Value: model.DateValue{Text: "1972", Value: "1972-01-01"}}},
+				Sequences: []model.Claim{{Observation: "fb2", Value: []model.SequenceValue{{
+					Identities: []model.IdentityTarget{{Scheme: "flibusta.sequence", Value: "10"}},
+					Name:       "Cycle",
+					Number:     &model.NumberValue{Text: "7.5", Value: &sequenceNumber},
+					Level:      &sequenceLevel,
+					Type:       &sequenceID,
+				}}}},
 			},
 			Publication: &model.PublicationClaims{
 				BookName:  []model.Claim{{Observation: "fb2", Value: "Paper book"}},
 				Publisher: []model.Claim{{Observation: "fb2", Value: "Publisher"}},
-				Year:      []model.Claim{{Observation: "db", Value: 1972}},
+				Year:      []model.Claim{{Observation: "db", Value: model.YearValue{Value: &year}}},
 				ISBN:      []model.Claim{{Observation: "fb2", Value: "9780000000000"}},
 			},
 			Document: &model.DocumentClaims{
@@ -469,8 +505,15 @@ func fullDatasetRecord() model.DatasetRecord {
 			},
 			Catalog: &model.CatalogClaims{
 				Time:    []model.Claim{{Observation: "db", Value: "2026-07-14T04:05:06Z"}},
-				Aliases: []model.Claim{{Observation: "db", Value: []any{"42.fb2"}}},
-				Rating:  []model.Claim{{Observation: "db", Value: map[string]any{"average": 4, "count": 5}}},
+				Aliases: []model.Claim{{Observation: "db", Value: []model.AliasValue{{Name: "42.fb2"}}}},
+				Rating: []model.Claim{{Observation: "db", Value: model.RatingValue{
+					Average: &ratingAverage,
+					Count:   5,
+					Min:     &ratingMin,
+					Max:     &ratingMax,
+				}}},
+				Deleted: []model.Claim{{Observation: "db", Value: model.DeletionValue{Raw: "1", State: "deleted"}}},
+				Status:  []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2", MD5: "0123456789abcdef0123456789abcdef"}}},
 			},
 		},
 		Relations: []model.Relation{{
