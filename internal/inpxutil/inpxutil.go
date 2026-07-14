@@ -55,6 +55,11 @@ type ArchiveRows struct {
 	Records map[int]model.Record
 }
 
+type DatasetArchiveRows struct {
+	Meta    model.DatasetArchive
+	Records map[int]model.DatasetRecord
+}
+
 type TemplateOptions struct {
 	CommentTemplate string
 	VersionTemplate string
@@ -100,6 +105,78 @@ func LoadInput(ctx context.Context, inputPrefix string, log *zap.Logger) (model.
 		log.Info("INPX records loaded", zap.Int64("records", loaded), zap.Int("parts", len(parts)), zap.Duration("elapsed", time.Since(loadStart)))
 	}
 	return meta, archives, loaded, nil
+}
+
+func LoadDatasetInput(ctx context.Context, inputPrefix string, log *zap.Logger) (model.Dataset, map[string]*DatasetArchiveRows, int64, error) {
+	inputPath, err := DiscoverDatasetInput(inputPrefix)
+	if err != nil {
+		return model.Dataset{}, nil, 0, err
+	}
+	if log != nil {
+		log.Info("INPX dataset input selected", zap.String("input", inputPath))
+	}
+
+	var dataset model.Dataset
+	var archives map[string]*DatasetArchiveRows
+	var records int64
+	for value, err := range jsonl.DatasetValues(ctx, inputPath) {
+		if err != nil {
+			return dataset, archives, records, err
+		}
+		if value.Header {
+			dataset = value.Dataset
+			archives = datasetArchiveRows(dataset)
+			continue
+		}
+		records++
+		if err := addDatasetRecord(inputPath, archives, value.Record, log); err != nil {
+			return dataset, archives, records, err
+		}
+	}
+	if log != nil {
+		log.Info(
+			"INPX dataset records loaded",
+			zap.Int64("records", records),
+			zap.Int("archives", len(archives)),
+		)
+	}
+	return dataset, archives, records, nil
+}
+
+func datasetArchiveRows(dataset model.Dataset) map[string]*DatasetArchiveRows {
+	archives := make(map[string]*DatasetArchiveRows, len(dataset.Archives))
+	for _, archive := range dataset.Archives {
+		archives[archive.ID] = &DatasetArchiveRows{Meta: archive, Records: make(map[int]model.DatasetRecord)}
+	}
+	if len(dataset.Archives) == 0 {
+		archives[OnlineArchivePath] = newOnlineDatasetArchive()
+	}
+	return archives
+}
+
+func addDatasetRecord(path string, archives map[string]*DatasetArchiveRows, rec model.DatasetRecord, log *zap.Logger) error {
+	locator := rec.Record.Locator
+	if locator.Kind != "archive_entry" {
+		if online := archives[OnlineArchivePath]; online != nil {
+			idx := online.Meta.Entries
+			online.Records[idx] = rec
+			online.Meta.Entries++
+		}
+		return nil
+	}
+	if locator.Index == nil {
+		return fmt.Errorf("dataset JSONL %q archive record for source %q has no index", path, locator.Source)
+	}
+	archive := archives[locator.Source]
+	if archive == nil {
+		return fmt.Errorf("dataset JSONL %q record references undeclared archive source %q", path, locator.Source)
+	}
+	if existing, ok := archive.Records[*locator.Index]; ok {
+		logDuplicateDatasetArchiveIndex(log, path, locator.Source, *locator.Index, existing, rec)
+		return nil
+	}
+	archive.Records[*locator.Index] = rec
+	return nil
 }
 
 func DiscoverMetadata(prefix string) (string, error) {
@@ -288,6 +365,13 @@ func newOnlineArchive() *ArchiveRows {
 	}
 }
 
+func newOnlineDatasetArchive() *DatasetArchiveRows {
+	return &DatasetArchiveRows{
+		Meta:    model.DatasetArchive{ID: OnlineArchivePath, Name: OnlineArchiveName},
+		Records: make(map[int]model.DatasetRecord),
+	}
+}
+
 func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, index int, existing model.Record, duplicate model.Record) {
 	if log == nil {
 		return
@@ -306,6 +390,27 @@ func logDuplicateArchiveIndex(log *zap.Logger, part string, archivePath string, 
 		fields = append(fields, zap.String("duplicate_archive_entry", duplicate.ID.Archive.Entry))
 	}
 	log.Warn("Duplicate archive index in INPX input; keeping first record", fields...)
+}
+
+func logDuplicateDatasetArchiveIndex(
+	log *zap.Logger,
+	path string,
+	archiveSource string,
+	index int,
+	existing model.DatasetRecord,
+	duplicate model.DatasetRecord,
+) {
+	if log == nil {
+		return
+	}
+	log.Warn(
+		"Duplicate archive index in INPX dataset input; keeping first record",
+		zap.String("input", path),
+		zap.String("archive", archiveSource),
+		zap.Int("archive_index", index),
+		zap.String("existing_kind", existing.Record.Locator.Kind),
+		zap.String("duplicate_kind", duplicate.Record.Locator.Kind),
+	)
 }
 
 func ArchiveList(archives map[string]*ArchiveRows) []*ArchiveRows {

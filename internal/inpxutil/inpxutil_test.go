@@ -116,6 +116,102 @@ func TestDiscoverDatasetInputRejectsMissingExactPath(t *testing.T) {
 	}
 }
 
+func TestLoadDatasetInputInitializesArchiveRowsFromHeader(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	dataset := model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Records:      3,
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     "books.zip",
+			PathHint: "/archives/books.zip",
+			Entries:  10,
+		}},
+	}
+	if err := writeDatasetInput(prefix, dataset,
+		testDatasetArchiveRecord("archive-0001", 2, "2.fb2"),
+		testDatasetArchiveRecord("archive-0001", 2, "duplicate.fb2"),
+		testDatasetArchiveRecord("archive-0001", 4, "4.fb2"),
+	); err != nil {
+		t.Fatalf("writeDatasetInput() error = %v", err)
+	}
+	core, logs := observer.New(zap.WarnLevel)
+
+	loadedDataset, archives, loaded, err := LoadDatasetInput(context.Background(), prefix, zap.New(core))
+	if err != nil {
+		t.Fatalf("LoadDatasetInput() error = %v", err)
+	}
+	if loadedDataset.RecordSchema != model.RecordSchemaV2 || loaded != 3 {
+		t.Fatalf("loaded dataset = %#v, records = %d", loadedDataset, loaded)
+	}
+	archive := archives["archive-0001"]
+	if archive == nil || archive.Meta.PathHint != "/archives/books.zip" || archive.Meta.Entries != 10 {
+		t.Fatalf("archive rows = %#v", archives)
+	}
+	if len(archive.Records) != 2 || archive.Records[2].Artifacts[0].Name != "2.fb2" || archive.Records[4].Artifacts[0].Name != "4.fb2" {
+		t.Fatalf("records = %#v", archive.Records)
+	}
+	if logs.FilterMessage("Duplicate archive index in INPX dataset input; keeping first record").Len() != 1 {
+		t.Fatalf("logs = %#v, want one duplicate warning", logs.All())
+	}
+}
+
+func TestLoadDatasetInputBucketsDatabaseOnlyRecords(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	dataset := model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}
+	rec := model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "database_book", Source: "database"},
+		},
+		Observations: []model.Observation{{ID: "db", Source: "database", Kind: "database_book", Status: "present"}},
+	}
+	if err := writeDatasetInput(prefix, dataset, rec); err != nil {
+		t.Fatalf("writeDatasetInput() error = %v", err)
+	}
+
+	_, archives, loaded, err := LoadDatasetInput(context.Background(), prefix, nil)
+	if err != nil {
+		t.Fatalf("LoadDatasetInput() error = %v", err)
+	}
+	if loaded != 1 {
+		t.Fatalf("loaded = %d, want 1", loaded)
+	}
+	online := archives[OnlineArchivePath]
+	if online == nil || online.Meta.Name != OnlineArchiveName || online.Meta.Entries != 1 || online.Records[0].Record.Locator.Kind != "database_book" {
+		t.Fatalf("online archive = %#v", online)
+	}
+}
+
+func TestLoadDatasetInputRejectsUnknownArchiveSource(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	dataset := model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.RecordSchemaV2,
+		Records:      1,
+		Archives:     []model.DatasetArchive{{ID: "archive-0001", Name: "books.zip"}},
+	}
+	if err := writeDatasetInput(prefix, dataset, testDatasetArchiveRecord("missing", 1, "1.fb2")); err != nil {
+		t.Fatalf("writeDatasetInput() error = %v", err)
+	}
+
+	_, _, _, err := LoadDatasetInput(context.Background(), prefix, nil)
+	if err == nil || !strings.Contains(err.Error(), "undeclared archive source") {
+		t.Fatalf("LoadDatasetInput() error = %v, want undeclared archive source", err)
+	}
+}
+
 func TestCleanse(t *testing.T) {
 	t.Parallel()
 
@@ -373,5 +469,40 @@ func testRecord(archivePath string, entry string, index int, bookID int64) model
 				Index: index,
 			},
 		},
+	}
+}
+
+func writeDatasetInput(prefix string, dataset model.Dataset, records ...model.DatasetRecord) error {
+	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
+	if err != nil {
+		return err
+	}
+	if err := w.WriteValue(dataset); err != nil {
+		w.Abort()
+		return err
+	}
+	for _, rec := range records {
+		if err := w.WriteValue(rec); err != nil {
+			w.Abort()
+			return err
+		}
+	}
+	return w.Close()
+}
+
+func testDatasetArchiveRecord(source string, index int, entry string) model.DatasetRecord {
+	return model.DatasetRecord{
+		Schema: model.RecordSchemaV2,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
+		},
+		Artifacts: []model.Artifact{{Name: entry}},
+		Observations: []model.Observation{{
+			ID:     "archive",
+			Source: source,
+			Kind:   "archive_entry",
+			Status: "present",
+		}},
 	}
 }
