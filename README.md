@@ -55,14 +55,14 @@ tools.
   entries, parses FB2 descriptions, and writes manifest files for each selected
   source;
 - `merge` reads existing manifests and combines database-derived and
-  archive-derived metadata into final `metabib.record/1` JSONL records described
-  by `docs/metabib.schema.json`;
-- `mhl-inpx` consumes the merged JSONL dataset and metadata sidecar to produce a
-  MyHomeLib-compatible FB2 INPX without coupling the main extraction pipeline to
-  legacy output constraints;
-- `flib-inpx` consumes the same merged JSONL dataset and metadata sidecar to
-  produce a FLibrary-compatible FB2 INPX with extended fields and multiple flat
-  series links.
+  archive-derived metadata into one provenance-aware dataset JSONL stream with a
+  `metabib.dataset/1` header and `metabib.record/2` rows;
+- `mhl-inpx` consumes the merged dataset JSONL to produce a MyHomeLib-compatible
+  FB2 INPX without coupling the main extraction pipeline to legacy output
+  constraints;
+- `flib-inpx` consumes the same merged dataset JSONL to produce a
+  FLibrary-compatible FB2 INPX with extended fields and multiple flat series
+  links.
 
 Both current Flibusta and current Librusec SQL dump schemas are supported. The
 database cache pass autodetects the dump schema and records it in the database
@@ -177,7 +177,7 @@ Expected library layout under `<library-root>`:
 - `flibusta/`: finalized local FB2 archives and active `.merging` archive.
 - `upd_flibusta/`: downloaded daily update archives.
 - `flibusta_<timestamp>/`: downloaded SQL dumps.
-- `inpx/`: generated INPX files and merged JSONL sidecars/parts.
+- `inpx/`: generated INPX files and merged dataset JSONL artifacts.
 
 The script writes a console log next to itself named like
 `flibusta_full_mhl_20260622_103000.log` or
@@ -364,26 +364,26 @@ database-only output or for enriching archive records with database metadata.
 Merged JSONL output is zstd-compressed by default, using the same compression
 level as manifest files. Use `--output-compression zstd`, `gz`, `zip`, or `none`
 to select a different output container. The `--output` value is an output prefix,
-not a final file name: `metabib merge --output all` writes files named like
-`all.<bookid_start>-<bookid_end>.jsonl.zst`. Existing output files are replaced;
-when that happens, `metabib` logs an overwrite warning.
+not a final file name: `metabib merge --output all` writes exactly one artifact,
+such as `all.jsonl.zst`. Existing output files are replaced; when that happens,
+`metabib` logs an overwrite warning.
 
-`merge` also writes a metadata sidecar using the same compression mode, for
-example `all.meta.json.zst`. It records the database dump date and archive entry
-layout needed for exact MyHomeLib INPX generation.
+The first JSONL value is a dataset header (`metabib.dataset/1`) with the database
+dump date, archive entry layout, processing options, and declared ordering. Every
+following value is a v2 dataset record (`metabib.record/2`). Legacy
+`metabib.record/1` merged JSONL input is rejected by INPX generation.
 
 ### INPX Generation
 
-Build a MyHomeLib-compatible FB2 INPX from merged JSONL parts:
+Build a MyHomeLib-compatible FB2 INPX from merged dataset JSONL:
 
 ```sh
 metabib mhl-inpx --input all --output flibusta
 ```
 
-`mhl-inpx` is intentionally FB2-only. It consumes the merged JSONL dataset and the
-merge metadata sidecar; it does not read SQL dumps, start MariaDB, or parse FB2
-archives directly. FB2 fallback metadata is read from
-`sources.fb2.description.title_info`.
+`mhl-inpx` is intentionally FB2-only. It consumes the merged dataset JSONL; it
+does not read SQL dumps, start MariaDB, or parse FB2 archives directly. Database
+and FB2 metadata are read from normalized v2 claims.
 
 When the merge input is database-only and has no archives, `mhl-inpx` writes the
 records into `online.inp`, matching the legacy `lib2inpx` database-only output.
@@ -392,12 +392,12 @@ records are ignored to preserve the historical archive-based behavior.
 
 Available `mhl-inpx` arguments:
 
-- `--input PREFIX`, `-i PREFIX`: required input prefix. `metabib mhl-inpx --input all`
-  discovers one `all.meta.json*` sidecar and all matching `all.*.jsonl*` parts,
-  including uncompressed, zstd, gzip, and ZIP-compressed merge outputs.
-- `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date from merge
-  metadata is appended automatically, so `--output flibusta` writes a file named
-  like `flibusta_20260603.inpx`.
+- `--input PREFIX`, `-i PREFIX`: required input prefix or exact dataset path.
+  `metabib mhl-inpx --input all` discovers exactly one of `all.jsonl`,
+  `all.jsonl.zst`, `all.jsonl.gz`, or `all.jsonl.zip`.
+- `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date from the
+  dataset header is appended automatically, so `--output flibusta` writes a file
+  named like `flibusta_20260603.inpx`.
 - `--format MODE`: INPX record layout. Supported values are `2x` and `ruks`.
   Default is `2x`, matching the classic MyHomeLib/lib2inpx format. `ruks` appends
   MD5 and replacement fields when available.
@@ -426,19 +426,19 @@ when `collection.info` and `version.info` are written. Available values are
 are available. If you replace the collection template and still need
 MyHomeLib/lib2inpx compatibility, keep the leading `\ufeff` BOM.
 
-Build a FLibrary-compatible FB2 INPX from the same merged JSONL parts:
+Build a FLibrary-compatible FB2 INPX from the same merged dataset JSONL:
 
 ```sh
 metabib flib-inpx --input all --output flibusta
 ```
 
-`flib-inpx` is also FB2-only and consumes only merged JSONL plus the merge
-metadata sidecar. It does not read SQL dumps or archives directly. Unlike
-`mhl-inpx`, it emits no dummy records and always writes `structure.info` with
-FLibrary extensions such as `FOLDER`, `YEAR`, and `SOURCELIB`.
+`flib-inpx` is also FB2-only and consumes only merged dataset JSONL. It does not
+read SQL dumps or archives directly. Unlike `mhl-inpx`, it emits no dummy records
+and always writes `structure.info` with FLibrary extensions such as `FOLDER`,
+`YEAR`, and `SOURCELIB`.
 
 Database-only FLibrary INPX generation follows the same `online.inp` rule as
-`mhl-inpx`: it is created only when the merge metadata contains no archives.
+`mhl-inpx`: it is created only when the dataset header contains no archives.
 
 When a book has multiple selected sequences, `flib-inpx` writes repeated `.inp`
 rows for the same `FOLDER + FILE + EXT`, one row per flat `SERIES`/`SERNO` link.
@@ -457,7 +457,7 @@ Available `flib-inpx` arguments:
   `publisher`, `all`, and `ignore`. Default is `author`.
 - `--fb2-flatten MODE`: FB2 nested sequence flattening. Supported values are
   `all`, `leaf`, `path`, and `path-leaf`. Default is `all`.
-- `--source-lib VALUE`: `SOURCELIB` field value. Default is the merge metadata
+- `--source-lib VALUE`: `SOURCELIB` field value. Default is the dataset header
   library name.
 
 FLibrary-specific settings that are not command-line arguments live under
@@ -475,8 +475,8 @@ inpx:
 
 Existing INPX output is replaced only after the new archive is fully written. If
 an existing file is overwritten, `metabib` logs a warning. During generation,
-`metabib` logs the selected metadata, input part count, record loading progress,
-one live message per created `.inp` member, and final aggregate INPX statistics.
+`metabib` logs the selected dataset input, record loading progress, one live
+message per created `.inp` member, and final aggregate INPX statistics.
 
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
 for example `lib.manifest.zst` or `database.manifest.zst`. When archive
@@ -485,14 +485,6 @@ archive with a basename keeps the usual manifest name. Later archives with the
 same basename get a source-qualified manifest name and a warning is logged.
 
 Use global `--verbose` to enable detailed progress reporting.
-
-When `--output-part-size` is used, output files are named
-with zero-padded book-id ranges so they sort naturally, for example:
-
-```text
-metabib.0000000001-0000120345.jsonl.zst
-metabib.0000120346-0000240872.jsonl.zst
-```
 
 Dump the default configuration:
 

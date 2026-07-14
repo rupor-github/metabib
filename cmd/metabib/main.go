@@ -191,12 +191,12 @@ func rollupCommand() *cli.Command {
 func mhlINPXCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "mhl-inpx",
-		Usage: "Build MyHomeLib-compatible INPX from merged JSONL parts",
+		Usage: "Build MyHomeLib-compatible INPX from merged dataset JSONL",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "input",
 				Aliases:  []string{"i"},
-				Usage:    "read merged JSONL parts and metadata using `PREFIX`",
+				Usage:    "read merged dataset JSONL using `PREFIX` or exact path",
 				Required: true,
 			},
 			&cli.StringFlag{
@@ -224,12 +224,12 @@ func mhlINPXCommand() *cli.Command {
 func flibINPXCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "flib-inpx",
-		Usage: "Build FLibrary-compatible INPX from merged JSONL parts",
+		Usage: "Build FLibrary-compatible INPX from merged dataset JSONL",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "input",
 				Aliases:  []string{"i"},
-				Usage:    "read merged JSONL parts and metadata using `PREFIX`",
+				Usage:    "read merged dataset JSONL using `PREFIX` or exact path",
 				Required: true,
 			},
 			&cli.StringFlag{
@@ -253,7 +253,7 @@ func flibINPXCommand() *cli.Command {
 				Value: string(flibinpx.FlattenAll),
 				Usage: "FB2 sequence flattening `MODE` (all, leaf, path, path-leaf)",
 			},
-			&cli.StringFlag{Name: "source-lib", Usage: "SOURCELIB field value; defaults to merge metadata library name"},
+			&cli.StringFlag{Name: "source-lib", Usage: "SOURCELIB field value; defaults to dataset library name"},
 		},
 		Action: runFLibINPX,
 	}

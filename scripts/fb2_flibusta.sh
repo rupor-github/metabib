@@ -221,7 +221,7 @@ build_inpx_from_existing_data() {
 		exit 1
 	fi
 
-	log_phase "Merging ${name} metadata"
+	log_phase "Merging ${name} dataset"
 
 	"${metabib}" "${metabib_args[@]}" merge \
 		--database-dumps "${dump_dir}" \
@@ -230,7 +230,7 @@ build_inpx_from_existing_data() {
 
 	res=$?
 	if (( res != 0 )); then
-		echo "Unable to merge metadata - ${res}"
+		echo "Unable to merge dataset - ${res}"
 		exit 1
 	fi
 
