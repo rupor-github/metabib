@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 	"time"
@@ -119,6 +120,20 @@ func datasetArchiveRows(dataset model.Dataset) map[string]*DatasetArchiveRows {
 		archives[OnlineArchivePath] = newOnlineDatasetArchive()
 	}
 	return archives
+}
+
+func DatasetArchiveList(archives map[string]*DatasetArchiveRows) []*DatasetArchiveRows {
+	archiveList := make([]*DatasetArchiveRows, 0, len(archives))
+	for _, archive := range archives {
+		archiveList = append(archiveList, archive)
+	}
+	slices.SortFunc(archiveList, func(a, b *DatasetArchiveRows) int {
+		if a.Meta.Ordinal != b.Meta.Ordinal {
+			return a.Meta.Ordinal - b.Meta.Ordinal
+		}
+		return strings.Compare(a.Meta.Name, b.Meta.Name)
+	})
+	return archiveList
 }
 
 func addDatasetRecord(path string, archives map[string]*DatasetArchiveRows, rec model.DatasetRecord, log *zap.Logger) error {

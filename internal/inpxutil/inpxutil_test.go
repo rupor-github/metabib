@@ -121,6 +121,27 @@ func TestLoadDatasetInputInitializesArchiveRowsFromHeader(t *testing.T) {
 	}
 }
 
+func TestDatasetArchiveListUsesHeaderOrdinalOrder(t *testing.T) {
+	t.Parallel()
+
+	archives := map[string]*DatasetArchiveRows{
+		"archive-0001": {Meta: model.DatasetArchive{ID: "archive-0001", Ordinal: 0, Name: "z.zip"}},
+		"archive-0002": {Meta: model.DatasetArchive{ID: "archive-0002", Ordinal: 1, Name: "a.zip"}},
+		"archive-0003": {Meta: model.DatasetArchive{ID: "archive-0003", Ordinal: 1, Name: "b.zip"}},
+	}
+
+	got := DatasetArchiveList(archives)
+	want := []string{"archive-0001", "archive-0002", "archive-0003"}
+	if len(got) != len(want) {
+		t.Fatalf("DatasetArchiveList() length = %d, want %d", len(got), len(want))
+	}
+	for idx, archive := range got {
+		if archive.Meta.ID != want[idx] {
+			t.Fatalf("DatasetArchiveList()[%d] = %q, want %q", idx, archive.Meta.ID, want[idx])
+		}
+	}
+}
+
 func TestLoadDatasetInputBucketsDatabaseOnlyRecords(t *testing.T) {
 	t.Parallel()
 

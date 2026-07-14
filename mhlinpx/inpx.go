@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -216,12 +215,7 @@ func writeINPX(
 	}
 	zw := zip.NewWriter(f)
 	zw.SetComment(zipComment(meta))
-	archiveList := make([]*inpxutil.DatasetArchiveRows, 0, len(archives))
-	for _, archive := range archives {
-		archiveList = append(archiveList, archive)
-	}
-	sort.Slice(archiveList, func(i, j int) bool { return archiveList[i].Meta.Name < archiveList[j].Meta.Name })
-	for _, archive := range archiveList {
+	for _, archive := range inpxutil.DatasetArchiveList(archives) {
 		if err := ctx.Err(); err != nil {
 			zw.Close()
 			f.Close()

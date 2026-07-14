@@ -247,7 +247,7 @@ func writeINPX(
 	}
 	zw := zip.NewWriter(f)
 	zw.SetComment(inpxutil.ZipComment(meta))
-	for _, archive := range datasetArchiveList(archives) {
+	for _, archive := range inpxutil.DatasetArchiveList(archives) {
 		if err := ctx.Err(); err != nil {
 			zw.Close()
 			f.Close()
@@ -685,15 +685,6 @@ func datasetBookID(rec model.DatasetRecord) string {
 		}
 	}
 	return ""
-}
-
-func datasetArchiveList(archives map[string]*inpxutil.DatasetArchiveRows) []*inpxutil.DatasetArchiveRows {
-	archiveList := make([]*inpxutil.DatasetArchiveRows, 0, len(archives))
-	for _, archive := range archives {
-		archiveList = append(archiveList, archive)
-	}
-	slices.SortFunc(archiveList, func(a, b *inpxutil.DatasetArchiveRows) int { return strings.Compare(a.Meta.Name, b.Meta.Name) })
-	return archiveList
 }
 
 func keywordsString(value string) string {
