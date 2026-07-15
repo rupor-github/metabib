@@ -59,7 +59,7 @@ func TestRecordFileKeys(t *testing.T) {
 func TestDatabaseIndexMarksDuplicateFilenamesAmbiguous(t *testing.T) {
 	t.Parallel()
 
-	index := databaseIndex{byFile: make(map[string]model.DatabaseSource), ambiguousFiles: make(map[string]struct{})}
+	index := databaseIndex{byFile: make(map[string]int64), ambiguousFiles: make(map[string]struct{})}
 	first := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
 	same := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
 	other := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 43}}
@@ -69,7 +69,7 @@ func TestDatabaseIndexMarksDuplicateFilenamesAmbiguous(t *testing.T) {
 
 	index.addDatabaseFile("book.fb2", first, logger)
 	index.addDatabaseFile("book.fb2", same, logger)
-	if got := databaseSourceBookID(index.byFile["book.fb2"], 0); got != 42 {
+	if got := index.byFile["book.fb2"]; got != 42 {
 		t.Fatalf("indexed book ID = %d, want 42", got)
 	}
 	index.addDatabaseFile("book.fb2", other, logger)
@@ -314,8 +314,8 @@ func TestMergeArchiveManifestsRecordsFilenameMatch(t *testing.T) {
 		ctx,
 		[]library.ArchiveManifestDecision{{ArchivePath: archivePath, ManifestPath: manifestPath}},
 		databaseIndex{
-			byID:   map[int64]model.DatabaseSource{},
-			byFile: map[string]model.DatabaseSource{"7.fb2": dbSource},
+			byID:   map[int64]model.DatabaseSource{42: dbSource},
+			byFile: map[string]int64{"7.fb2": 42},
 		},
 		map[string]string{archivePath: "archive-0001"},
 		false,
@@ -360,7 +360,6 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 		},
 	})
 	numericSource := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 7}}
-	filenameSource := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
 	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
@@ -370,7 +369,7 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 		[]library.ArchiveManifestDecision{{ArchivePath: archivePath, ManifestPath: manifestPath}},
 		databaseIndex{
 			byID:   map[int64]model.DatabaseSource{7: numericSource},
-			byFile: map[string]model.DatabaseSource{"7.fb2": filenameSource},
+			byFile: map[string]int64{"7.fb2": 42},
 		},
 		map[string]string{archivePath: "archive-0001"},
 		false,

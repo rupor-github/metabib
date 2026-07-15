@@ -36,7 +36,7 @@ var errWasHandled bool
 
 type databaseIndex struct {
 	byID           map[int64]model.DatabaseSource
-	byFile         map[string]model.DatabaseSource
+	byFile         map[string]int64
 	ambiguousFiles map[string]struct{}
 }
 
@@ -760,7 +760,7 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 	start := time.Now()
 	index := databaseIndex{
 		byID:           make(map[int64]model.DatabaseSource),
-		byFile:         make(map[string]model.DatabaseSource),
+		byFile:         make(map[string]int64),
 		ambiguousFiles: make(map[string]struct{}),
 	}
 	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
@@ -795,13 +795,15 @@ func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSour
 	if key == "" {
 		return
 	}
+	bookID := databaseSourceBookID(source, 0)
+	if bookID <= 0 {
+		return
+	}
 	if _, ambiguous := index.ambiguousFiles[key]; ambiguous {
 		return
 	}
-	if existing, exists := index.byFile[key]; exists {
-		existingBookID := databaseSourceBookID(existing, 0)
-		duplicateBookID := databaseSourceBookID(source, 0)
-		if existingBookID == duplicateBookID {
+	if existingBookID, exists := index.byFile[key]; exists {
+		if existingBookID == bookID {
 			return
 		}
 		delete(index.byFile, key)
@@ -811,12 +813,12 @@ func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSour
 				"Ambiguous database filename ignored",
 				zap.String("filename", key),
 				zap.Int64("existing_book_id", existingBookID),
-				zap.Int64("duplicate_book_id", duplicateBookID),
+				zap.Int64("duplicate_book_id", bookID),
 			)
 		}
 		return
 	}
-	index.byFile[key] = source
+	index.byFile[key] = bookID
 }
 
 func datasetArchiveSources(dataset model.Dataset) map[string]string {
@@ -860,11 +862,10 @@ func conflictingFilenameIssue(rec model.Record, dbIndex databaseIndex, matchedBo
 		return nil
 	}
 	for _, candidate := range recordFileCandidates(rec) {
-		source, ok := dbIndex.byFile[candidate.key]
+		aliasBookID, ok := dbIndex.byFile[candidate.key]
 		if !ok {
 			continue
 		}
-		aliasBookID := databaseSourceBookID(source, 0)
 		if aliasBookID <= 0 || aliasBookID == matchedBookID {
 			continue
 		}
@@ -970,7 +971,11 @@ func mergeArchiveManifests(
 			}
 			if !rec.Source.Database.Present {
 				for _, candidate := range recordFileCandidates(rec) {
-					if source, ok := dbIndex.byFile[candidate.key]; ok {
+					if bookID, ok := dbIndex.byFile[candidate.key]; ok {
+						source, ok := dbIndex.byID[bookID]
+						if !ok {
+							continue
+						}
 						rec.Source.Database = source
 						databaseMatch = databaseFilenameMatch(candidate, source)
 						matchedBookID := databaseSourceBookID(source, 0)
