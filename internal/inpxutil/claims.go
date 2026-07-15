@@ -261,6 +261,9 @@ func claimYear(claims []model.Claim, observation string) (string, error) {
 			return value.Text, nil
 		}
 		if value.Value != nil {
+			if observation == "db" && *value.Value <= 0 {
+				return "", nil
+			}
 			return strconv.FormatInt(*value.Value, 10), nil
 		}
 		return value.Text, nil

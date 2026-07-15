@@ -216,3 +216,24 @@ func TestDatasetRecordClaimsPreservesFB2YearText(t *testing.T) {
 		t.Fatalf("FB2 publication year = %q, want 0101", view.FB2Publication.Year)
 	}
 }
+
+func TestDatasetRecordClaimsIgnoresNonPositiveDatabaseYear(t *testing.T) {
+	t.Parallel()
+
+	dbYear := int64(-1)
+	fb2Year := int64(2016)
+	rec := model.DatasetRecord{Claims: model.Claims{Publication: &model.PublicationClaims{
+		Year: []model.Claim{
+			{Observation: "db", Value: model.YearValue{Value: &dbYear}},
+			{Observation: "fb2", Value: model.YearValue{Text: "2016", Value: &fb2Year}},
+		},
+	}}}
+
+	view, err := DatasetRecordClaims(rec)
+	if err != nil {
+		t.Fatalf("DatasetRecordClaims() error = %v", err)
+	}
+	if view.DatabasePublication.Year != "" || view.FB2Publication.Year != "2016" {
+		t.Fatalf("publication years = db:%q fb2:%q", view.DatabasePublication.Year, view.FB2Publication.Year)
+	}
+}
