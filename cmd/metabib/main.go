@@ -836,6 +836,58 @@ func databaseSourceBookID(source model.DatabaseSource, fallback int64) int64 {
 	return fallback
 }
 
+func conflictingFilenameIssue(rec model.Record, dbIndex databaseIndex, matchedBookID int64) *model.Issue {
+	if matchedBookID <= 0 {
+		return nil
+	}
+	for _, candidate := range recordFileCandidates(rec) {
+		source, ok := dbIndex.byFile[candidate.key]
+		if !ok {
+			continue
+		}
+		aliasBookID := databaseSourceBookID(source, 0)
+		if aliasBookID <= 0 || aliasBookID == matchedBookID {
+			continue
+		}
+		return matchIssue(
+			"conflicting_match_evidence",
+			candidate.input,
+			fmt.Sprintf(
+				"numeric entry stem matched database book %d, filename alias matched database book %d",
+				matchedBookID,
+				aliasBookID,
+			),
+		)
+	}
+	return nil
+}
+
+func catalogIDConflictIssue(inferredBookID int64, matchedBookID int64, path string) *model.Issue {
+	if inferredBookID <= 0 || matchedBookID <= 0 || inferredBookID == matchedBookID {
+		return nil
+	}
+	return matchIssue(
+		"catalog_id_conflict",
+		path,
+		fmt.Sprintf(
+			"numeric entry stem inferred book %d, filename alias matched database book %d",
+			inferredBookID,
+			matchedBookID,
+		),
+	)
+}
+
+func matchIssue(code string, path string, message string) *model.Issue {
+	return &model.Issue{
+		Observation: "db",
+		Stage:       "match",
+		Code:        code,
+		Path:        path,
+		Message:     message,
+		Retryable:   false,
+	}
+}
+
 func writeDatabaseManifestRecords(
 	ctx context.Context,
 	manifestPath string,
@@ -884,11 +936,16 @@ func mergeArchiveManifests(
 			}
 			inferredBookID := rec.ID.BookID
 			var databaseMatch *model.Match
+			var matchIssues []model.Issue
 			rec.Source.Database = model.DatabaseSource{}
 			if rec.ID.BookID > 0 {
 				if source, ok := dbIndex.byID[rec.ID.BookID]; ok {
 					rec.Source.Database = source
 					databaseMatch = databaseNumericMatch(rec, source)
+					matchedBookID := databaseSourceBookID(source, rec.ID.BookID)
+					if issue := conflictingFilenameIssue(rec, dbIndex, matchedBookID); issue != nil {
+						matchIssues = append(matchIssues, *issue)
+					}
 				}
 			}
 			if !rec.Source.Database.Present {
@@ -896,6 +953,10 @@ func mergeArchiveManifests(
 					if source, ok := dbIndex.byFile[candidate.key]; ok {
 						rec.Source.Database = source
 						databaseMatch = databaseFilenameMatch(candidate, source)
+						matchedBookID := databaseSourceBookID(source, 0)
+						if issue := catalogIDConflictIssue(inferredBookID, matchedBookID, candidate.input); issue != nil {
+							matchIssues = append(matchIssues, *issue)
+						}
 						if source.Book != nil {
 							rec.ID.BookID = source.Book.BookID
 						}
@@ -907,6 +968,7 @@ func mergeArchiveManifests(
 			if err != nil {
 				return err
 			}
+			converted.Issues = append(converted.Issues, matchIssues...)
 			return out.WriteValue(converted)
 		})
 		if err != nil {
