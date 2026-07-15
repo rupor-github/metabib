@@ -768,7 +768,7 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 		}
 		for _, key := range recordFileKeys(rec) {
 			if rec.Source.Database.Present {
-				index.addDatabaseFile(key, rec.Source.Database)
+				index.addDatabaseFile(key, rec.Source.Database, log)
 			}
 		}
 		return nil
@@ -790,7 +790,7 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 	return index, nil
 }
 
-func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSource) {
+func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSource, log *zap.Logger) {
 	if key == "" {
 		return
 	}
@@ -798,11 +798,21 @@ func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSour
 		return
 	}
 	if existing, exists := index.byFile[key]; exists {
-		if databaseSourceBookID(existing, 0) == databaseSourceBookID(source, 0) {
+		existingBookID := databaseSourceBookID(existing, 0)
+		duplicateBookID := databaseSourceBookID(source, 0)
+		if existingBookID == duplicateBookID {
 			return
 		}
 		delete(index.byFile, key)
 		index.ambiguousFiles[key] = struct{}{}
+		if log != nil {
+			log.Debug(
+				"Ambiguous database filename ignored",
+				zap.String("filename", key),
+				zap.Int64("existing_book_id", existingBookID),
+				zap.Int64("duplicate_book_id", duplicateBookID),
+			)
+		}
 		return
 	}
 	index.byFile[key] = source

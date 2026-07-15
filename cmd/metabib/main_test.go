@@ -12,6 +12,7 @@ import (
 	jsonv2 "encoding/json/v2"
 	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"metabib/db"
 	"metabib/jsonl"
@@ -62,18 +63,25 @@ func TestDatabaseIndexMarksDuplicateFilenamesAmbiguous(t *testing.T) {
 	first := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
 	same := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
 	other := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 43}}
+	ignored := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 44}}
+	core, logs := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
 
-	index.addDatabaseFile("book.fb2", first)
-	index.addDatabaseFile("book.fb2", same)
+	index.addDatabaseFile("book.fb2", first, logger)
+	index.addDatabaseFile("book.fb2", same, logger)
 	if got := databaseSourceBookID(index.byFile["book.fb2"], 0); got != 42 {
 		t.Fatalf("indexed book ID = %d, want 42", got)
 	}
-	index.addDatabaseFile("book.fb2", other)
+	index.addDatabaseFile("book.fb2", other, logger)
+	index.addDatabaseFile("book.fb2", ignored, logger)
 	if _, ok := index.byFile["book.fb2"]; ok {
 		t.Fatalf("ambiguous key stayed indexed: %#v", index.byFile)
 	}
 	if _, ok := index.ambiguousFiles["book.fb2"]; !ok {
 		t.Fatalf("ambiguous files = %#v, want book.fb2", index.ambiguousFiles)
+	}
+	if logs.FilterMessage("Ambiguous database filename ignored").Len() != 1 {
+		t.Fatalf("logs = %#v, want one ambiguous filename debug log", logs.AllUntimed())
 	}
 }
 
