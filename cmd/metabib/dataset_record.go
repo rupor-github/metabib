@@ -58,6 +58,7 @@ func datasetRecordFromRecordWithMatch(
 		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index)
 		appendFB2Claims(&out, rec.Source.FB2)
+		appendRecordIssues(&out, rec)
 		return out, nil
 	}
 	bookID := rec.ID.BookID
@@ -66,6 +67,7 @@ func datasetRecordFromRecordWithMatch(
 		Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: positiveBookID(bookID)},
 	}
 	appendDatabaseObservation(&out, rec, nil)
+	appendRecordIssues(&out, rec)
 	return out, nil
 }
 
@@ -469,6 +471,16 @@ func positiveBookID(bookID int64) *int64 {
 
 func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source string, index *int) {
 	if !rec.Source.FB2.Present {
+		if len(rec.Errors) > 0 && recordIsFB2(rec) {
+			out.Observations = append(out.Observations, model.Observation{
+				ID:      "fb2",
+				Source:  source,
+				Kind:    "fb2_description",
+				Status:  "error",
+				Parent:  "archive",
+				Locator: &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
+			})
+		}
 		return
 	}
 	out.Observations = append(out.Observations, model.Observation{
@@ -478,8 +490,48 @@ func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source str
 		Status:   "present",
 		Parent:   "archive",
 		Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
-		Coverage: "description",
+		Coverage: fb2ObservationCoverage(rec.Source.FB2.Description),
 	})
+}
+
+func appendRecordIssues(out *model.DatasetRecord, rec model.Record) {
+	for _, msg := range rec.Errors {
+		out.Issues = append(out.Issues, model.Issue{
+			Observation: recordIssueObservation(rec),
+			Stage:       "parse",
+			Code:        "source_error",
+			Message:     msg,
+			Retryable:   false,
+		})
+	}
+}
+
+func recordIssueObservation(rec model.Record) string {
+	if rec.ID.Archive != nil && recordIsFB2(rec) {
+		return "fb2"
+	}
+	if rec.ID.Archive != nil {
+		return "archive"
+	}
+	return ""
+}
+
+func recordIsFB2(rec model.Record) bool {
+	if strings.EqualFold(rec.ID.Extension, "fb2") {
+		return true
+	}
+	return rec.ID.Archive != nil && strings.HasSuffix(strings.ToLower(rec.ID.Archive.Entry), ".fb2")
+}
+
+func fb2ObservationCoverage(desc *model.FB2Description) string {
+	if desc == nil {
+		return ""
+	}
+	if desc.SrcTitleInfo != nil || desc.DocumentInfo != nil || desc.PublishInfo != nil ||
+		len(desc.CustomInfo) > 0 || len(desc.Output) > 0 {
+		return "description"
+	}
+	return "title_info"
 }
 
 func appendFB2Claims(out *model.DatasetRecord, src model.FB2Source) {

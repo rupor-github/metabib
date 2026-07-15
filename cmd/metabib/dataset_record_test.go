@@ -283,3 +283,53 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 		t.Fatalf("catalog identities = %#v, want database and inferred", converted.Identities)
 	}
 }
+
+func TestDatasetRecordFromArchiveRecordRecordsFB2Error(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library: "flibusta",
+			Archive: &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "bad.fb2", Index: 5},
+		},
+		Errors: []string{"invalid FB2"},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Observations) != 3 || converted.Observations[2].ID != "fb2" ||
+		converted.Observations[2].Status != "error" {
+		t.Fatalf("observations = %#v, want FB2 error", converted.Observations)
+	}
+	if len(converted.Issues) != 1 || converted.Issues[0].Observation != "fb2" ||
+		converted.Issues[0].Code != "source_error" {
+		t.Fatalf("issues = %#v, want FB2 source_error", converted.Issues)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordRecordsTitleInfoCoverage(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library: "flibusta",
+			Archive: &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "book.fb2", Index: 5},
+		},
+		Source: model.RecordSources{FB2: model.FB2Source{
+			Present:     true,
+			Description: &model.FB2Description{TitleInfo: &model.FB2TitleInfo{Title: "FB2 title"}},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Observations) != 3 || converted.Observations[2].Coverage != "title_info" {
+		t.Fatalf("observations = %#v, want title_info FB2 coverage", converted.Observations)
+	}
+}
