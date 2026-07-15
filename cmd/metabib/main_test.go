@@ -249,6 +249,7 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 		[]library.ArchiveManifestDecision{{ArchivePath: currentPath, ManifestPath: manifestPath}},
 		databaseIndex{},
 		map[string]string{currentPath: "archive-0001"},
+		false,
 		out,
 		nil,
 	); err != nil {
@@ -309,6 +310,7 @@ func TestMergeArchiveManifestsRecordsFilenameMatch(t *testing.T) {
 			byFile: map[string]model.DatabaseSource{"7.fb2": dbSource},
 		},
 		map[string]string{archivePath: "archive-0001"},
+		false,
 		out,
 		nil,
 	); err != nil {
@@ -363,6 +365,7 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 			byFile: map[string]model.DatabaseSource{"7.fb2": filenameSource},
 		},
 		map[string]string{archivePath: "archive-0001"},
+		false,
 		out,
 		nil,
 	); err != nil {

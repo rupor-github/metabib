@@ -568,7 +568,15 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 			if err != nil {
 				return err
 			}
-			records, mergeErr = mergeArchiveManifests(ctx, archivePlan, dbIndex, datasetArchiveSources(dataset), out, env.Log)
+			records, mergeErr = mergeArchiveManifests(
+				ctx,
+				archivePlan,
+				dbIndex,
+				datasetArchiveSources(dataset),
+				!dataset.Processing.ParseFB2,
+				out,
+				env.Log,
+			)
 		} else {
 			records, mergeErr = writeDatabaseManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
 		}
@@ -921,6 +929,7 @@ func mergeArchiveManifests(
 	archivePlan []library.ArchiveManifestDecision,
 	dbIndex databaseIndex,
 	archiveSources map[string]string,
+	fb2NotCollected bool,
 	out *jsonl.Writer,
 	log *zap.Logger,
 ) (int64, error) {
@@ -964,7 +973,13 @@ func mergeArchiveManifests(
 					}
 				}
 			}
-			converted, err := datasetRecordFromRecordWithMatch(rec, archiveSources, databaseMatch, inferredBookID)
+			converted, err := datasetRecordFromRecordWithMatch(
+				rec,
+				archiveSources,
+				databaseMatch,
+				inferredBookID,
+				fb2NotCollected,
+			)
 			if err != nil {
 				return err
 			}

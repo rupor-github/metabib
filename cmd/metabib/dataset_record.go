@@ -9,7 +9,7 @@ import (
 )
 
 func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
-	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID)
+	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false)
 }
 
 func datasetRecordFromRecordWithMatch(
@@ -17,6 +17,7 @@ func datasetRecordFromRecordWithMatch(
 	archiveSources map[string]string,
 	databaseMatch *model.Match,
 	inferredBookID int64,
+	fb2NotCollected bool,
 ) (model.DatasetRecord, error) {
 	libraryName := rec.ID.Library
 	out := model.DatasetRecord{
@@ -56,7 +57,7 @@ func datasetRecordFromRecordWithMatch(
 		}}
 		appendDatabaseObservation(&out, rec, databaseMatch)
 		appendInferredCatalogIdentity(&out, inferredBookID)
-		appendFB2Observation(&out, rec, source, &index)
+		appendFB2Observation(&out, rec, source, &index, fb2NotCollected)
 		appendFB2Claims(&out, rec.Source.FB2)
 		appendRecordIssues(&out, rec)
 		return out, nil
@@ -469,17 +470,25 @@ func positiveBookID(bookID int64) *int64 {
 	return &bookID
 }
 
-func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source string, index *int) {
+func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source string, index *int, fb2NotCollected bool) {
 	if !rec.Source.FB2.Present {
-		if len(rec.Errors) > 0 && recordIsFB2(rec) {
-			out.Observations = append(out.Observations, model.Observation{
-				ID:      "fb2",
-				Source:  source,
-				Kind:    "fb2_description",
-				Status:  "error",
-				Parent:  "archive",
-				Locator: &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
-			})
+		if recordIsFB2(rec) {
+			status := ""
+			if len(rec.Errors) > 0 {
+				status = "error"
+			} else if fb2NotCollected {
+				status = "not_collected"
+			}
+			if status != "" {
+				out.Observations = append(out.Observations, model.Observation{
+					ID:      "fb2",
+					Source:  source,
+					Kind:    "fb2_description",
+					Status:  status,
+					Parent:  "archive",
+					Locator: &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
+				})
+			}
 		}
 		return
 	}

@@ -269,7 +269,13 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 	}
 	match := &model.Match{Method: "numeric_entry_stem", Input: "42", Candidate: &bookID, BookID: &bookID}
 
-	converted, err := datasetRecordFromRecordWithMatch(rec, map[string]string{"/archives/books.zip": "archive-0001"}, match, bookID)
+	converted, err := datasetRecordFromRecordWithMatch(
+		rec,
+		map[string]string{"/archives/books.zip": "archive-0001"},
+		match,
+		bookID,
+		false,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
 	}
@@ -307,6 +313,33 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2Error(t *testing.T) {
 	if len(converted.Issues) != 1 || converted.Issues[0].Observation != "fb2" ||
 		converted.Issues[0].Code != "source_error" {
 		t.Fatalf("issues = %#v, want FB2 source_error", converted.Issues)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library: "flibusta",
+			Archive: &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "book.fb2", Index: 5},
+		},
+	}
+
+	converted, err := datasetRecordFromRecordWithMatch(
+		rec,
+		map[string]string{"/archives/books.zip": "archive-0001"},
+		nil,
+		0,
+		true,
+	)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+	}
+	if len(converted.Observations) != 3 || converted.Observations[2].ID != "fb2" ||
+		converted.Observations[2].Status != "not_collected" {
+		t.Fatalf("observations = %#v, want FB2 not_collected", converted.Observations)
 	}
 }
 
