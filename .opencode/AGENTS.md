@@ -22,8 +22,8 @@
 - `database.temporary: true` is the default and uses a fresh managed datadir for each run, removing it on shutdown; persistent managed datadirs are reused only when it is set to false.
 
 ## Output And Performance
-- JSONL files are range-renamed on close as `<base>.<bookid_start>-<bookid_end>.jsonl` with 10-digit zero padding, even when not split.
-- `--output-part-size 512mb` splits output into approximate byte-sized parts before range rename.
+- Merged JSONL output is one atomically published dataset artifact: `<base>.jsonl`, `<base>.jsonl.zst`, `<base>.jsonl.gz`, or `<base>.jsonl.zip`.
+- The merge `--output-part-size` flag and range-derived JSONL names were removed; INPX commands consume exactly one dataset JSONL input.
 - Archive processing is parallel within one archive; archives themselves are processed sequentially.
 - `archive_content_md5: true` is expensive because it forces reading/decompressing the whole archive entry after FB2 description parsing; turn it off for fast archive runs.
 - `fb2_description_tree: false` keeps only `description.title_info` and is faster/smaller than preserving the full FB2 `<description>`.
