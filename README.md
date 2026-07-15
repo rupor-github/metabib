@@ -373,6 +373,24 @@ dump date, archive entry layout, processing options, and declared ordering. Ever
 following value is a v2 dataset record (`metabib.record/2`). Legacy
 `metabib.record/1` merged JSONL input is rejected by INPX generation.
 
+Archive records are anchored by dataset archive ordinal and ZIP entry index.
+Physical record order is never inferred from entry filenames or database book IDs.
+When database enrichment is enabled, merge first treats a positive numeric entry
+stem as matching evidence, then tries a unique database filename alias if no
+numeric database row exists. The selected database observation records the match
+method, and conflicting numeric/filename evidence is retained as a structured
+issue instead of changing the physical record locator.
+
+Examples:
+
+- `42.fb2` first tries database book `42` through `numeric_entry_stem`; if present,
+  database and FB2 claims share one archive-entry record while the archive locator
+  remains the ZIP entry position.
+- `Some.Book.fb2` can match a unique database filename alias; the database book ID
+  becomes a catalog identity claim, not the physical record position.
+- `notes.fb2` with no database match remains a valid archive/FB2-only record and
+  has no invented catalog identity.
+
 ### INPX Generation
 
 Build a MyHomeLib-compatible FB2 INPX from merged dataset JSONL:
