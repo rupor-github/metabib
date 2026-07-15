@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rupor-github/metabib/docs/metabib-database-manifest.schema.json",
-  "title": "metabib database manifest JSONL",
+  "title": "metabib database cache manifest JSONL",
   "oneOf": [
     {"$ref": "#/$defs/header"},
     {"$ref": "metabib.schema.json"}

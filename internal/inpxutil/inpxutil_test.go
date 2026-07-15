@@ -84,7 +84,7 @@ func TestLoadDatasetInputInitializesArchiveRowsFromHeader(t *testing.T) {
 	prefix := filepath.Join(dir, "all")
 	dataset := model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Records:      3,
 		Archives: []model.DatasetArchive{{
 			ID:       "archive-0001",
@@ -106,7 +106,7 @@ func TestLoadDatasetInputInitializesArchiveRowsFromHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadDatasetInput() error = %v", err)
 	}
-	if loadedDataset.RecordSchema != model.RecordSchemaV2 || loaded != 3 {
+	if loadedDataset.RecordSchema != model.DatasetRecordSchemaV1 || loaded != 3 {
 		t.Fatalf("loaded dataset = %#v, records = %d", loadedDataset, loaded)
 	}
 	archive := archives["archive-0001"]
@@ -147,9 +147,9 @@ func TestLoadDatasetInputBucketsDatabaseOnlyRecords(t *testing.T) {
 
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "all")
-	dataset := model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}
+	dataset := model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 1}
 	rec := model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "database_book", Source: "database"},
@@ -180,7 +180,7 @@ func TestLoadDatasetInputRejectsUnknownArchiveSource(t *testing.T) {
 	prefix := filepath.Join(dir, "all")
 	dataset := model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Records:      1,
 		Archives:     []model.DatasetArchive{{ID: "archive-0001", Name: "books.zip"}},
 	}
@@ -363,7 +363,7 @@ func writeDatasetInput(prefix string, dataset model.Dataset, records ...model.Da
 
 func testDatasetArchiveRecord(source string, index int, entry string) model.DatasetRecord {
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},

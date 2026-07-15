@@ -31,7 +31,7 @@ func TestDatasetForDatabaseOnly(t *testing.T) {
 		t.Fatalf("DatasetFor() error = %v", err)
 	}
 	if dataset.Schema != "metabib.dataset/1" ||
-		dataset.RecordSchema != "metabib.record/2" ||
+		dataset.RecordSchema != "metabib.dataset_record/1" ||
 		dataset.Library != "flibusta" {
 		t.Fatalf("dataset identity = %#v", dataset)
 	}

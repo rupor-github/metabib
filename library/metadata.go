@@ -29,7 +29,7 @@ func DatasetFor(
 	dataset := model.Dataset{
 		Schema:       model.DatasetSchemaV1,
 		ID:           id,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Library:      libraryName,
 		Created:      time.Now().UTC().Format(time.RFC3339),
 		Generator: model.DatasetGenerator{

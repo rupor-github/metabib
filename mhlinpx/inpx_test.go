@@ -23,7 +23,7 @@ func TestGenerate(t *testing.T) {
 	prefix := filepath.Join(dir, "all")
 	writeDataset(t, prefix, model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Library:      "flibusta",
 		Records:      2,
 		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
@@ -100,7 +100,7 @@ func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
 	prefix := filepath.Join(dir, "online")
 	writeDataset(t, prefix, model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Library:      "librusec",
 		Records:      1,
 		Database:     &model.DatasetDatabase{DumpDate: "20260713"},
@@ -210,7 +210,7 @@ func TestRecordLineUsesArtifactStemForFB2OnlyLIBID(t *testing.T) {
 	index := 23387
 	number := 2.0
 	rec := model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001", Index: &index},
@@ -347,7 +347,7 @@ func mhlDatasetRecord(source string, index int, entry string, bookID int64) mode
 func mhlOnlineDatasetRecord(bookID int64, title string) model.DatasetRecord {
 	bookIDText := strconv.FormatInt(bookID, 10)
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},

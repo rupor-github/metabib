@@ -210,12 +210,12 @@ func validateDatasetHeader(path string, dataset model.Dataset) error {
 	if dataset.Schema != model.DatasetSchemaV1 {
 		return fmt.Errorf("dataset JSONL %q has schema %q, want %q", path, dataset.Schema, model.DatasetSchemaV1)
 	}
-	if dataset.RecordSchema != model.RecordSchemaV2 {
+	if dataset.RecordSchema != model.DatasetRecordSchemaV1 {
 		return fmt.Errorf(
 			"dataset JSONL %q declares record schema %q, want %q",
 			path,
 			dataset.RecordSchema,
-			model.RecordSchemaV2,
+			model.DatasetRecordSchemaV1,
 		)
 	}
 	if dataset.Records < 0 {

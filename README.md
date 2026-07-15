@@ -56,7 +56,7 @@ tools.
   source;
 - `merge` reads existing manifests and combines database-derived and
   archive-derived metadata into one provenance-aware dataset JSONL stream with a
-  `metabib.dataset/1` header and `metabib.record/2` rows;
+  `metabib.dataset/1` header and `metabib.dataset_record/1` rows;
 - `mhl-inpx` consumes the merged dataset JSONL to produce a MyHomeLib-compatible
   FB2 INPX without coupling the main extraction pipeline to legacy output
   constraints;
@@ -370,7 +370,7 @@ such as `all.jsonl.zst`. Existing output files are replaced; when that happens,
 
 The first JSONL value is a dataset header (`metabib.dataset/1`) with the database
 dump date, archive entry layout, processing options, and declared ordering. Every
-following value is a v2 dataset record (`metabib.record/2`). Legacy
+following value is a dataset record (`metabib.dataset_record/1`). Legacy
 `metabib.record/1` merged JSONL input is rejected by INPX generation.
 
 Archive records are anchored by dataset archive ordinal and ZIP entry index.

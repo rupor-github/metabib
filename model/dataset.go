@@ -1,8 +1,8 @@
 package model
 
 const (
-	DatasetSchemaV1 = "metabib.dataset/1"
-	RecordSchemaV2  = "metabib.record/2"
+	DatasetSchemaV1       = "metabib.dataset/1"
+	DatasetRecordSchemaV1 = "metabib.dataset_record/1"
 )
 
 type Dataset struct {

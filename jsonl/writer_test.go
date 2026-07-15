@@ -137,14 +137,14 @@ func TestWriterWriteValueSupportsHeaderOnlyDataset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if err := w.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 0}); err != nil {
+	if err := w.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 0}); err != nil {
 		t.Fatalf("WriteValue() error = %v", err)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	data := readPlainFile(t, filepath.Join(filepath.Dir(base), "all.jsonl"))
-	if !strings.Contains(data, `"schema":"metabib.dataset/1"`) || strings.Contains(data, "metabib.record/2\n{") {
+	if !strings.Contains(data, `"schema":"metabib.dataset/1"`) || strings.Contains(data, "metabib.dataset_record/1\n{") {
 		t.Fatalf("header-only output = %q", data)
 	}
 }

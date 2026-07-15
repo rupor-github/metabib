@@ -152,12 +152,12 @@ func TestWriteOutputWritesDatasetHeaderFirst(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "all")
 	err := writeOutput(context.Background(), path, "none", nil, func(out *jsonl.Writer) error {
-		if err := out.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}); err != nil {
+		if err := out.WriteValue(model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 1}); err != nil {
 			return err
 		}
 		bookID := int64(42)
 		return out.WriteValue(model.DatasetRecord{
-			Schema: model.RecordSchemaV2,
+			Schema: model.DatasetRecordSchemaV1,
 			Record: model.RecordDescriptor{
 				Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
 			},
@@ -174,7 +174,7 @@ func TestWriteOutputWritesDatasetHeaderFirst(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("lines = %#v, want header and one record", lines)
 	}
-	if !strings.Contains(lines[0], `"schema":"metabib.dataset/1"`) || !strings.Contains(lines[1], `"schema":"metabib.record/2"`) {
+	if !strings.Contains(lines[0], `"schema":"metabib.dataset/1"`) || !strings.Contains(lines[1], `"schema":"metabib.dataset_record/1"`) {
 		t.Fatalf("output lines = %#v", lines)
 	}
 }
@@ -269,7 +269,7 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if !strings.Contains(string(data), `"schema":"metabib.record/2"`) || !strings.Contains(string(data), `"source":"archive-0001"`) {
+	if !strings.Contains(string(data), `"schema":"metabib.dataset_record/1"`) || !strings.Contains(string(data), `"source":"archive-0001"`) {
 		t.Fatalf("merged output = %s, want v2 archive source", data)
 	}
 	if strings.Contains(string(data), oldPath) || strings.Contains(string(data), currentPath) {

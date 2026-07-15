@@ -21,7 +21,7 @@ func datasetRecordFromRecordWithMatch(
 ) (model.DatasetRecord, error) {
 	libraryName := rec.ID.Library
 	out := model.DatasetRecord{
-		Schema:       model.RecordSchemaV2,
+		Schema:       model.DatasetRecordSchemaV1,
 		Observations: make([]model.Observation, 0, 3),
 		Claims:       model.Claims{},
 	}

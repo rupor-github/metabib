@@ -18,7 +18,7 @@
   "properties": {
     "schema": {"const": "metabib.dataset/1"},
     "id": {"type": "string"},
-    "record_schema": {"const": "metabib.record/2"},
+    "record_schema": {"const": "metabib.dataset_record/1"},
     "library": {"type": "string"},
     "created": {"type": "string", "format": "date-time"},
     "records": {"type": "integer", "minimum": 0},

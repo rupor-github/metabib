@@ -191,7 +191,7 @@ func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
 		`"metabib.dataset/1"`,
 		`"id"`,
 		`"record_schema"`,
-		`"metabib.record/2"`,
+		`"metabib.dataset_record/1"`,
 		`"library"`,
 		`"created"`,
 		`"records"`,
@@ -218,10 +218,10 @@ func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
 func TestRecordSchemaCoversDatasetRecordModelFields(t *testing.T) {
 	t.Parallel()
 
-	schema := readSchema(t, "metabib-record.schema.json")
+	schema := readSchema(t, "metabib-dataset-record.schema.json")
 	for _, want := range []string{
 		`"schema"`,
-		`"metabib.record/2"`,
+		`"metabib.dataset_record/1"`,
 		`"record"`,
 		`"locator"`,
 		`"identities"`,
@@ -305,7 +305,7 @@ func TestFullDatasetRecordValidatesAgainstRecordSchema(t *testing.T) {
 		t.Fatalf("Unmarshal(record) error = %v", err)
 	}
 	var schema map[string]any
-	if err := jsonstd.Unmarshal([]byte(readSchema(t, "metabib-record.schema.json")), &schema); err != nil {
+	if err := jsonstd.Unmarshal([]byte(readSchema(t, "metabib-dataset-record.schema.json")), &schema); err != nil {
 		t.Fatalf("Unmarshal(schema) error = %v", err)
 	}
 	if err := validateJSONSchema(schema, record); err != nil {
@@ -337,7 +337,7 @@ func fullDataset() model.Dataset {
 	return model.Dataset{
 		Schema:       model.DatasetSchemaV1,
 		ID:           "urn:uuid:7bbf64c3-8bb9-4c0f-b183-6ef31da26335",
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Library:      "flibusta",
 		Created:      "2026-07-14T12:00:00Z",
 		Records:      1,
@@ -397,7 +397,7 @@ func fullDatasetRecord() model.DatasetRecord {
 	ratingMin := int64(1)
 	ratingMax := int64(5)
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001", Index: &index},

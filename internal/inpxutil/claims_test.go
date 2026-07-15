@@ -15,7 +15,7 @@ func TestDatasetRecordClaimsDecodesJSONClaimValues(t *testing.T) {
 	rating := 4.5
 	sequenceNumber := 7.5
 	rec := model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001"},

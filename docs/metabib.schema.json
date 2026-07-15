@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/rupor-github/metabib/docs/metabib.schema.json",
-  "title": "metabib JSONL record",
+  "title": "metabib source cache record",
   "type": "object",
   "required": ["schema", "id", "sources"],
   "properties": {

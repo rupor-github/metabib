@@ -16,7 +16,7 @@ func TestDatasetValuesHeaderOnly(t *testing.T) {
 	path := writeDatasetStream(
 		t,
 		CompressionNone,
-		model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 0},
+		model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 0},
 	)
 	dataset, records, err := readDatasetValues(context.Background(), path)
 	if err != nil {
@@ -32,8 +32,8 @@ func TestDatasetValuesValidatesRecordCount(t *testing.T) {
 
 	path := writeDatasetStream(t,
 		CompressionNone,
-		model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 2},
-		model.DatasetRecord{Schema: model.RecordSchemaV2},
+		model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 2},
+		model.DatasetRecord{Schema: model.DatasetRecordSchemaV1},
 	)
 	_, records, err := readDatasetValues(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "record count mismatch") || records != 1 {
@@ -46,8 +46,8 @@ func TestDatasetValuesRejectsTrailingData(t *testing.T) {
 
 	path := writeDatasetStream(t,
 		CompressionNone,
-		model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 0},
-		model.DatasetRecord{Schema: model.RecordSchemaV2},
+		model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 0},
+		model.DatasetRecord{Schema: model.DatasetRecordSchemaV1},
 	)
 	_, _, err := readDatasetValues(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "contains data after declared 0 records") {
@@ -58,7 +58,7 @@ func TestDatasetValuesRejectsTrailingData(t *testing.T) {
 func TestDatasetValuesRejectsMissingHeader(t *testing.T) {
 	t.Parallel()
 
-	path := writeDatasetStream(t, CompressionNone, model.DatasetRecord{Schema: model.RecordSchemaV2})
+	path := writeDatasetStream(t, CompressionNone, model.DatasetRecord{Schema: model.DatasetRecordSchemaV1})
 	_, _, err := readDatasetValues(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "has schema") {
 		t.Fatalf("DatasetValues() error=%v, want schema error", err)
@@ -78,7 +78,7 @@ func TestDatasetValuesRejectsLegacyV1Record(t *testing.T) {
 func TestDatasetValuesRejectsDuplicateHeader(t *testing.T) {
 	t.Parallel()
 
-	header := model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1}
+	header := model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 1}
 	path := writeDatasetStream(t, CompressionNone, header, header)
 	_, _, err := readDatasetValues(context.Background(), path)
 	if err == nil || !strings.Contains(err.Error(), "record 1 has schema") {
@@ -127,7 +127,7 @@ func TestDatasetValuesRejectsInvalidArchiveHeader(t *testing.T) {
 
 			dataset := model.Dataset{
 				Schema:       model.DatasetSchemaV1,
-				RecordSchema: model.RecordSchemaV2,
+				RecordSchema: model.DatasetRecordSchemaV1,
 				Records:      0,
 				Archives:     tt.archives,
 			}
@@ -152,7 +152,7 @@ func TestDatasetValuesRejectsInvalidOrderingHeader(t *testing.T) {
 			name: "unsupported mode",
 			dataset: model.Dataset{
 				Schema:       model.DatasetSchemaV1,
-				RecordSchema: model.RecordSchemaV2,
+				RecordSchema: model.DatasetRecordSchemaV1,
 				Ordering:     model.DatasetOrdering{Mode: "unknown", Direction: "ascending"},
 			},
 			want: "unsupported ordering mode",
@@ -161,7 +161,7 @@ func TestDatasetValuesRejectsInvalidOrderingHeader(t *testing.T) {
 			name: "unsupported direction",
 			dataset: model.Dataset{
 				Schema:       model.DatasetSchemaV1,
-				RecordSchema: model.RecordSchemaV2,
+				RecordSchema: model.DatasetRecordSchemaV1,
 				Ordering:     model.DatasetOrdering{Mode: "database_book_id", Source: "database", Direction: "descending"},
 			},
 			want: "ordering direction",
@@ -170,7 +170,7 @@ func TestDatasetValuesRejectsInvalidOrderingHeader(t *testing.T) {
 			name: "archive ordering without archives",
 			dataset: model.Dataset{
 				Schema:       model.DatasetSchemaV1,
-				RecordSchema: model.RecordSchemaV2,
+				RecordSchema: model.DatasetRecordSchemaV1,
 				Ordering:     model.DatasetOrdering{Mode: "archive_entry", ArchiveKey: "ordinal", EntryKey: "index", Direction: "ascending"},
 			},
 			want: "archive_entry ordering without archives",
@@ -179,7 +179,7 @@ func TestDatasetValuesRejectsInvalidOrderingHeader(t *testing.T) {
 			name: "archive ordering wrong key",
 			dataset: model.Dataset{
 				Schema:       model.DatasetSchemaV1,
-				RecordSchema: model.RecordSchemaV2,
+				RecordSchema: model.DatasetRecordSchemaV1,
 				Archives:     []model.DatasetArchive{{ID: "archive-0001", Ordinal: 0}},
 				Ordering:     model.DatasetOrdering{Mode: "archive_entry", ArchiveKey: "name", EntryKey: "index", Direction: "ascending"},
 			},
@@ -189,7 +189,7 @@ func TestDatasetValuesRejectsInvalidOrderingHeader(t *testing.T) {
 			name: "database ordering wrong source",
 			dataset: model.Dataset{
 				Schema:       model.DatasetSchemaV1,
-				RecordSchema: model.RecordSchemaV2,
+				RecordSchema: model.DatasetRecordSchemaV1,
 				Ordering:     model.DatasetOrdering{Mode: "database_book_id", Source: "catalog", Direction: "ascending"},
 			},
 			want: "database_book_id source",
@@ -213,7 +213,7 @@ func TestDatasetValuesValidatesArchiveOrder(t *testing.T) {
 
 	dataset := model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Records:      4,
 		Archives: []model.DatasetArchive{
 			{ID: "archive-0001", Ordinal: 0, Name: "z.zip"},
@@ -243,7 +243,7 @@ func TestDatasetValuesRejectsOutOfArchiveOrder(t *testing.T) {
 
 	dataset := model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Records:      2,
 		Archives: []model.DatasetArchive{
 			{ID: "archive-0001", Ordinal: 0, Name: "z.zip"},
@@ -268,7 +268,7 @@ func TestDatasetValuesRejectsOutOfDatabaseBookIDOrder(t *testing.T) {
 
 	dataset := model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Records:      2,
 		Ordering:     model.DatasetOrdering{Mode: "database_book_id", Source: "database", Direction: "ascending"},
 	}
@@ -301,8 +301,8 @@ func TestDatasetValuesCompressedInput(t *testing.T) {
 			t.Parallel()
 
 			path := writeDatasetStream(t, tt.compression,
-				model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.RecordSchemaV2, Records: 1},
-				model.DatasetRecord{Schema: model.RecordSchemaV2},
+				model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 1},
+				model.DatasetRecord{Schema: model.DatasetRecordSchemaV1},
 			)
 			_, records, err := readDatasetValues(context.Background(), path)
 			if err != nil {
@@ -333,7 +333,7 @@ func readDatasetValues(ctx context.Context, path string) (model.Dataset, int64, 
 
 func datasetArchiveRecord(source string, index int) model.DatasetRecord {
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
 		},
@@ -342,7 +342,7 @@ func datasetArchiveRecord(source string, index int) model.DatasetRecord {
 
 func datasetDatabaseRecord(bookID int64) model.DatasetRecord {
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
 		},

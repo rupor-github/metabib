@@ -61,7 +61,7 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
-	if converted.Schema != model.RecordSchemaV2 || converted.Record.Locator.Kind != "database_book" {
+	if converted.Schema != model.DatasetRecordSchemaV1 || converted.Record.Locator.Kind != "database_book" {
 		t.Fatalf("converted record = %#v", converted.Record)
 	}
 	if converted.Identities == nil || len(converted.Identities.Catalog) != 1 || converted.Identities.Catalog[0].Value != "42" {

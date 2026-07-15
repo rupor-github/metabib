@@ -23,7 +23,7 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	prefix := filepath.Join(dir, "all")
 	writeFLibDataset(t, prefix, model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Library:      "flibusta",
 		Records:      3,
 		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
@@ -105,7 +105,7 @@ func TestGenerateFLibraryDatabaseOnlyWritesOnlineINP(t *testing.T) {
 	prefix := filepath.Join(dir, "online")
 	writeFLibDataset(t, prefix, model.Dataset{
 		Schema:       model.DatasetSchemaV1,
-		RecordSchema: model.RecordSchemaV2,
+		RecordSchema: model.DatasetRecordSchemaV1,
 		Library:      "librusec",
 		Records:      1,
 		Database:     &model.DatasetDatabase{DumpDate: "20260713"},
@@ -189,7 +189,7 @@ func flibRecord(source string, index int, entry string) model.DatasetRecord {
 	fb2SequenceNumber := 7.0
 	year := int64(2025)
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "flibusta",
 			Locator: model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index},
@@ -257,7 +257,7 @@ func flibRecord(source string, index int, entry string) model.DatasetRecord {
 
 func flibOnlineRecord(bookID int64) model.DatasetRecord {
 	return model.DatasetRecord{
-		Schema: model.RecordSchemaV2,
+		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{
 			Library: "librusec",
 			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
