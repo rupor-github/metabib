@@ -9,6 +9,15 @@ import (
 )
 
 func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
+	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID)
+}
+
+func datasetRecordFromRecordWithMatch(
+	rec model.Record,
+	archiveSources map[string]string,
+	databaseMatch *model.Match,
+	inferredBookID int64,
+) (model.DatasetRecord, error) {
 	libraryName := rec.ID.Library
 	out := model.DatasetRecord{
 		Schema:       model.RecordSchemaV2,
@@ -45,7 +54,8 @@ func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string)
 				Modified:         rec.ID.Archive.Modified,
 			}},
 		}}
-		appendDatabaseObservation(&out, rec)
+		appendDatabaseObservation(&out, rec, databaseMatch)
+		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index)
 		appendFB2Claims(&out, rec.Source.FB2)
 		return out, nil
@@ -55,11 +65,11 @@ func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string)
 		Library: libraryName,
 		Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: positiveBookID(bookID)},
 	}
-	appendDatabaseObservation(&out, rec)
+	appendDatabaseObservation(&out, rec, nil)
 	return out, nil
 }
 
-func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record) {
+func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record, databaseMatch *model.Match) {
 	if !rec.Source.Database.Present {
 		if rec.ID.Archive != nil {
 			out.Observations = append(out.Observations, model.Observation{
@@ -83,11 +93,27 @@ func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record) {
 		Status:   "present",
 		Locator:  &model.ObservationLocator{BookID: positiveBookID(bookID)},
 		Coverage: "complete",
+		Match:    databaseMatch,
 	})
 	appendDatabaseIdentities(out, bookID)
 	appendDatabaseClaims(out, rec.Source.Database)
 	appendDatabaseArtifacts(out, rec.Source.Database)
 	appendDatabaseRelations(out, rec.Source.Database)
+}
+
+func appendInferredCatalogIdentity(out *model.DatasetRecord, bookID int64) {
+	if bookID <= 0 {
+		return
+	}
+	if out.Identities == nil {
+		out.Identities = &model.Identities{}
+	}
+	out.Identities.Catalog = append(out.Identities.Catalog, model.Identity{
+		Scheme:      "flibusta.book",
+		Value:       strconv.FormatInt(bookID, 10),
+		Observation: "archive",
+		Basis:       "numeric_entry_stem",
+	})
 }
 
 func appendDatabaseIdentities(out *model.DatasetRecord, bookID int64) {
@@ -695,17 +721,37 @@ func mediaType(extension string) string {
 }
 
 func recordFileKeys(rec model.Record) []string {
-	keys := make([]string, 0, len(rec.Source.Database.Filenames)+2)
-	if rec.ID.FileName != "" {
-		keys = append(keys, fileKey(rec.ID.FileName))
-		if rec.ID.Extension != "" {
-			keys = append(keys, fileKey(rec.ID.FileName+"."+rec.ID.Extension))
-		}
-	}
-	for _, name := range rec.Source.Database.Filenames {
-		keys = append(keys, fileKey(name))
+	candidates := recordFileCandidates(rec)
+	keys := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		keys = append(keys, candidate.key)
 	}
 	return keys
+}
+
+type recordFileCandidate struct {
+	input string
+	key   string
+}
+
+func recordFileCandidates(rec model.Record) []recordFileCandidate {
+	candidates := make([]recordFileCandidate, 0, len(rec.Source.Database.Filenames)+3)
+	appendCandidate := func(input string) {
+		if input != "" {
+			candidates = append(candidates, recordFileCandidate{input: input, key: fileKey(input)})
+		}
+	}
+	appendCandidate(rec.ID.FileName)
+	if rec.ID.FileName != "" && rec.ID.Extension != "" {
+		appendCandidate(rec.ID.FileName + "." + rec.ID.Extension)
+	}
+	if rec.ID.Archive != nil {
+		appendCandidate(rec.ID.Archive.Entry)
+	}
+	for _, name := range rec.Source.Database.Filenames {
+		appendCandidate(name)
+	}
+	return candidates
 }
 
 func fileKey(name string) string {

@@ -238,7 +238,48 @@ func TestDatasetRecordFromArchiveRecordRecordsAbsentDatabase(t *testing.T) {
 	if db.Locator == nil || db.Locator.BookID == nil || *db.Locator.BookID != 42 {
 		t.Fatalf("database locator = %#v, want book ID 42", db.Locator)
 	}
-	if converted.Claims.Bibliographic != nil || converted.Identities != nil {
+	if converted.Claims.Bibliographic != nil {
+		t.Fatalf("unexpected database claims: %#v", converted.Claims)
+	}
+	if converted.Identities == nil || len(converted.Identities.Catalog) != 1 {
 		t.Fatalf("unexpected database claims or identities: claims=%#v identities=%#v", converted.Claims, converted.Identities)
+	}
+	identity := converted.Identities.Catalog[0]
+	if identity.Observation != "archive" || identity.Basis != "numeric_entry_stem" || identity.Value != "42" {
+		t.Fatalf("inferred identity = %#v", identity)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
+	t.Parallel()
+
+	bookID := int64(42)
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:  "flibusta",
+			BookID:   bookID,
+			FileName: "42",
+			Archive:  &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "42.fb2", Index: 5},
+		},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: bookID},
+		}},
+	}
+	match := &model.Match{Method: "numeric_entry_stem", Input: "42", Candidate: &bookID, BookID: &bookID}
+
+	converted, err := datasetRecordFromRecordWithMatch(rec, map[string]string{"/archives/books.zip": "archive-0001"}, match, bookID)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+	}
+	if len(converted.Observations) < 2 || converted.Observations[1].Match == nil {
+		t.Fatalf("observations = %#v, want database match", converted.Observations)
+	}
+	if converted.Observations[1].Match.Method != "numeric_entry_stem" {
+		t.Fatalf("database match = %#v", converted.Observations[1].Match)
+	}
+	if converted.Identities == nil || len(converted.Identities.Catalog) != 2 {
+		t.Fatalf("catalog identities = %#v, want database and inferred", converted.Identities)
 	}
 }

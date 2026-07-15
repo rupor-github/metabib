@@ -254,6 +254,62 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 	}
 }
 
+func TestMergeArchiveManifestsRecordsFilenameMatch(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "books.manifest.zst")
+	archivePath := filepath.Join(dir, "books.zip")
+	writeTestManifest(t, manifestPath, model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:  "flibusta",
+			BookID:   7,
+			FileName: "7",
+			Archive:  &model.ArchiveInfo{Path: archivePath, Entry: "7.fb2"},
+		},
+	})
+	dbSource := model.DatabaseSource{
+		Present:   true,
+		Book:      &model.DBBook{BookID: 42},
+		Filenames: []string{"7.fb2"},
+	}
+	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if _, err := mergeArchiveManifests(
+		ctx,
+		[]library.ArchiveManifestDecision{{ArchivePath: archivePath, ManifestPath: manifestPath}},
+		databaseIndex{
+			byID:   map[int64]model.DatabaseSource{},
+			byFile: map[string]model.DatabaseSource{"7.fb2": dbSource},
+		},
+		map[string]string{archivePath: "archive-0001"},
+		out,
+		nil,
+	); err != nil {
+		t.Fatalf("mergeArchiveManifests() error = %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("Close output error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{
+		`"method":"filename_alias"`,
+		`"book_id":42`,
+		`"observation":"archive","basis":"numeric_entry_stem"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("merged output = %s, missing %s", data, want)
+		}
+	}
+}
+
 func writeTestManifest(t *testing.T, path string, records ...model.Record) {
 	t.Helper()
 	f, err := os.Create(path)

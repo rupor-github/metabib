@@ -786,6 +786,32 @@ func datasetArchiveSources(dataset model.Dataset) map[string]string {
 	return sources
 }
 
+func databaseNumericMatch(rec model.Record, source model.DatabaseSource) *model.Match {
+	return &model.Match{
+		Method:     "numeric_entry_stem",
+		Input:      rec.ID.FileName,
+		Normalized: fileKey(rec.ID.FileName),
+		Candidate:  positiveBookID(rec.ID.BookID),
+		BookID:     positiveBookID(databaseSourceBookID(source, rec.ID.BookID)),
+	}
+}
+
+func databaseFilenameMatch(candidate recordFileCandidate, source model.DatabaseSource) *model.Match {
+	return &model.Match{
+		Method:     "filename_alias",
+		Input:      candidate.input,
+		Normalized: candidate.key,
+		BookID:     positiveBookID(databaseSourceBookID(source, 0)),
+	}
+}
+
+func databaseSourceBookID(source model.DatabaseSource, fallback int64) int64 {
+	if source.Book != nil && source.Book.BookID > 0 {
+		return source.Book.BookID
+	}
+	return fallback
+}
+
 func writeDatabaseManifestRecords(
 	ctx context.Context,
 	manifestPath string,
@@ -832,16 +858,20 @@ func mergeArchiveManifests(
 			if rec.ID.Archive != nil {
 				rec.ID.Archive.Path = decision.ArchivePath
 			}
+			inferredBookID := rec.ID.BookID
+			var databaseMatch *model.Match
 			rec.Source.Database = model.DatabaseSource{}
 			if rec.ID.BookID > 0 {
 				if source, ok := dbIndex.byID[rec.ID.BookID]; ok {
 					rec.Source.Database = source
+					databaseMatch = databaseNumericMatch(rec, source)
 				}
 			}
 			if !rec.Source.Database.Present {
-				for _, key := range recordFileKeys(rec) {
-					if source, ok := dbIndex.byFile[key]; ok {
+				for _, candidate := range recordFileCandidates(rec) {
+					if source, ok := dbIndex.byFile[candidate.key]; ok {
 						rec.Source.Database = source
+						databaseMatch = databaseFilenameMatch(candidate, source)
 						if source.Book != nil {
 							rec.ID.BookID = source.Book.BookID
 						}
@@ -849,7 +879,7 @@ func mergeArchiveManifests(
 					}
 				}
 			}
-			converted, err := datasetRecordFromRecord(rec, archiveSources)
+			converted, err := datasetRecordFromRecordWithMatch(rec, archiveSources, databaseMatch, inferredBookID)
 			if err != nil {
 				return err
 			}
