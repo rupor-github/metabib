@@ -399,6 +399,34 @@ Examples:
 - `notes.fb2` with no database match remains a valid archive/FB2-only record and
   has no invented catalog identity.
 
+### Inspect Dataset
+
+Use `inspect` for quick checks and debugging of merged dataset JSONL artifacts:
+
+```sh
+metabib inspect --input combined
+metabib inspect --input combined --archives
+metabib inspect --input combined --validate
+metabib inspect --input combined --book-id 12345
+metabib inspect --input combined --archive archive-0001 --index 42
+metabib inspect --input combined --file 12345.fb2 --json
+```
+
+`--input` accepts the same prefix or exact dataset path as INPX commands. For
+example, `--input combined` discovers exactly one of `combined.jsonl`,
+`combined.jsonl.zst`, `combined.jsonl.gz`, or `combined.jsonl.zip`.
+
+`--archives` lists dataset archive source IDs, archive names, and path hints so
+IDs such as `archive-0001` can be correlated with real ZIP files. Archive source
+IDs are local to one merged dataset; use archive names, path hints, and checksums
+for long-term correlation across regenerated datasets.
+
+`--validate` streams the full dataset and validates ordering, schemas,
+provenance references, source declarations, and archive indexes without writing
+any derived artifacts. Lookup modes return the first matching record by catalog
+book ID, archive source/index, or file name. Add `--json` for machine-readable
+output.
+
 ### INPX Generation
 
 Build a MyHomeLib-compatible FB2 INPX from merged dataset JSONL:
