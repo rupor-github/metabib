@@ -130,6 +130,10 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	updates, err = refineUpdatesByContents(updates, merge.end, opts.Log)
+	if err != nil {
+		return Result{}, err
+	}
 	if len(updates) == 0 {
 		if opts.Log != nil {
 			opts.Log.Info("No archive updates found")
@@ -561,6 +565,82 @@ func getUpdates(files []archive, last int) ([]archive, error) {
 		}
 	}
 	return updates, nil
+}
+
+func refineUpdatesByContents(updates []archive, last int, log *zap.Logger) ([]archive, error) {
+	res := make([]archive, 0, len(updates))
+	for _, update := range updates {
+		actualBegin, actualEnd, err := updateArchiveActualRange(update)
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.Join(update.dir, update.info.Name())
+		if actualEnd == 0 {
+			if log != nil {
+				log.Warn(
+					"Skipping archive update with no usable entries",
+					zap.String("file", path),
+					zap.Int("existing_end", last),
+				)
+			}
+			continue
+		}
+		if actualBegin != update.begin || actualEnd != update.end {
+			if log != nil {
+				log.Warn(
+					"Archive update range adjusted to actual entries",
+					zap.String("file", path),
+					zap.Int("begin", update.begin),
+					zap.Int("end", update.end),
+					zap.Int("actual_begin", actualBegin),
+					zap.Int("actual_end", actualEnd),
+				)
+			}
+			update.begin = actualBegin
+			update.end = actualEnd
+		}
+		if update.end <= last {
+			if log != nil {
+				log.Warn(
+					"Skipping archive update with no new entries",
+					zap.String("file", path),
+					zap.Int("end", update.end),
+					zap.Int("existing_end", last),
+				)
+			}
+			continue
+		}
+		res = append(res, update)
+	}
+	return res, nil
+}
+
+func updateArchiveActualRange(update archive) (int, int, error) {
+	path := filepath.Join(update.dir, update.info.Name())
+	rc, err := zip.OpenReader(path)
+	if err != nil {
+		return 0, 0, fmt.Errorf("open update archive %q: %w", path, err)
+	}
+	begin, end := 0, 0
+	for _, file := range rc.File {
+		if file.FileInfo().Size() == 0 {
+			continue
+		}
+		id := nameToID(file.FileInfo().Name())
+		if id <= 0 {
+			continue
+		}
+		if begin == 0 || id < begin {
+			begin = id
+		}
+		if id > end {
+			end = id
+		}
+	}
+	if err := rc.Close(); err != nil {
+		return 0, 0, fmt.Errorf("close update archive %q: %w", path, err)
+	}
+	return begin, end, nil
 }
 
 func dissectUpdateName(name string) (bool, int, int, error) {

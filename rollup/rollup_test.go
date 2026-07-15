@@ -231,6 +231,47 @@ func TestRunKeepsNewEntriesFromOverlappingUpdates(t *testing.T) {
 	}
 }
 
+func TestRunSkipsUpdateWhenFilenameEndExceedsActualEntries(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	mergePath := filepath.Join(archives, "fb2-0000000001-0000000101.merging")
+	writeZip(t, mergePath, map[string]string{
+		"1.fb2":   "one",
+		"101.fb2": "one hundred one",
+	})
+	writeZip(t, filepath.Join(updates, "f.fb2.0000000101-0000000102.zip"), map[string]string{
+		"101.fb2": "duplicate",
+	})
+	core, logs := observer.New(zap.DebugLevel)
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir: archives,
+		UpdateDirs: []string{updates},
+		SizeBytes:  1_000_000,
+		Log:        zap.New(core),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.Updates != 0 {
+		t.Fatalf("Updates = %d, want 0", res.Updates)
+	}
+	if entries, err := countZipEntries(mergePath); err != nil || entries != 2 {
+		t.Fatalf("merge entries=%d err=%v, want original two entries", entries, err)
+	}
+	if logs.FilterMessage("Archive update range adjusted to actual entries").Len() != 1 {
+		t.Fatalf("logs = %#v, want actual range warning", logs.All())
+	}
+	if logs.FilterMessage("Skipping archive update with no new entries").Len() != 1 {
+		t.Fatalf("logs = %#v, want no-new-entries warning", logs.All())
+	}
+	if logs.FilterMessage("Processing update archive").Len() != 0 {
+		t.Fatalf("logs = %#v, want stale update skipped before processing", logs.All())
+	}
+}
+
 func TestRunSkipsDuplicatesWithinActiveWorkArchive(t *testing.T) {
 	t.Parallel()
 
