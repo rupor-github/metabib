@@ -388,6 +388,7 @@ func ValidateArchiveManifests(
 		decisions = append(decisions, decision)
 		reports = append(reports, report)
 	}
+	logArchiveManifestSummary(log, reports)
 	return decisions, reports, nil
 }
 
@@ -810,6 +811,47 @@ func logManifestReport(log *zap.Logger, report ManifestReport, verbose bool) {
 		return
 	}
 	if report.Ready(false) {
+		log.Info("Manifest ready", fields...)
+		return
+	}
+	log.Warn("Manifest not ready", fields...)
+}
+
+func logArchiveManifestSummary(log *zap.Logger, reports []ManifestReport) {
+	if log == nil || len(reports) == 0 {
+		return
+	}
+	var records int64
+	var ready, valid, fresh, missing, checksumVerified int
+	for _, report := range reports {
+		records += report.Records
+		if report.Ready(false) {
+			ready++
+		}
+		if report.Valid {
+			valid++
+		}
+		if report.Fresh {
+			fresh++
+		}
+		if report.Missing {
+			missing++
+		}
+		if report.ChecksumVerified {
+			checksumVerified++
+		}
+	}
+	fields := []zap.Field{
+		zap.String("kind", "archives"),
+		zap.Int("manifests", len(reports)),
+		zap.Int("ready", ready),
+		zap.Int("valid", valid),
+		zap.Int("fresh", fresh),
+		zap.Int("missing", missing),
+		zap.Int("checksum_verified", checksumVerified),
+		zap.Int64("records", records),
+	}
+	if ready == len(reports) {
 		log.Info("Manifest ready", fields...)
 		return
 	}

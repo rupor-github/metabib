@@ -245,7 +245,8 @@ func TestArchiveManifestReadyLogsRequireVerbose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateArchiveManifests() error = %v", err)
 	}
-	if logs.FilterMessage("Archive manifest selected").Len() != 0 || logs.FilterMessage("Manifest ready").Len() != 0 {
+	if logs.FilterMessage("Archive manifest selected").Len() != 0 ||
+		logs.FilterMessage("Manifest ready").Len() != 1 {
 		t.Fatalf("non-verbose archive manifest logs = %#v", logs.AllUntimed())
 	}
 
@@ -262,7 +263,8 @@ func TestArchiveManifestReadyLogsRequireVerbose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateArchiveManifests() error = %v", err)
 	}
-	if logs.FilterMessage("Archive manifest selected").Len() != 1 || logs.FilterMessage("Manifest ready").Len() != 1 {
+	if logs.FilterMessage("Archive manifest selected").Len() != 1 ||
+		logs.FilterMessage("Manifest ready").Len() != 2 {
 		t.Fatalf("verbose archive manifest logs = %#v", logs.AllUntimed())
 	}
 }
