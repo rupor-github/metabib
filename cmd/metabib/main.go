@@ -35,8 +35,9 @@ var errManifestNotReady = errors.New("one or more cache manifests are missing, s
 var errWasHandled bool
 
 type databaseIndex struct {
-	byID   map[int64]model.DatabaseSource
-	byFile map[string]model.DatabaseSource
+	byID           map[int64]model.DatabaseSource
+	byFile         map[string]model.DatabaseSource
+	ambiguousFiles map[string]struct{}
 }
 
 func initializeAppContext(ctx context.Context, cmd *cli.Command) (context.Context, error) {
@@ -748,14 +749,18 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 		return databaseIndex{}, nil
 	}
 	start := time.Now()
-	index := databaseIndex{byID: make(map[int64]model.DatabaseSource), byFile: make(map[string]model.DatabaseSource)}
+	index := databaseIndex{
+		byID:           make(map[int64]model.DatabaseSource),
+		byFile:         make(map[string]model.DatabaseSource),
+		ambiguousFiles: make(map[string]struct{}),
+	}
 	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
 		if rec.ID.BookID > 0 && rec.Source.Database.Present {
 			index.byID[rec.ID.BookID] = rec.Source.Database
 		}
 		for _, key := range recordFileKeys(rec) {
 			if rec.Source.Database.Present {
-				index.byFile[key] = rec.Source.Database
+				index.addDatabaseFile(key, rec.Source.Database)
 			}
 		}
 		return nil
@@ -770,10 +775,29 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 			zap.Int64("records", records),
 			zap.Int("book_ids", len(index.byID)),
 			zap.Int("file_names", len(index.byFile)),
+			zap.Int("ambiguous_file_names", len(index.ambiguousFiles)),
 			zap.Duration("elapsed", time.Since(start)),
 		)
 	}
 	return index, nil
+}
+
+func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSource) {
+	if key == "" {
+		return
+	}
+	if _, ambiguous := index.ambiguousFiles[key]; ambiguous {
+		return
+	}
+	if existing, exists := index.byFile[key]; exists {
+		if databaseSourceBookID(existing, 0) == databaseSourceBookID(source, 0) {
+			return
+		}
+		delete(index.byFile, key)
+		index.ambiguousFiles[key] = struct{}{}
+		return
+	}
+	index.byFile[key] = source
 }
 
 func datasetArchiveSources(dataset model.Dataset) map[string]string {

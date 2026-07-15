@@ -55,6 +55,28 @@ func TestRecordFileKeys(t *testing.T) {
 	}
 }
 
+func TestDatabaseIndexMarksDuplicateFilenamesAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	index := databaseIndex{byFile: make(map[string]model.DatabaseSource), ambiguousFiles: make(map[string]struct{})}
+	first := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
+	same := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42}}
+	other := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 43}}
+
+	index.addDatabaseFile("book.fb2", first)
+	index.addDatabaseFile("book.fb2", same)
+	if got := databaseSourceBookID(index.byFile["book.fb2"], 0); got != 42 {
+		t.Fatalf("indexed book ID = %d, want 42", got)
+	}
+	index.addDatabaseFile("book.fb2", other)
+	if _, ok := index.byFile["book.fb2"]; ok {
+		t.Fatalf("ambiguous key stayed indexed: %#v", index.byFile)
+	}
+	if _, ok := index.ambiguousFiles["book.fb2"]; !ok {
+		t.Fatalf("ambiguous files = %#v, want book.fb2", index.ambiguousFiles)
+	}
+}
+
 func TestDumpDirDatesDiffer(t *testing.T) {
 	t.Parallel()
 
