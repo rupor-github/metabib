@@ -118,6 +118,7 @@ func main() {
 			rollupCommand(),
 			cacheCommand(),
 			mergeCommand(),
+			inspectCommand(),
 			mhlINPXCommand(),
 			flibINPXCommand(),
 			{
