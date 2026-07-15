@@ -199,3 +199,20 @@ func TestDatasetBookIDFallsBackToArtifactStem(t *testing.T) {
 		})
 	}
 }
+
+func TestDatasetRecordClaimsPreservesFB2YearText(t *testing.T) {
+	t.Parallel()
+
+	year := int64(101)
+	rec := model.DatasetRecord{Claims: model.Claims{Publication: &model.PublicationClaims{
+		Year: []model.Claim{{Observation: "fb2", Value: model.YearValue{Text: "0101", Value: &year}}},
+	}}}
+
+	view, err := DatasetRecordClaims(rec)
+	if err != nil {
+		t.Fatalf("DatasetRecordClaims() error = %v", err)
+	}
+	if view.FB2Publication.Year != "0101" {
+		t.Fatalf("FB2 publication year = %q, want 0101", view.FB2Publication.Year)
+	}
+}

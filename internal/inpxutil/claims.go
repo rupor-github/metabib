@@ -257,6 +257,9 @@ func claimYear(claims []model.Claim, observation string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("decode %s publication year: %w", observation, err)
 		}
+		if observation == "fb2" && value.Text != "" {
+			return value.Text, nil
+		}
 		if value.Value != nil {
 			return strconv.FormatInt(*value.Value, 10), nil
 		}
