@@ -120,7 +120,6 @@ tasks:
       - defer: rm -rf {{.BUILD_DIR}}
       - task: go-build
         vars: {GOOS: '{{.GOOS}}', GOARCH: '{{.GOARCH}}', CGO_ENABLED: '0', FLAGS: 'release', PACKAGE: './cmd/{{.PRJ_NAME}}', TARGET: '{{.BUILD_DIR}}/{{.PRJ_NAME}}{{.SUFFIX}}'}
-      - cp docs/*.json {{.BUILD_DIR}}/
       - echo "{{.TATN}}Archiving release \"{{.REL_NAME}}.zip\"{{.TOFF}}"
       - 7z a -r -bd -bso0 -tzip {{.REL_NAME}} ./{{.BUILD_DIR}}/*
     status:
@@ -150,7 +149,6 @@ tasks:
       - ./**/*.mod
       - ./**/*.sum
       - ./config/config.yaml.tmpl
-      - ./docs/*.json
     generates:
       - '{{.TARGET}}'
 

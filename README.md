@@ -44,6 +44,14 @@ manifests and combined output records are JSON data with well-defined schemas,
 making the resulting dataset easy to validate, transform, and consume from other
 tools.
 
+Schema definitions are maintained in [`docs/`](docs/):
+
+- dataset header: [`metabib-dataset.schema.json`](docs/metabib-dataset.schema.json);
+- dataset records: [`metabib-dataset-record.schema.json`](docs/metabib-dataset-record.schema.json);
+- source cache records: [`metabib.schema.json`](docs/metabib.schema.json);
+- archive cache manifests: [`metabib-archive-manifest.schema.json`](docs/metabib-archive-manifest.schema.json);
+- database cache manifests: [`metabib-database-manifest.schema.json`](docs/metabib-database-manifest.schema.json).
+
 ## What It Does
 
 `metabib` is organized around reusable processing passes:
