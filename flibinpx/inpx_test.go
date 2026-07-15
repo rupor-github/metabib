@@ -83,12 +83,16 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 		t.Fatalf("line count = %d inp=%q", len(lines), entries["fb2-0000000001-0000000002.inp"])
 	}
 	first := strings.Split(lines[0], inpxutil.FieldSep)
+	second := strings.Split(lines[1], inpxutil.FieldSep)
 	third := strings.Split(lines[2], inpxutil.FieldSep)
-	if len(first) != 19 || len(third) != 19 {
-		t.Fatalf("field counts = %d, %d first=%#v third=%#v", len(first), len(third), first, third)
+	if len(first) != 19 || len(second) != 19 || len(third) != 19 {
+		t.Fatalf("field counts = %d, %d, %d first=%#v second=%#v third=%#v", len(first), len(second), len(third), first, second, third)
 	}
 	if first[3] != "Cycle" || first[4] != "1" || first[11] != "1" || first[12] != filepath.Base(archivePath) {
 		t.Fatalf("first fields = %#v", first)
+	}
+	if second[3] != "Publisher Series" || second[4] != "10" || second[11] != "2" {
+		t.Fatalf("second fields = %#v", second)
 	}
 	if third[3] != "Universe / Cycle" || third[4] != "7" || third[11] != "3" {
 		t.Fatalf("third fields = %#v", third)
@@ -175,6 +179,78 @@ func TestFlattenFB2Sequences(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRecordSequencesFB2PreferenceModes(t *testing.T) {
+	t.Parallel()
+
+	rec := flibRecord("archive-0001", 0, "1.fb2")
+	view, err := inpxutil.DatasetRecordClaims(rec)
+	if err != nil {
+		t.Fatalf("DatasetRecordClaims() error = %v", err)
+	}
+	tests := []struct {
+		preference FB2Preference
+		want       []sequence
+	}{
+		{
+			preference: PreferIgnore,
+			want: []sequence{
+				{Name: "Cycle", Number: "1", Source: "db"},
+				{Name: "Publisher Series", Number: "10", Source: "db"},
+			},
+		},
+		{
+			preference: PreferComplement,
+			want: []sequence{
+				{Name: "Cycle", Number: "1", Source: "db"},
+				{Name: "Publisher Series", Number: "10", Source: "db"},
+			},
+		},
+		{
+			preference: PreferMerge,
+			want: []sequence{
+				{Name: "Cycle", Number: "1", Source: "db"},
+				{Name: "Publisher Series", Number: "10", Source: "db"},
+				{Name: "Universe > Cycle", Number: "7", Source: "fb2"},
+			},
+		},
+		{preference: PreferReplace, want: []sequence{{Name: "Universe > Cycle", Number: "7", Source: "fb2"}}},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.preference), func(t *testing.T) {
+			t.Parallel()
+
+			got := recordSequences(rec, view, Options{
+				SequenceMode:     SequenceAll,
+				FB2Preference:    tt.preference,
+				FlattenMode:      FlattenPath,
+				DedupMode:        DedupCaseInsensitive,
+				FB2PathSeparator: " > ",
+			})
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d got=%#v want=%#v", len(got), got, tt.want)
+			}
+			for idx := range got {
+				if got[idx] != tt.want[idx] {
+					t.Fatalf("sequence[%d] = %#v, want %#v", idx, got[idx], tt.want[idx])
+				}
+			}
+		})
+	}
+}
+
+func TestDedupSequencesCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	rec := flibOnlineRecord(1)
+	got := dedupSequences(rec, []sequence{
+		{Name: "Cycle", Number: "1", Source: "db"},
+		{Name: "cycle", Number: "2", Source: "fb2"},
+	}, Options{DedupMode: DedupCaseInsensitive})
+	if len(got) != 1 || got[0].Name != "Cycle" || got[0].Number != "1" || got[0].Source != "db" {
+		t.Fatalf("dedupSequences() = %#v", got)
 	}
 }
 

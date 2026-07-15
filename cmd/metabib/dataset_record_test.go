@@ -32,14 +32,21 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 			},
 			Authors: []model.Contributor{{
 				ID:         7,
+				UID:        70,
 				FirstName:  "First",
 				MiddleName: "Middle",
 				LastName:   "Last",
 				NickName:   "Nick",
-				Position:   0,
+				Email:      "author@example.org",
+				Homepage:   "https://example.org/author",
+				Gender:     "m",
+				MasterID:   700,
+				Position:   1,
 			}},
+			Translators:  []model.Contributor{{ID: 8, FirstName: "Translator", LastName: "Person", Position: 2}},
+			Illustrators: []model.Contributor{{ID: 9, FirstName: "Illustrator", LastName: "Artist", Position: 3}},
 			Genres: []model.DBGenre{{
-				ID:             9,
+				ID:             19,
 				Code:           "sf",
 				TranslatedCode: "sci-fi",
 				Description:    "Science fiction",
@@ -74,12 +81,30 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 	if !ok || len(authors) != 1 || authors[0].FirstName != "First" || authors[0].LastName != "Last" {
 		t.Fatalf("authors claim = %#v", converted.Claims.Bibliographic.Authors[0].Value)
 	}
+	if len(authors[0].Identities) != 2 || authors[0].Email != "author@example.org" || authors[0].Homepage != "https://example.org/author" ||
+		authors[0].Gender != "m" || authors[0].MasterID != "700" || authors[0].Position == nil || *authors[0].Position != 1 {
+		t.Fatalf("author metadata = %#v", authors[0])
+	}
+	translators, ok := converted.Claims.Bibliographic.Translators[0].Value.([]model.PersonValue)
+	if !ok || len(translators) != 1 || translators[0].FirstName != "Translator" {
+		t.Fatalf("translators claim = %#v", converted.Claims.Bibliographic.Translators[0].Value)
+	}
+	illustrators, ok := converted.Claims.Bibliographic.Illustrators[0].Value.([]model.PersonValue)
+	if !ok || len(illustrators) != 1 || illustrators[0].FirstName != "Illustrator" {
+		t.Fatalf("illustrators claim = %#v", converted.Claims.Bibliographic.Illustrators[0].Value)
+	}
 	sequences, ok := converted.Claims.Bibliographic.Sequences[0].Value.([]model.SequenceValue)
 	if !ok || len(sequences) != 1 || sequences[0].Number == nil || sequences[0].Number.Value == nil || *sequences[0].Number.Value != 0 {
 		t.Fatalf("sequences claim = %#v", converted.Claims.Bibliographic.Sequences[0].Value)
 	}
-	if sequences[0].Type == nil || *sequences[0].Type != 0 {
+	if len(sequences[0].Identities) != 1 || sequences[0].Type == nil || *sequences[0].Type != 0 {
 		t.Fatalf("sequence type = %#v, want explicit zero", sequences[0].Type)
+	}
+	if got := converted.Claims.Catalog.Modified[0].Value; got != "2026-07-14T05:00:00Z" {
+		t.Fatalf("modified claim = %#v", got)
+	}
+	if got := converted.Claims.Catalog.FileAuthor[0].Value; got != "file author" {
+		t.Fatalf("file author claim = %#v", got)
 	}
 	if len(converted.Artifacts) != 1 || len(converted.Artifacts[0].Checksums) != 1 || converted.Artifacts[0].Name != "42.fb2" {
 		t.Fatalf("artifacts = %#v", converted.Artifacts)
@@ -104,14 +129,24 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 				Index:            5,
 				CompressedSize:   123,
 				UncompressedSize: 456,
+				ContentMD5:       "0123456789abcdef0123456789abcdef",
+				Modified:         "2026-07-14T05:00:00Z",
 			},
 		},
 		Source: model.RecordSources{FB2: model.FB2Source{
 			Present: true,
 			Description: &model.FB2Description{
 				TitleInfo: &model.FB2TitleInfo{
-					Genres:     []model.FB2Genre{{Code: "sf", Match: "exact"}},
-					Authors:    []model.FB2Person{{ID: "person-1", FirstName: "Arkady", LastName: "Strugatsky"}},
+					Genres: []model.FB2Genre{{Code: "sf", Match: "exact"}},
+					Authors: []model.FB2Person{{
+						ID:         "person-1",
+						FirstName:  "Arkady",
+						MiddleName: "N",
+						LastName:   "Strugatsky",
+						NickName:   "ABS",
+						Emails:     []string{"arkady@example.org"},
+						HomePages:  []string{"https://example.org/arkady"},
+					}},
 					Title:      "FB2 title",
 					Annotation: "Annotation",
 					Keywords:   "one, two",
@@ -133,7 +168,7 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 						}},
 					}},
 				},
-				SrcTitleInfo: &model.FB2TitleInfo{Title: "Original title"},
+				SrcTitleInfo: &model.FB2TitleInfo{Title: "Original title", Language: "en"},
 				DocumentInfo: &model.FB2DocumentInfo{
 					ID:          "urn:uuid:document",
 					Authors:     []model.FB2Person{{FirstName: "Doc", LastName: "Author"}},
@@ -175,9 +210,15 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 	if got := converted.Claims.Original.Title[0].Value; got != "Original title" {
 		t.Fatalf("original title claim = %#v", got)
 	}
+	if got := converted.Claims.Original.Language[0].Value; got != "en" {
+		t.Fatalf("original language claim = %#v", got)
+	}
 	authors, ok := converted.Claims.Bibliographic.Authors[0].Value.([]model.PersonValue)
 	if !ok || len(authors) != 1 || len(authors[0].Identities) != 1 || authors[0].Position == nil || *authors[0].Position != 1 {
 		t.Fatalf("FB2 authors claim = %#v", converted.Claims.Bibliographic.Authors[0].Value)
+	}
+	if authors[0].MiddleName != "N" || authors[0].NickName != "ABS" || len(authors[0].Emails) != 1 || len(authors[0].Homepages) != 1 {
+		t.Fatalf("FB2 author metadata = %#v", authors[0])
 	}
 	genres, ok := converted.Claims.Bibliographic.Genres[0].Value.([]model.GenreValue)
 	if !ok || len(genres) != 1 || genres[0].Code != "sf" || genres[0].Match != "exact" {
@@ -199,6 +240,19 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 	if got := converted.Claims.Document.ProgramUsed[0].Value; got != "metabib" {
 		t.Fatalf("program used claim = %#v", got)
 	}
+	if got := converted.Claims.Document.SourceOCR[0].Value; got != "ocr" {
+		t.Fatalf("source OCR claim = %#v", got)
+	}
+	if got := converted.Claims.Document.History[0].Value; got != "history" {
+		t.Fatalf("history claim = %#v", got)
+	}
+	publishers, ok := converted.Claims.Document.Publishers[0].Value.([]model.PersonValue)
+	if !ok || len(publishers) != 1 || publishers[0].FirstName != "Doc" {
+		t.Fatalf("document publishers claim = %#v", converted.Claims.Document.Publishers[0].Value)
+	}
+	if got := converted.Claims.Publication.City[0].Value; got != "City" {
+		t.Fatalf("publication city claim = %#v", got)
+	}
 	year, ok := converted.Claims.Publication.Year[0].Value.(model.YearValue)
 	if !ok || year.Text != "1972" || year.Value == nil || *year.Value != 1972 {
 		t.Fatalf("publication year claim = %#v", converted.Claims.Publication.Year[0].Value)
@@ -208,6 +262,17 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 	}
 	if len(converted.Claims.Document.CustomInfo) != 1 || len(converted.Claims.Document.Output) != 1 {
 		t.Fatalf("document claims = %#v", converted.Claims.Document)
+	}
+	publicationSequences, ok := converted.Claims.Publication.Sequences[0].Value.([]model.SequenceValue)
+	if !ok || len(publicationSequences) != 1 || publicationSequences[0].Name != "Publication cycle" {
+		t.Fatalf("publication sequences claim = %#v", converted.Claims.Publication.Sequences[0].Value)
+	}
+	if len(converted.Artifacts) != 1 || len(converted.Artifacts[0].Size) != 1 || len(converted.Artifacts[0].Checksums) != 1 {
+		t.Fatalf("archive artifact = %#v", converted.Artifacts)
+	}
+	if converted.Artifacts[0].Size[0].Observation != "archive" || converted.Artifacts[0].Size[0].Value != 456 ||
+		converted.Artifacts[0].Checksums[0].Value != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("archive artifact provenance = %#v", converted.Artifacts[0])
 	}
 }
 
@@ -228,7 +293,7 @@ func TestDatasetRecordFromArchiveRecordRecordsAbsentDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
-	if len(converted.Observations) != 2 {
+	if len(converted.Observations) < 2 {
 		t.Fatalf("observations = %#v, want archive and absent database", converted.Observations)
 	}
 	db := converted.Observations[1]
@@ -340,6 +405,27 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
 	if len(converted.Observations) != 3 || converted.Observations[2].ID != "fb2" ||
 		converted.Observations[2].Status != "not_collected" {
 		t.Fatalf("observations = %#v, want FB2 not_collected", converted.Observations)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordRecordsFB2Absent(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library: "flibusta",
+			Archive: &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "book.fb2", Index: 5},
+		},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Observations) != 3 || converted.Observations[2].ID != "fb2" ||
+		converted.Observations[2].Status != "absent" {
+		t.Fatalf("observations = %#v, want absent FB2 description", converted.Observations)
 	}
 }
 

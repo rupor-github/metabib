@@ -284,6 +284,104 @@ func TestDatasetValuesRejectsOutOfDatabaseBookIDOrder(t *testing.T) {
 	}
 }
 
+func TestDatasetValuesValidatesRecordProvenance(t *testing.T) {
+	t.Parallel()
+
+	dataset := provenanceDataset()
+	path := writeDatasetStream(t, CompressionNone, dataset, provenanceRecord())
+	_, records, err := readDatasetValues(context.Background(), path)
+	if err != nil {
+		t.Fatalf("DatasetValues() error = %v", err)
+	}
+	if records != 1 {
+		t.Fatalf("records=%d, want 1", records)
+	}
+}
+
+func TestDatasetValuesRejectsInvalidRecordProvenance(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		dataset   func() model.Dataset
+		record    func() model.DatasetRecord
+		wantError string
+	}{
+		{
+			name:    "claim missing observation",
+			dataset: provenanceDataset,
+			record: func() model.DatasetRecord {
+				record := provenanceRecord()
+				record.Claims.Bibliographic.Title[0].Observation = "missing"
+				return record
+			},
+			wantError: "references missing observation",
+		},
+		{
+			name: "database source undeclared",
+			dataset: func() model.Dataset {
+				dataset := provenanceDataset()
+				dataset.Database = nil
+				return dataset
+			},
+			record:    provenanceRecord,
+			wantError: "undeclared database source",
+		},
+		{
+			name:    "observation archive undeclared",
+			dataset: provenanceDataset,
+			record: func() model.DatasetRecord {
+				record := provenanceRecord()
+				record.Observations[0].Source = "archive-missing"
+				return record
+			},
+			wantError: "undeclared archive source",
+		},
+		{
+			name:    "observation archive index invalid",
+			dataset: provenanceDataset,
+			record: func() model.DatasetRecord {
+				record := provenanceRecord()
+				badIndex := 2
+				record.Observations[0].Locator.Index = &badIndex
+				return record
+			},
+			wantError: "invalid archive entry index",
+		},
+		{
+			name:    "artifact occurrence archive undeclared",
+			dataset: provenanceDataset,
+			record: func() model.DatasetRecord {
+				record := provenanceRecord()
+				record.Artifacts[0].Occurrences[0].Archive = "archive-missing"
+				return record
+			},
+			wantError: "undeclared archive source",
+		},
+		{
+			name:    "artifact occurrence archive index invalid",
+			dataset: provenanceDataset,
+			record: func() model.DatasetRecord {
+				record := provenanceRecord()
+				record.Artifacts[0].Occurrences[0].Index = -1
+				return record
+			},
+			wantError: "invalid archive entry index",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := writeDatasetStream(t, CompressionNone, tt.dataset(), tt.record())
+			_, _, err := readDatasetValues(context.Background(), path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("DatasetValues() error=%v, want %q", err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestDatasetValuesCompressedInput(t *testing.T) {
 	t.Parallel()
 
@@ -346,6 +444,64 @@ func datasetDatabaseRecord(bookID int64) model.DatasetRecord {
 		Record: model.RecordDescriptor{
 			Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: &bookID},
 		},
+	}
+}
+
+func provenanceDataset() model.Dataset {
+	return model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Records:      1,
+		Database:     &model.DatasetDatabase{ID: "database"},
+		Archives:     []model.DatasetArchive{{ID: "archive-0001", Ordinal: 0, Entries: 2}},
+	}
+}
+
+func provenanceRecord() model.DatasetRecord {
+	index := 1
+	bookID := int64(42)
+	return model.DatasetRecord{
+		Schema: model.DatasetRecordSchemaV1,
+		Record: model.RecordDescriptor{
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001", Index: &index},
+		},
+		Identities: &model.Identities{
+			Catalog: []model.Identity{{Scheme: "flibusta.book", Value: "42", Observation: "db"}},
+		},
+		Artifacts: []model.Artifact{{
+			Name: "42.fb2",
+			Size: []model.ArtifactSize{{Observation: "db", Value: 123, Kind: "reported"}},
+			Checksums: []model.ArtifactChecksum{{
+				Observation: "archive",
+				Algorithm:   "md5",
+				Scope:       "content",
+				Origin:      "calculated",
+				Value:       "0123456789abcdef0123456789abcdef",
+			}},
+			Occurrences: []model.Occurrence{{Archive: "archive-0001", Entry: "42.fb2", Index: index}},
+		}},
+		Observations: []model.Observation{
+			{
+				ID:      "archive",
+				Source:  "archive-0001",
+				Kind:    "archive_entry",
+				Status:  "present",
+				Locator: &model.ObservationLocator{Entry: "42.fb2", Index: &index},
+			},
+			{
+				ID:      "db",
+				Source:  "database",
+				Kind:    "database_book",
+				Status:  "present",
+				Locator: &model.ObservationLocator{BookID: &bookID},
+			},
+		},
+		Claims: model.Claims{
+			Bibliographic: &model.BibliographicClaims{
+				Title: []model.Claim{{Observation: "db", Value: "Title"}},
+			},
+		},
+		Relations: []model.Relation{{Type: "replaced_by", Observation: "db"}},
 	}
 }
 

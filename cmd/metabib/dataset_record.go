@@ -43,7 +43,7 @@ func datasetRecordFromRecordWithMatch(
 			Locator:  &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: &index},
 			Coverage: "inventory",
 		})
-		out.Artifacts = []model.Artifact{{
+		artifact := model.Artifact{
 			Name:      rec.ID.Archive.Entry,
 			MediaType: mediaType(rec.ID.Extension),
 			Occurrences: []model.Occurrence{{
@@ -54,7 +54,24 @@ func datasetRecordFromRecordWithMatch(
 				UncompressedSize: rec.ID.Archive.UncompressedSize,
 				Modified:         rec.ID.Archive.Modified,
 			}},
-		}}
+		}
+		if rec.ID.Archive.UncompressedSize > 0 {
+			artifact.Size = append(artifact.Size, model.ArtifactSize{
+				Observation: "archive",
+				Value:       rec.ID.Archive.UncompressedSize,
+				Kind:        "uncompressed",
+			})
+		}
+		if rec.ID.Archive.ContentMD5 != "" {
+			artifact.Checksums = append(artifact.Checksums, model.ArtifactChecksum{
+				Observation: "archive",
+				Algorithm:   "md5",
+				Scope:       "content",
+				Origin:      "calculated",
+				Value:       rec.ID.Archive.ContentMD5,
+			})
+		}
+		out.Artifacts = []model.Artifact{artifact}
 		appendDatabaseObservation(&out, rec, databaseMatch)
 		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index, fb2NotCollected)
@@ -478,17 +495,17 @@ func appendFB2Observation(out *model.DatasetRecord, rec model.Record, source str
 				status = "error"
 			} else if fb2NotCollected {
 				status = "not_collected"
+			} else {
+				status = "absent"
 			}
-			if status != "" {
-				out.Observations = append(out.Observations, model.Observation{
-					ID:      "fb2",
-					Source:  source,
-					Kind:    "fb2_description",
-					Status:  status,
-					Parent:  "archive",
-					Locator: &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
-				})
-			}
+			out.Observations = append(out.Observations, model.Observation{
+				ID:      "fb2",
+				Source:  source,
+				Kind:    "fb2_description",
+				Status:  status,
+				Parent:  "archive",
+				Locator: &model.ObservationLocator{Entry: rec.ID.Archive.Entry, Index: index},
+			})
 		}
 		return
 	}

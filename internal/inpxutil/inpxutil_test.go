@@ -147,7 +147,12 @@ func TestLoadDatasetInputBucketsDatabaseOnlyRecords(t *testing.T) {
 
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "all")
-	dataset := model.Dataset{Schema: model.DatasetSchemaV1, RecordSchema: model.DatasetRecordSchemaV1, Records: 1}
+	dataset := model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Records:      1,
+		Database:     &model.DatasetDatabase{ID: "database"},
+	}
 	rec := model.DatasetRecord{
 		Schema: model.DatasetRecordSchemaV1,
 		Record: model.RecordDescriptor{

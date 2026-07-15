@@ -53,6 +53,7 @@ func DatasetValues(ctx context.Context, path string) iter.Seq2[DatasetValue, err
 			return
 		}
 		orderValidator := newDatasetOrderValidator(path, dataset)
+		recordValidator := newDatasetRecordValidator(path, dataset)
 
 		var records int64
 		for records < dataset.Records {
@@ -88,6 +89,10 @@ func DatasetValues(ctx context.Context, path string) iter.Seq2[DatasetValue, err
 				yield(DatasetValue{}, err)
 				return
 			}
+			if err := recordValidator.validate(rec, records+1); err != nil {
+				yield(DatasetValue{}, err)
+				return
+			}
 			if !yield(DatasetValue{Record: rec}, nil) {
 				return
 			}
@@ -106,6 +111,221 @@ func DatasetValues(ctx context.Context, path string) iter.Seq2[DatasetValue, err
 			yield(DatasetValue{}, err)
 		}
 	}
+}
+
+type datasetRecordValidator struct {
+	path             string
+	databaseDeclared bool
+	archives         map[string]model.DatasetArchive
+}
+
+func newDatasetRecordValidator(path string, dataset model.Dataset) datasetRecordValidator {
+	archives := make(map[string]model.DatasetArchive, len(dataset.Archives))
+	for _, archive := range dataset.Archives {
+		archives[archive.ID] = archive
+	}
+	return datasetRecordValidator{path: path, databaseDeclared: dataset.Database != nil, archives: archives}
+}
+
+func (v datasetRecordValidator) validate(rec model.DatasetRecord, recordNumber int64) error {
+	observations := make(map[string]struct{}, len(rec.Observations))
+	for idx, observation := range rec.Observations {
+		if observation.ID == "" {
+			return fmt.Errorf("dataset JSONL %q record %d observation %d has empty ID", v.path, recordNumber, idx)
+		}
+		if _, exists := observations[observation.ID]; exists {
+			return fmt.Errorf("dataset JSONL %q record %d declares duplicate observation ID %q", v.path, recordNumber, observation.ID)
+		}
+		observations[observation.ID] = struct{}{}
+		if err := v.validateSource(recordNumber, fmt.Sprintf("observation %q", observation.ID), observation.Source); err != nil {
+			return err
+		}
+		if observation.Locator != nil && observation.Source != "database" {
+			if err := v.validateArchiveIndex(recordNumber, fmt.Sprintf("observation %q", observation.ID), observation.Source, observation.Locator.Index); err != nil {
+				return err
+			}
+		}
+	}
+	for _, claim := range recordClaims(rec.Claims) {
+		if err := v.validateObservationReference(recordNumber, "claim", observations, claim.Observation); err != nil {
+			return err
+		}
+	}
+	if err := v.validateIdentityObservations(recordNumber, observations, rec.Identities); err != nil {
+		return err
+	}
+	for artifactIdx, artifact := range rec.Artifacts {
+		for sizeIdx, size := range artifact.Size {
+			if err := v.validateObservationReference(
+				recordNumber,
+				fmt.Sprintf("artifact %d size %d", artifactIdx, sizeIdx),
+				observations,
+				size.Observation,
+			); err != nil {
+				return err
+			}
+		}
+		for checksumIdx, checksum := range artifact.Checksums {
+			if err := v.validateObservationReference(
+				recordNumber,
+				fmt.Sprintf("artifact %d checksum %d", artifactIdx, checksumIdx),
+				observations,
+				checksum.Observation,
+			); err != nil {
+				return err
+			}
+		}
+		for occurrenceIdx, occurrence := range artifact.Occurrences {
+			if err := v.validateArchiveIndex(
+				recordNumber,
+				fmt.Sprintf("artifact %d occurrence %d", artifactIdx, occurrenceIdx),
+				occurrence.Archive,
+				&occurrence.Index,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for relationIdx, relation := range rec.Relations {
+		if err := v.validateObservationReference(recordNumber, fmt.Sprintf("relation %d", relationIdx), observations, relation.Observation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v datasetRecordValidator) validateSource(recordNumber int64, path string, source string) error {
+	switch source {
+	case "database":
+		if v.databaseDeclared {
+			return nil
+		}
+		return fmt.Errorf("dataset JSONL %q record %d %s references undeclared database source", v.path, recordNumber, path)
+	case "":
+		return fmt.Errorf("dataset JSONL %q record %d %s has empty source", v.path, recordNumber, path)
+	default:
+		if _, ok := v.archives[source]; ok {
+			return nil
+		}
+		return fmt.Errorf("dataset JSONL %q record %d %s references undeclared archive source %q", v.path, recordNumber, path, source)
+	}
+}
+
+func (v datasetRecordValidator) validateArchiveIndex(recordNumber int64, path string, archiveID string, index *int) error {
+	archive, ok := v.archives[archiveID]
+	if !ok {
+		return fmt.Errorf("dataset JSONL %q record %d %s references undeclared archive source %q", v.path, recordNumber, path, archiveID)
+	}
+	if index == nil {
+		return fmt.Errorf("dataset JSONL %q record %d %s has archive locator without index", v.path, recordNumber, path)
+	}
+	if *index < 0 || *index >= archive.Entries {
+		return fmt.Errorf(
+			"dataset JSONL %q record %d %s references invalid archive entry index %d for %q with %d entries",
+			v.path,
+			recordNumber,
+			path,
+			*index,
+			archiveID,
+			archive.Entries,
+		)
+	}
+	return nil
+}
+
+func (v datasetRecordValidator) validateObservationReference(
+	recordNumber int64,
+	path string,
+	observations map[string]struct{},
+	observation string,
+) error {
+	if observation == "" {
+		return fmt.Errorf("dataset JSONL %q record %d %s has empty observation reference", v.path, recordNumber, path)
+	}
+	if _, ok := observations[observation]; !ok {
+		return fmt.Errorf(
+			"dataset JSONL %q record %d %s references missing observation %q",
+			v.path,
+			recordNumber,
+			path,
+			observation,
+		)
+	}
+	return nil
+}
+
+func (v datasetRecordValidator) validateIdentityObservations(recordNumber int64, observations map[string]struct{}, identities *model.Identities) error {
+	if identities == nil {
+		return nil
+	}
+	for idx, identity := range identities.Catalog {
+		if err := v.validateObservationReference(recordNumber, fmt.Sprintf("catalog identity %d", idx), observations, identity.Observation); err != nil {
+			return err
+		}
+	}
+	for idx, identity := range identities.Document {
+		if err := v.validateObservationReference(recordNumber, fmt.Sprintf("document identity %d", idx), observations, identity.Observation); err != nil {
+			return err
+		}
+	}
+	for idx, identity := range identities.Publication {
+		if err := v.validateObservationReference(recordNumber, fmt.Sprintf("publication identity %d", idx), observations, identity.Observation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func recordClaims(claims model.Claims) []model.Claim {
+	out := make([]model.Claim, 0)
+	appendBibliographicClaims := func(claims *model.BibliographicClaims) {
+		if claims == nil {
+			return
+		}
+		out = append(out, claims.Title...)
+		out = append(out, claims.Authors...)
+		out = append(out, claims.Translators...)
+		out = append(out, claims.Illustrators...)
+		out = append(out, claims.Genres...)
+		out = append(out, claims.Annotation...)
+		out = append(out, claims.Keywords...)
+		out = append(out, claims.Language...)
+		out = append(out, claims.SourceLanguage...)
+		out = append(out, claims.BibliographicDate...)
+		out = append(out, claims.Sequences...)
+	}
+	appendBibliographicClaims(claims.Bibliographic)
+	appendBibliographicClaims(claims.Original)
+	if claims.Publication != nil {
+		out = append(out, claims.Publication.BookName...)
+		out = append(out, claims.Publication.Publisher...)
+		out = append(out, claims.Publication.City...)
+		out = append(out, claims.Publication.Year...)
+		out = append(out, claims.Publication.ISBN...)
+		out = append(out, claims.Publication.Sequences...)
+	}
+	if claims.Document != nil {
+		out = append(out, claims.Document.Authors...)
+		out = append(out, claims.Document.ProgramUsed...)
+		out = append(out, claims.Document.Date...)
+		out = append(out, claims.Document.SourceURLs...)
+		out = append(out, claims.Document.SourceOCR...)
+		out = append(out, claims.Document.Version...)
+		out = append(out, claims.Document.History...)
+		out = append(out, claims.Document.Publishers...)
+		out = append(out, claims.Document.CustomInfo...)
+		out = append(out, claims.Document.Output...)
+	}
+	if claims.Catalog != nil {
+		out = append(out, claims.Catalog.Time...)
+		out = append(out, claims.Catalog.Modified...)
+		out = append(out, claims.Catalog.Rating...)
+		out = append(out, claims.Catalog.Deleted...)
+		out = append(out, claims.Catalog.Aliases...)
+		out = append(out, claims.Catalog.FileAuthor...)
+		out = append(out, claims.Catalog.Status...)
+	}
+	return out
 }
 
 type datasetOrderValidator struct {

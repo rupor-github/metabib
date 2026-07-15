@@ -178,6 +178,42 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 	}
 }
 
+func TestFB2PreferenceModes(t *testing.T) {
+	t.Parallel()
+
+	dbAuthors := []model.PersonValue{{FirstName: "DB", LastName: "Author"}}
+	fb2Authors := []model.PersonValue{{FirstName: "FB2", LastName: "Author"}}
+	dbNumber := 1.0
+	fb2Number := 2.0
+	sequenceType := int64(0)
+	dbSequences := []model.SequenceValue{{Name: "DB Series", Number: &model.NumberValue{Value: &dbNumber}, Type: &sequenceType}}
+	fb2Sequences := []model.SequenceValue{{Name: "FB2 Series", Number: &model.NumberValue{Value: &fb2Number}}}
+	tests := []struct {
+		preference FB2Preference
+		wantAuthor string
+		wantSeries string
+	}{
+		{preference: PreferIgnore, wantAuthor: "Author,DB,:", wantSeries: "DB Series"},
+		{preference: PreferComplement, wantAuthor: "Author,DB,:", wantSeries: "DB Series"},
+		{preference: PreferMerge, wantAuthor: "Author,DB,:", wantSeries: "FB2 Series"},
+		{preference: PreferReplace, wantAuthor: "Author,FB2,:", wantSeries: "FB2 Series"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.preference), func(t *testing.T) {
+			t.Parallel()
+
+			opts := Options{FB2Preference: tt.preference, SequenceMode: SequenceAuthor, Limits: DefaultLimits()}
+			if got := authorsString(true, dbAuthors, fb2Authors, opts); got != tt.wantAuthor {
+				t.Fatalf("authorsString() = %q, want %q", got, tt.wantAuthor)
+			}
+			series, _ := sequenceString(dbSequences, fb2Sequences, opts)
+			if series != tt.wantSeries {
+				t.Fatalf("sequenceString() series = %q, want %q", series, tt.wantSeries)
+			}
+		})
+	}
+}
+
 func TestRecordLineRUKSAppendsMD5AndReplacement(t *testing.T) {
 	t.Parallel()
 
