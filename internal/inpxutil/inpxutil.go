@@ -114,6 +114,47 @@ func LoadDatasetInput(ctx context.Context, inputPrefix string, log *zap.Logger) 
 	return dataset, archives, records, nil
 }
 
+func StreamDatasetInput(
+	ctx context.Context,
+	inputPrefix string,
+	log *zap.Logger,
+	onHeader func(model.Dataset) error,
+	onRecord func(model.DatasetRecord) error,
+) (model.Dataset, int64, error) {
+	inputPath, err := DiscoverDatasetInput(inputPrefix)
+	if err != nil {
+		return model.Dataset{}, 0, err
+	}
+	if log != nil {
+		log.Info("INPX dataset input selected", zap.String("input", inputPath))
+	}
+
+	var dataset model.Dataset
+	var records int64
+	for value, err := range jsonl.DatasetValues(ctx, inputPath) {
+		if err != nil {
+			return dataset, records, err
+		}
+		if value.Header {
+			dataset = value.Dataset
+			if err := onHeader(dataset); err != nil {
+				return dataset, records, err
+			}
+			continue
+		}
+		records++
+		if err := onRecord(value.Record); err != nil {
+			return dataset, records, err
+		}
+	}
+	return dataset, records, nil
+}
+
+func DatasetArchiveRowsList(dataset model.Dataset) []*DatasetArchiveRows {
+	archives := datasetArchiveRows(dataset)
+	return DatasetArchiveList(archives)
+}
+
 func datasetArchiveRows(dataset model.Dataset) map[string]*DatasetArchiveRows {
 	archives := make(map[string]*DatasetArchiveRows, len(dataset.Archives))
 	for _, archive := range dataset.Archives {
