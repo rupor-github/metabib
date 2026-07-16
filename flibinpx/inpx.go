@@ -598,11 +598,17 @@ func authorsString(dbPresent bool, authors []model.PersonValue, fb2Authors []mod
 func peopleString(people []model.PersonValue) string {
 	var b strings.Builder
 	for _, person := range people {
-		b.WriteString(inpxutil.Cleanse(person.LastName))
+		lastName := inpxutil.CleanseAuthorComponent(person.LastName)
+		firstName := inpxutil.CleanseAuthorComponent(person.FirstName)
+		middleName := inpxutil.CleanseAuthorComponent(person.MiddleName)
+		if lastName == "" && firstName == "" && middleName == "" {
+			continue
+		}
+		b.WriteString(lastName)
 		b.WriteByte(',')
-		b.WriteString(inpxutil.Cleanse(person.FirstName))
+		b.WriteString(firstName)
 		b.WriteByte(',')
-		b.WriteString(inpxutil.Cleanse(person.MiddleName))
+		b.WriteString(middleName)
 		b.WriteByte(':')
 	}
 	if b.Len() == 0 {

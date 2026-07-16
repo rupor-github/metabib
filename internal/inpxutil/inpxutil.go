@@ -36,6 +36,11 @@ var cleanseReplacer = strings.NewReplacer(
 	"\u00a0", " ",
 )
 
+var authorComponentReplacer = strings.NewReplacer(
+	",", "，",
+	":", "：",
+)
+
 type Stats struct {
 	OutputPath string
 	DumpDate   string
@@ -367,6 +372,16 @@ func InRanges(ranges []model.IndexRange, idx int) bool {
 
 func Cleanse(value string) string {
 	return cleanseReplacer.Replace(value)
+}
+
+func CleanseAuthorComponent(value string) string {
+	value = strings.Join(strings.Fields(Cleanse(value)), " ")
+	if strings.ContainsRune(value, '\uFFFD') {
+		return ""
+	}
+	value = strings.Trim(value, " ,:")
+	value = authorComponentReplacer.Replace(value)
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func DateOnly(value string) string {

@@ -214,6 +214,32 @@ func TestCleanse(t *testing.T) {
 	}
 }
 
+func TestCleanseAuthorComponent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "trailing colon", value: "Ливадный:", want: "Ливадный"},
+		{name: "url and email", value: "(http://marsexxx.com, marsexxx@ya.ru)", want: "(http：//marsexxx.com， marsexxx@ya.ru)"},
+		{name: "date time", value: "Ср, 13 окт 2010 11:41", want: "Ср， 13 окт 2010 11：41"},
+		{name: "minimal", value: ":", want: ""},
+		{name: "corrupt", value: "�����:������", want: ""},
+		{name: "layout", value: " Last,\u00a0Jr: \r\n First" + FieldSep + "  Middle ", want: "Last， Jr： First Middle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := CleanseAuthorComponent(tt.value); got != tt.want {
+				t.Fatalf("CleanseAuthorComponent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOutputPathValidatesCompactDumpDate(t *testing.T) {
 	t.Parallel()
 

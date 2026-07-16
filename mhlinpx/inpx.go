@@ -558,11 +558,17 @@ func authorsString(dbPresent bool, authors []model.PersonValue, fb2Authors []mod
 func peopleString(people []model.PersonValue, opts Options) string {
 	var b strings.Builder
 	for _, person := range people {
-		b.WriteString(fix(person.LastName, opts.QuickFix, opts.Limits.AuthorFamily))
+		lastName := fix(inpxutil.CleanseAuthorComponent(person.LastName), opts.QuickFix, opts.Limits.AuthorFamily)
+		firstName := fix(inpxutil.CleanseAuthorComponent(person.FirstName), opts.QuickFix, opts.Limits.AuthorName)
+		middleName := fix(inpxutil.CleanseAuthorComponent(person.MiddleName), opts.QuickFix, opts.Limits.AuthorMiddle)
+		if lastName == "" && firstName == "" && middleName == "" {
+			continue
+		}
+		b.WriteString(lastName)
 		b.WriteByte(',')
-		b.WriteString(fix(person.FirstName, opts.QuickFix, opts.Limits.AuthorName))
+		b.WriteString(firstName)
 		b.WriteByte(',')
-		b.WriteString(fix(person.MiddleName, opts.QuickFix, opts.Limits.AuthorMiddle))
+		b.WriteString(middleName)
 		b.WriteByte(':')
 	}
 	if b.Len() == 0 {

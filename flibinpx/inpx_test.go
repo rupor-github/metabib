@@ -254,6 +254,28 @@ func TestDedupSequencesCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestPeopleStringSanitizesAuthorSeparators(t *testing.T) {
+	t.Parallel()
+
+	got := peopleString([]model.PersonValue{{
+		LastName:   "Last, Jr:",
+		FirstName:  " First\u00a0A: B ",
+		MiddleName: "Middle, : C",
+	}})
+	if got != "Last， Jr,First A： B,Middle， ： C:" {
+		t.Fatalf("peopleString() = %q", got)
+	}
+}
+
+func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
+	t.Parallel()
+
+	got := peopleString([]model.PersonValue{{LastName: "����"}, {LastName: ":"}})
+	if got != "неизвестный,автор,:" {
+		t.Fatalf("peopleString() = %q", got)
+	}
+}
+
 func flibRecord(source string, index int, entry string) model.DatasetRecord {
 	bookID := int64(index + 1)
 	sequenceTypeAuthor := int64(0)

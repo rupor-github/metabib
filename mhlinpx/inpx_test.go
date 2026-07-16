@@ -178,6 +178,28 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 	}
 }
 
+func TestPeopleStringSanitizesAuthorSeparators(t *testing.T) {
+	t.Parallel()
+
+	got := peopleString([]model.PersonValue{{
+		LastName:   "Last, Jr:",
+		FirstName:  " First\u00a0A: B ",
+		MiddleName: "Middle, : C",
+	}}, Options{Limits: DefaultLimits()})
+	if got != "Last， Jr,First A： B,Middle， ： C:" {
+		t.Fatalf("peopleString() = %q", got)
+	}
+}
+
+func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
+	t.Parallel()
+
+	got := peopleString([]model.PersonValue{{LastName: "����"}, {LastName: ":"}}, Options{Limits: DefaultLimits()})
+	if got != "неизвестный,автор,:" {
+		t.Fatalf("peopleString() = %q", got)
+	}
+}
+
 func TestFB2PreferenceModes(t *testing.T) {
 	t.Parallel()
 
