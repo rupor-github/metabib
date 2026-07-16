@@ -41,6 +41,10 @@ var authorComponentReplacer = strings.NewReplacer(
 	":", "：",
 )
 
+var genreCodeReplacer = strings.NewReplacer(
+	":", "：",
+)
+
 type Stats struct {
 	OutputPath string
 	DumpDate   string
@@ -381,6 +385,16 @@ func CleanseAuthorComponent(value string) string {
 	}
 	value = strings.Trim(value, " ,:")
 	value = authorComponentReplacer.Replace(value)
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func CleanseGenreCode(value string) string {
+	value = strings.Join(strings.Fields(Cleanse(value)), " ")
+	if strings.ContainsRune(value, '\uFFFD') {
+		return ""
+	}
+	value = strings.Trim(value, " :")
+	value = genreCodeReplacer.Replace(value)
 	return strings.Join(strings.Fields(value), " ")
 }
 

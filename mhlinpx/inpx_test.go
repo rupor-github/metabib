@@ -200,6 +200,25 @@ func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 	}
 }
 
+func TestGenresStringSanitizesGenreSeparators(t *testing.T) {
+	t.Parallel()
+
+	got := genresString([]model.GenreValue{{Code: "sf:history"}, {Code: ":"}, {Code: "sf,comma"}}, nil)
+	if got != "sf：history:sf,comma:" {
+		t.Fatalf("genresString() = %q", got)
+	}
+
+	got = genresString([]model.GenreValue{{Code: "�"}}, []model.GenreValue{{Code: "fb2:genre"}})
+	if got != "fb2：genre:" {
+		t.Fatalf("genresString() fallback = %q", got)
+	}
+
+	got = genresString([]model.GenreValue{{Code: "�"}}, nil)
+	if got != "other:" {
+		t.Fatalf("genresString() empty = %q", got)
+	}
+}
+
 func TestFB2PreferenceModes(t *testing.T) {
 	t.Parallel()
 

@@ -240,6 +240,32 @@ func TestCleanseAuthorComponent(t *testing.T) {
 	}
 }
 
+func TestCleanseGenreCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "plain", value: "sf_history", want: "sf_history"},
+		{name: "internal colon", value: "sf:history", want: "sf：history"},
+		{name: "preserves comma", value: "sf,history", want: "sf,history"},
+		{name: "boundary colon", value: ":sf:", want: "sf"},
+		{name: "minimal", value: ":", want: ""},
+		{name: "corrupt", value: "sf�history", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := CleanseGenreCode(tt.value); got != tt.want {
+				t.Fatalf("CleanseGenreCode() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestOutputPathValidatesCompactDumpDate(t *testing.T) {
 	t.Parallel()
 

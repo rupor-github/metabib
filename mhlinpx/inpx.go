@@ -581,18 +581,30 @@ func genresString(genres []model.GenreValue, fb2Genres []model.GenreValue) strin
 	if len(genres) > 0 {
 		var b strings.Builder
 		for _, genre := range genres {
-			b.WriteString(genre.Code)
+			code := inpxutil.CleanseGenreCode(genre.Code)
+			if code == "" {
+				continue
+			}
+			b.WriteString(code)
 			b.WriteByte(':')
 		}
-		return b.String()
+		if b.Len() > 0 {
+			return b.String()
+		}
 	}
 	if len(fb2Genres) > 0 {
 		var b strings.Builder
 		for _, genre := range fb2Genres {
-			b.WriteString(genre.Code)
+			code := inpxutil.CleanseGenreCode(genre.Code)
+			if code == "" {
+				continue
+			}
+			b.WriteString(code)
 			b.WriteByte(':')
 		}
-		return b.String()
+		if b.Len() > 0 {
+			return b.String()
+		}
 	}
 	return "other:"
 }
