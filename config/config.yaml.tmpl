@@ -138,6 +138,84 @@ inpx:
     keywords: 255
     sequence: 80
 
+  language:
+    # Canonicalize the INPX LANG field to the generic base language subtag using
+    # Go's golang.org/x/text/language parser. Raw dataset JSONL values are not
+    # changed. When enabled, INPX generation treats ignored values as absent,
+    # normalizes already-valid tags (for example RU -> ru and en-US -> en),
+    # applies aliases, tries localized display-name matching, and warns about
+    # unresolved values.
+    canonicalize: true
+
+    # Explicit aliases for known noisy language values. Keys are matched
+    # case-insensitively after whitespace collapse. Full-value aliases are tried
+    # before comma splitting, which allows phrase aliases containing commas.
+    aliases:
+      # simple substitutions
+      gr: el
+      sp: es
+      tu: tr
+      dk: da
+      jp: ja
+      ua: uk
+      po: pl
+      bl: bg
+      ud: udm
+      esp: es
+      dat: da
+      cz: cs
+      tm: tk
+      kz: kk
+      gm: de
+      dr: orv
+      un: und
+      # best intentions
+      pentjab: pa
+      balkar: krc
+      # on ЙЦУКЕРТ keyboard layout "ru" is "кг"
+      кг: ru
+      # various trash
+      u: uk
+      C: ru
+      by: ru
+      ok: pl
+      ан: en
+      рус: ru
+      ukrian: uk
+      urkain: uk
+      xx: ru
+      Человеческое, слишком человеческое: ru
+
+    # Fallback display-name locales used after the record context language does
+    # not match. These are BCP 47 locale tags and are tried in order. For example,
+    # English matches "russian" -> ru, Russian matches "русский" -> ru, and
+    # Bulgarian matches "български" -> bg.
+    fallback_locales:
+      - en
+      - ru
+      - bg
+
+    # Raw values matching any of these regular expressions are ignored entirely
+    # and treated as absent. Defaults ignore placeholders made only of question
+    # marks, such as ?, ??, and ???.
+    ignore_patterns:
+      - '^\?+$'
+
+    # Context rules fix values only when another source-language observation on
+    # the same record supports the correction. These are intentionally separate
+    # from aliases because ba and xa are valid/structured-looking tags in other
+    # contexts but are known to mean something else in these sibling patterns.
+    context_rules:
+      - from: ba
+        to: krc
+        when_any_source_language:
+          - krc
+          - balkar
+      - from: xa
+        to: xal
+        when_any_source_language:
+          - xal
+
   flibrary:
     # Deduplicate repeated FLibrary sequence rows by sequence name using either
     # case-insensitive or case-sensitive comparison.

@@ -109,7 +109,22 @@ type INPXConfig struct {
 	CommentTemplate string             `yaml:"comment_template"`
 	VersionTemplate string             `yaml:"version_template"`
 	Limits          INPXLimits         `yaml:"limits"`
+	Language        INPXLanguageConfig `yaml:"language"`
 	FLibrary        FLibraryINPXConfig `yaml:"flibrary"`
+}
+
+type INPXLanguageConfig struct {
+	Canonicalize    bool                     `yaml:"canonicalize"`
+	Aliases         map[string]string        `yaml:"aliases"`
+	FallbackLocales []string                 `yaml:"fallback_locales" validate:"dive,required"`
+	IgnorePatterns  []string                 `yaml:"ignore_patterns" validate:"dive,required"`
+	ContextRules    []INPXLanguageRuleConfig `yaml:"context_rules"`
+}
+
+type INPXLanguageRuleConfig struct {
+	From                  string   `yaml:"from" validate:"required"`
+	To                    string   `yaml:"to" validate:"required"`
+	WhenAnySourceLanguage []string `yaml:"when_any_source_language" validate:"min=1,dive,required"`
 }
 
 type INPXLimits struct {

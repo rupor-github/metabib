@@ -63,6 +63,7 @@ type Options struct {
 	FB2Preference   FB2Preference
 	QuickFix        bool
 	Limits          Limits
+	Language        *inpxutil.LanguageResolver
 	CommentTemplate string
 	VersionTemplate string
 	Log             *zap.Logger
@@ -509,10 +510,7 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 	if date == "" {
 		date = view.Artifact.Date
 	}
-	lang := view.Database.Language
-	if lang == "" {
-		lang = view.FB2.Language
-	}
+	lang := recordLanguage(rec, view, opts)
 	keywords := view.Database.Keywords
 	if keywords == "" {
 		keywords = view.FB2.Keywords
@@ -537,6 +535,17 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 		fields = append(fields, view.Catalog.MD5, datasetReplacedBy(rec))
 	}
 	return joinINPFields(fields), view, nil
+}
+
+func recordLanguage(rec model.DatasetRecord, view inpxutil.DatasetRecordView, opts Options) string {
+	if opts.Language != nil {
+		return opts.Language.SelectLanguage(rec, view)
+	}
+	lang := view.Database.Language
+	if lang == "" {
+		lang = view.FB2.Language
+	}
+	return lang
 }
 
 func authorsString(dbPresent bool, authors []model.PersonValue, fb2Authors []model.PersonValue, opts Options) string {

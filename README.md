@@ -527,6 +527,56 @@ inpx:
 `sequence_dedup` supports `case-insensitive` and `case-sensitive`.
 `fb2_path_separator` is used by `--fb2-flatten path` and `path-leaf`.
 
+Both INPX generators canonicalize language values at generation time by default.
+Raw merged dataset JSONL remains unchanged. Database language still wins over FB2
+language, except ignored placeholder values are treated as absent so FB2 can be
+used as a fallback. Resolved output is the base language subtag, so values such as
+`RU`, `en-US`, and `sr-Latn` become `ru`, `en`, and `sr`. Explicit aliases handle
+known noisy values such as `sp -> es`, `gr -> el`, and `un -> und`.
+
+The shared resolver is configured under `inpx.language`:
+
+```yaml
+inpx:
+  language:
+    canonicalize: true
+    aliases:
+      sp: es
+      gr: el
+      un: und
+    fallback_locales:
+      - en
+      - ru
+      - bg
+    ignore_patterns:
+      - '^\?+$'
+    context_rules:
+      - from: ba
+        to: krc
+        when_any_source_language:
+          - krc
+          - balkar
+      - from: xa
+        to: xal
+        when_any_source_language:
+          - xal
+```
+
+`aliases` are matched case-insensitively after whitespace collapse. Full-value
+aliases are checked before comma splitting, so phrase aliases containing commas
+are supported. If no full-value alias matches, the raw language value is split on
+commas and parts are tried from left to right until one resolves. `fallback_locales`
+are BCP 47 display locales used for localized language-name matching after
+same-record context does not match. `ignore_patterns` are regular expressions for
+values that should be skipped entirely. `context_rules` apply only when another
+source-language observation on the same record supports the correction.
+
+Unresolved canonicalization attempts are emitted raw for compatibility and always
+logged as warnings with book ID, source field, observation, original value,
+candidate value, locator, artifact, source languages, and context language. With
+global `--verbose`, ignored values and successful canonicalizations that change
+the output are logged with the same identifying details.
+
 Existing INPX output is replaced only after the new archive is fully written. If
 an existing file is overwritten, `metabib` logs a warning. During generation,
 `metabib` logs the selected dataset input, record loading progress, one live

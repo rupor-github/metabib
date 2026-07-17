@@ -58,6 +58,18 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.INPX.FLibrary.SequenceDedup != "case-insensitive" || cfg.INPX.FLibrary.FB2PathSeparator != " / " {
 		t.Fatalf("FLibrary INPX defaults = %#v", cfg.INPX.FLibrary)
 	}
+	if !cfg.INPX.Language.Canonicalize {
+		t.Fatal("INPX.Language.Canonicalize = false, want true")
+	}
+	if cfg.INPX.Language.Aliases["gr"] != "el" || cfg.INPX.Language.Aliases["un"] != "und" || cfg.INPX.Language.Aliases["Человеческое, слишком человеческое"] != "ru" {
+		t.Fatalf("INPX language aliases = %#v", cfg.INPX.Language.Aliases)
+	}
+	if strings.Join(cfg.INPX.Language.FallbackLocales, ",") != "en,ru,bg" {
+		t.Fatalf("INPX language fallback locales = %#v", cfg.INPX.Language.FallbackLocales)
+	}
+	if len(cfg.INPX.Language.ContextRules) != 2 || cfg.INPX.Language.ContextRules[0].From != "ba" || cfg.INPX.Language.ContextRules[1].From != "xa" {
+		t.Fatalf("INPX language context rules = %#v", cfg.INPX.Language.ContextRules)
+	}
 }
 
 func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
@@ -74,6 +86,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"  validate_crc: true",
 		"processing:",
 		"  parse_fb2: false",
+		"inpx:",
+		"  language:",
+		"    canonicalize: false",
 		"logging:",
 		"  console:",
 		"    level: none",
@@ -100,6 +115,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	}
 	if !cfg.Rollup.ValidateCRC {
 		t.Fatal("Rollup.ValidateCRC = false, want true")
+	}
+	if cfg.INPX.Language.Canonicalize {
+		t.Fatal("INPX.Language.Canonicalize = true, want false")
 	}
 	if cfg.Database.User != "root" {
 		t.Fatalf("default Database.User was not preserved: %q", cfg.Database.User)

@@ -65,6 +65,7 @@ type Options struct {
 	DedupMode        DedupMode
 	FB2PathSeparator string
 	SourceLib        string
+	Language         *inpxutil.LanguageResolver
 	CommentTemplate  string
 	VersionTemplate  string
 	Log              *zap.Logger
@@ -520,10 +521,7 @@ func buildRecordFields(
 	if date == "" {
 		date = view.Artifact.Date
 	}
-	lang := view.Database.Language
-	if lang == "" {
-		lang = view.FB2.Language
-	}
+	lang := recordLanguage(rec, view, opts)
 	keywords := view.Database.Keywords
 	if keywords == "" {
 		keywords = view.FB2.Keywords
@@ -553,6 +551,17 @@ func buildRecordFields(
 		Year:     inpxutil.Cleanse(year),
 		Source:   inpxutil.Cleanse(opts.SourceLib),
 	}, view, true, nil
+}
+
+func recordLanguage(rec model.DatasetRecord, view inpxutil.DatasetRecordView, opts Options) string {
+	if opts.Language != nil {
+		return opts.Language.SelectLanguage(rec, view)
+	}
+	lang := view.Database.Language
+	if lang == "" {
+		lang = view.FB2.Language
+	}
+	return lang
 }
 
 func recordLine(fields recordFields, seq sequence, insNo int) string {

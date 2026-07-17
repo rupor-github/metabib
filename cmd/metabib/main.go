@@ -19,6 +19,7 @@ import (
 	"metabib/db"
 	"metabib/fetch"
 	"metabib/flibinpx"
+	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/library"
 	"metabib/mhlinpx"
@@ -616,6 +617,10 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 		Keywords:     cfg.INPX.Limits.Keywords,
 		Sequence:     cfg.INPX.Limits.Sequence,
 	}
+	language, err := inpxLanguageResolver(cfg, env)
+	if err != nil {
+		return err
+	}
 	stats, err := mhlinpx.Generate(ctx, mhlinpx.Options{
 		InputPrefix:     cmd.String("input"),
 		OutputPrefix:    cmd.String("output"),
@@ -624,6 +629,7 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 		FB2Preference:   preference,
 		QuickFix:        cfg.INPX.QuickFix,
 		Limits:          limits,
+		Language:        language,
 		CommentTemplate: cfg.INPX.CommentTemplate,
 		VersionTemplate: cfg.INPX.VersionTemplate,
 		Log:             env.Log,
@@ -668,6 +674,10 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	language, err := inpxLanguageResolver(cfg, env)
+	if err != nil {
+		return err
+	}
 	stats, err := flibinpx.Generate(ctx, flibinpx.Options{
 		InputPrefix:      cmd.String("input"),
 		OutputPrefix:     cmd.String("output"),
@@ -677,6 +687,7 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 		DedupMode:        dedup,
 		FB2PathSeparator: cfg.INPX.FLibrary.FB2PathSeparator,
 		SourceLib:        cmd.String("source-lib"),
+		Language:         language,
 		CommentTemplate:  cfg.INPX.CommentTemplate,
 		VersionTemplate:  cfg.INPX.VersionTemplate,
 		Log:              env.Log,
@@ -698,6 +709,26 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 		)
 	}
 	return nil
+}
+
+func inpxLanguageResolver(cfg *config.Config, env *state.LocalEnv) (*inpxutil.LanguageResolver, error) {
+	rules := make([]inpxutil.LanguageContextRule, 0, len(cfg.INPX.Language.ContextRules))
+	for _, rule := range cfg.INPX.Language.ContextRules {
+		rules = append(rules, inpxutil.LanguageContextRule{
+			From:                  rule.From,
+			To:                    rule.To,
+			WhenAnySourceLanguage: rule.WhenAnySourceLanguage,
+		})
+	}
+	return inpxutil.NewLanguageResolver(inpxutil.LanguageResolverOptions{
+		Enabled:         cfg.INPX.Language.Canonicalize,
+		Aliases:         cfg.INPX.Language.Aliases,
+		FallbackLocales: cfg.INPX.Language.FallbackLocales,
+		IgnorePatterns:  cfg.INPX.Language.IgnorePatterns,
+		ContextRules:    rules,
+		Log:             env.Log,
+		Verbose:         env.Verbose,
+	})
 }
 
 func dumpDirDatesDiffer(dumps []db.DumpFile) bool {
