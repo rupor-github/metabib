@@ -65,6 +65,8 @@ Schema definitions are maintained in [`docs/`](docs/):
 - `merge` reads existing manifests and combines database-derived and
   archive-derived metadata into one provenance-aware dataset JSONL stream with a
   `metabib.dataset/1` header and `metabib.dataset_record/1` rows;
+- `inspect` summarizes and validates merged dataset JSONL or locates individual
+  records without producing another artifact;
 - `mhl-inpx` consumes the merged dataset JSONL to produce a MyHomeLib-compatible
   FB2 INPX without coupling the main extraction pipeline to legacy output
   constraints;
@@ -292,15 +294,13 @@ Available `rollup` arguments:
 
 ### Build Cache Manifests
 
+`cache` creates portable manifest files for selected sources. It does not produce
+the final merged dataset JSONL.
+
 ```sh
 metabib cache \
   --database-dumps /path/to/sql-dumps \
   --archives /path/to/flibusta
-
-metabib merge \
-  --database-dumps /path/to/sql-dumps \
-  --archives /path/to/flibusta \
-  --output metabib
 ```
 
 To use an already imported database:
@@ -324,7 +324,7 @@ reused between runs when `temporary` is set to `false`.
 Use an existing MariaDB service instead of a managed one:
 
 ```sh
-metabib cache --rebuild --database-dumps /path/to/sql-dumps --config metabib.yaml
+metabib --config metabib.yaml cache --rebuild --database-dumps /path/to/sql-dumps
 ```
 
 Build only archive manifests without starting MariaDB:
@@ -351,6 +351,18 @@ is omitted.
 For current Librusec dumps, only the tables required for FB2 metadata are
 imported. Unsupported or unrelated dump files in the SQL directory are ignored by
 the importer.
+
+### Merge Dataset
+
+`merge` consumes existing cache manifests and writes one merged dataset JSONL
+artifact for later inspection or INPX generation:
+
+```sh
+metabib merge \
+  --database-dumps /path/to/sql-dumps \
+  --archives /path/to/flibusta \
+  --output metabib
+```
 
 Merge from archives only, database only, or both:
 
@@ -416,16 +428,34 @@ metabib inspect --input combined --file 12345.fb2 --json
 example, `--input combined` discovers exactly one of `combined.jsonl`,
 `combined.jsonl.zst`, `combined.jsonl.gz`, or `combined.jsonl.zip`.
 
-`--archives` lists dataset archive source IDs, archive names, and path hints so
-IDs such as `archive-0001` can be correlated with real ZIP files. Archive source
-IDs are local to one merged dataset; use archive names, path hints, and checksums
-for long-term correlation across regenerated datasets.
+With no mode flag, `inspect` reads the dataset header and prints its schema,
+record count, source totals, processing settings, and other summary metadata. It
+does not scan the record stream in this mode.
 
-`--validate` streams the full dataset and validates ordering, schemas,
-provenance references, source declarations, and archive indexes without writing
-any derived artifacts. Lookup modes return the first matching record by catalog
-book ID, archive source/index, or file name. Add `--json` for machine-readable
-output.
+Available modes and options:
+
+- `--archives`: list archive source IDs, ordinals, entry counts, names, and path
+  hints. IDs such as `archive-0001` can then be used with `--archive`.
+- `--validate`: stream the full dataset and validate ordering, schemas,
+  provenance references, source declarations, and archive indexes without
+  writing any derived artifact. Successful output includes the number of records
+  read.
+- `--book-id ID`: return the first record matching a primary locator, Flibusta
+  catalog identity, or database observation with that book ID.
+- `--archive ID --index INDEX`: return the record at the zero-based entry index
+  in the specified dataset archive source.
+- `--file NAME`: return the first record whose artifact name or archive occurrence
+  entry matches `NAME`; matching is case-insensitive.
+- `--json`: emit the selected summary, archive list, validation result, or record
+  as machine-readable JSON.
+
+Only one of `--archives`, `--book-id`, `--archive`/`--index`, and `--file` may be
+used at a time. `--validate` cannot be combined with any of those modes, while
+`--json` can be used with every mode. A lookup that finds no matching record exits
+with status `4`; other failures use status `1`.
+
+Archive source IDs are local to one merged dataset. Use archive names, path hints,
+and checksums for long-term correlation across regenerated datasets.
 
 ### INPX Generation
 
@@ -590,8 +620,39 @@ same basename get a source-qualified manifest name and a warning is logged.
 
 Use global `--verbose` to enable detailed progress reporting.
 
-Dump the default configuration:
+### Configuration
+
+Dump the default configuration to a file before customizing paths, logging, fetch
+profiles, processing options, or INPX templates:
 
 ```sh
 metabib dumpconfig --default metabib.yaml
+```
+
+`dumpconfig --default` writes the embedded YAML template after expanding runtime
+defaults such as the executable directory, OS-specific database socket or TCP
+settings, free local ports on Windows, and CPU-based worker counts. The output is
+not based on values from a loaded `--config` file.
+
+Dump the effective configuration after applying defaults and a config file:
+
+```sh
+metabib --config metabib.yaml dumpconfig effective.yaml
+```
+
+Omit the destination to write YAML to stdout:
+
+```sh
+metabib dumpconfig --default
+metabib --config metabib.yaml dumpconfig
+```
+
+Configuration files are validated strictly: unknown YAML fields are rejected, and
+omitted fields keep their defaults from the embedded template. Pass the file with
+the global `--config FILE` option, before the subcommand:
+
+```sh
+metabib --config metabib.yaml cache \
+  --database-dumps /path/to/sql-dumps \
+  --archives /path/to/flibusta
 ```
