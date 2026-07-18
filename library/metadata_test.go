@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"metabib/config"
+	"metabib/model"
 )
 
 func TestDatasetForDatabaseOnly(t *testing.T) {
@@ -21,7 +22,13 @@ func TestDatasetForDatabaseOnly(t *testing.T) {
 			DumpDir:  "/dumps",
 			DumpDate: "2026-07-14",
 			Format:   "flibusta-current",
-			Records:  42,
+			INPX: &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+				Key: "Last,First,Middle",
+				Authors: []model.INPXAmbiguousDBAuthor{{
+					ID: "1", LastName: "Last", FirstName: "First", MiddleName: "Middle",
+				}},
+			}}},
+			Records: 42,
 		},
 		nil,
 		config.ProcessingConfig{},
@@ -43,6 +50,9 @@ func TestDatasetForDatabaseOnly(t *testing.T) {
 	}
 	if dataset.Database == nil || dataset.Database.ID != "database" || dataset.Database.DumpDate != "2026-07-14" {
 		t.Fatalf("Database = %#v", dataset.Database)
+	}
+	if dataset.Database.INPX == nil || len(dataset.Database.INPX.AmbiguousDBAuthors) != 1 {
+		t.Fatalf("Database.INPX = %#v", dataset.Database.INPX)
 	}
 	if dataset.Ordering.Mode != "database_book_id" || dataset.Ordering.Source != "database" {
 		t.Fatalf("Ordering = %#v", dataset.Ordering)

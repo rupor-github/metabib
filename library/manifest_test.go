@@ -499,6 +499,22 @@ func TestDatabaseManifestFormatCompatibility(t *testing.T) {
 	}
 }
 
+func TestDatabaseManifestHeaderIncludesINPXMetadata(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	inpx := &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+		Key: "Last,First,Middle",
+		Authors: []model.INPXAmbiguousDBAuthor{{
+			ID: "1", LastName: "Last", FirstName: "First", MiddleName: "Middle",
+		}},
+	}}}
+	header := databaseManifestHeaderFor(cfg, DatabaseManifestDecision{INPX: inpx}, 1)
+	if header.INPX == nil || len(header.INPX.AmbiguousDBAuthors) != 1 {
+		t.Fatalf("header.INPX = %#v", header.INPX)
+	}
+}
+
 func TestExpandArchivesFromDirectory(t *testing.T) {
 	t.Parallel()
 

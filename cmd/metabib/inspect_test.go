@@ -21,9 +21,40 @@ func TestInspectDatasetSummary(t *testing.T) {
 		t.Fatalf("inspectDataset() error = %v", err)
 	}
 	text := out.String()
-	for _, want := range []string{"Dataset", "records: 1", "archives: 1", "parse fb2: true"} {
+	for _, want := range []string{
+		"Dataset",
+		"records: 1",
+		"ambiguous db author groups: 1",
+		"ambiguous db authors: 2",
+		"archives: 1",
+		"parse fb2: true",
+	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("inspect summary = %q, missing %q", text, want)
+		}
+	}
+	if strings.Contains(text, "ambiguous db author map") {
+		t.Fatalf("inspect summary includes verbose author map: %q", text)
+	}
+}
+
+func TestInspectDatasetSummaryVerbose(t *testing.T) {
+	t.Parallel()
+
+	prefix := writeInspectDataset(t)
+	var out bytes.Buffer
+	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, Index: -1, Verbose: true}, &out); err != nil {
+		t.Fatalf("inspectDataset(verbose) error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"ambiguous db author map",
+		"Васильев,Сергей,Александрович",
+		"19026: Васильев, Сергей, Александрович (археолог)",
+		"77926: Васильев, Сергей, Александрович (поэт)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspect verbose summary = %q, missing %q", text, want)
 		}
 	}
 }
@@ -158,7 +189,17 @@ func inspectTestDataset() model.Dataset {
 		Created:      "2026-07-15T00:00:00Z",
 		Records:      1,
 		Generator:    model.DatasetGenerator{Name: "metabib", Version: "0.0.1-test"},
-		Database:     &model.DatasetDatabase{ID: "database", DumpDate: "20260715"},
+		Database: &model.DatasetDatabase{
+			ID:       "database",
+			DumpDate: "20260715",
+			INPX: &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+				Key: "Васильев,Сергей,Александрович",
+				Authors: []model.INPXAmbiguousDBAuthor{
+					{ID: "19026", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"},
+					{ID: "77926", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"},
+				},
+			}}},
+		},
 		Archives: []model.DatasetArchive{{
 			ID:         "archive-0001",
 			Ordinal:    0,

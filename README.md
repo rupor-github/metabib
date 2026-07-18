@@ -500,9 +500,18 @@ The default template is lib2inpx-compatible.
 ```yaml
 inpx:
   quick_fix: true
+  disambiguate_authors: true
   comment_template: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}"
   version_template: "{{ .DumpDate }}\r\n"
 ```
+
+When `disambiguate_authors` is enabled, database cache manifest creation records
+DB authors whose cleansed, non-truncated `LastName,FirstName,MiddleName` value
+collides with a different database contributor ID. INPX generation uses that
+metadata to append a stable suffix to the exported last-name field for both
+Flibusta and Librusec datasets. FB2-only authors are not changed. Existing
+database manifests without this optional metadata behave as before; rebuild the
+database cache to populate it.
 
 `comment_template` and `version_template` are Go `text/template` values rendered
 when `collection.info` and `version.info` are written. Available values are

@@ -56,7 +56,8 @@
         "format": {"type": "string"},
         "dump_dir_hint": {"type": "string"},
         "dump_date": {"type": "string"},
-        "dumps": {"type": "array", "items": {"$ref": "#/$defs/dump"}}
+        "dumps": {"type": "array", "items": {"$ref": "#/$defs/dump"}},
+        "inpx": {"$ref": "#/$defs/inpx"}
       },
       "additionalProperties": false
     },
@@ -136,6 +137,40 @@
       "properties": {
         "enabled": {"type": "boolean"},
         "algorithm": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "inpx": {
+      "type": "object",
+      "properties": {
+        "ambiguous_db_authors": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ambiguous_db_author_group"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "ambiguous_db_author_group": {
+      "type": "object",
+      "required": ["key", "authors"],
+      "properties": {
+        "key": {"type": "string"},
+        "authors": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ambiguous_db_author"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "ambiguous_db_author": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string"},
+        "first_name": {"type": "string"},
+        "middle_name": {"type": "string"},
+        "last_name": {"type": "string"},
+        "nick_name": {"type": "string"}
       },
       "additionalProperties": false
     }

@@ -35,6 +35,24 @@ type DatasetDatabase struct {
 	DumpDirHint string        `json:"dump_dir_hint,omitempty"`
 	DumpDate    string        `json:"dump_date,omitempty"`
 	Dumps       []DatasetDump `json:"dumps,omitempty"`
+	INPX        *INPXMetadata `json:"inpx,omitempty"`
+}
+
+type INPXMetadata struct {
+	AmbiguousDBAuthors []INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_authors,omitempty"`
+}
+
+type INPXAmbiguousDBAuthorGroup struct {
+	Key     string                  `json:"key"`
+	Authors []INPXAmbiguousDBAuthor `json:"authors"`
+}
+
+type INPXAmbiguousDBAuthor struct {
+	ID         string `json:"id"`
+	FirstName  string `json:"first_name,omitempty"`
+	MiddleName string `json:"middle_name,omitempty"`
+	LastName   string `json:"last_name,omitempty"`
+	NickName   string `json:"nick_name,omitempty"`
 }
 
 type DatasetDump struct {

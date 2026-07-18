@@ -119,6 +119,11 @@ inpx:
   # Apply MyHomeLib-compatible field length limits when generating INPX.
   quick_fix: true
 
+  # Disambiguate DB authors that have the same INPX-visible name components by
+  # appending a stable suffix to the exported last-name field. FB2-only authors
+  # are not changed because they do not have reliable catalog identities.
+  disambiguate_authors: true
+
   # Go text/template collection.info template. Available values are DatabaseName,
   # DumpDate, and DisplayDate; slim-sprig template functions are available. The
   # default starts with UTF-8 BOM (\ufeff) for MyHomeLib/lib2inpx compatibility.

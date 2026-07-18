@@ -45,6 +45,7 @@ type DatabaseManifestDecision struct {
 	DumpDate     string
 	Format       db.Format
 	Dumps        []DumpManifestSource
+	INPX         *model.INPXMetadata
 	Use          bool
 	Create       bool
 	Records      int64
@@ -90,6 +91,7 @@ type databaseManifestHeader struct {
 	Schema     string                 `json:"schema"`
 	Source     DatabaseManifestSource `json:"source"`
 	Processing manifestProcessing     `json:"processing"`
+	INPX       *model.INPXMetadata    `json:"inpx,omitempty"`
 	Created    string                 `json:"created"`
 	Records    int64                  `json:"records"`
 }
@@ -246,6 +248,7 @@ func PlanDatabaseManifest(
 		if fresh {
 			decision.Use = true
 			decision.Records = header.Records
+			decision.INPX = header.INPX
 			if log != nil {
 				message := "Database manifest selected"
 				if checkMD5 {
@@ -442,6 +445,7 @@ func ValidateDatabaseManifest(
 	report.Valid = true
 	report.Records = header.Records
 	decision.Records = header.Records
+	decision.INPX = header.INPX
 	decision.Use = true
 	if !databaseManifestLightMatches(header, cfg, dumpDate, decision.Format, dumpSources, false) {
 		report.Valid = false
@@ -1204,6 +1208,7 @@ func databaseManifestHeaderFor(cfg *config.Config, decision DatabaseManifestDeci
 			Dumps:    decision.Dumps,
 		},
 		Processing: processingManifest(cfg),
+		INPX:       decision.INPX,
 		Created:    time.Now().Format(time.RFC3339Nano),
 		Records:    records,
 	}

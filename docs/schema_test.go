@@ -203,6 +203,8 @@ func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
 		`"processing"`,
 		`"dump_dir_hint"`,
 		`"dump_date"`,
+		`"inpx"`,
+		`"ambiguous_db_authors"`,
 		`"path_hint"`,
 		`"checksum"`,
 		`"ordinal"`,
@@ -350,6 +352,12 @@ func fullDataset() model.Dataset {
 			Format:      "flibusta-current",
 			DumpDirHint: "/data/flibusta_20260714",
 			DumpDate:    "2026-07-14",
+			INPX: &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+				Key: "Last,First,Middle",
+				Authors: []model.INPXAmbiguousDBAuthor{{
+					ID: "10", LastName: "Last", FirstName: "First", MiddleName: "Middle", NickName: "nick",
+				}},
+			}}},
 			Dumps: []model.DatasetDump{{
 				Name:          "libbook.sql",
 				PathHint:      "/data/flibusta_20260714/libbook.sql",

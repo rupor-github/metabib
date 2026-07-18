@@ -400,6 +400,57 @@ func TestEnsureDumpDateKeepsExistingDate(t *testing.T) {
 	}
 }
 
+func TestDBAuthorAmbiguityCollectorUsesDBAuthorIdentity(t *testing.T) {
+	t.Parallel()
+
+	collector := NewDBAuthorAmbiguityCollector()
+	collector.AddContributor(model.Contributor{ID: 19026, FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"})
+	collector.AddContributor(model.Contributor{ID: 77926, FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"})
+	collector.AddContributor(model.Contributor{ID: 1, FirstName: "Other", LastName: "Author"})
+	metadata := collector.Metadata()
+	if metadata == nil || len(metadata.AmbiguousDBAuthors) != 1 {
+		t.Fatalf("Metadata() = %#v, want one ambiguous group", metadata)
+	}
+	if metadata.AmbiguousDBAuthors[0].Key != "Васильев,Сергей,Александрович" {
+		t.Fatalf("ambiguous key = %q", metadata.AmbiguousDBAuthors[0].Key)
+	}
+	core, logs := observer.New(zap.DebugLevel)
+	disambiguator := NewAuthorDisambiguator(metadata, zap.New(core), true)
+	if disambiguator == nil {
+		t.Fatal("NewAuthorDisambiguator() = nil, want disambiguator")
+	}
+
+	author := model.PersonValue{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "19026"}},
+		LastName:   "Васильев",
+	}
+	if got := disambiguator.LastName(author); got != "Васильев [археолог]" {
+		t.Fatalf("LastName() = %q, want nickname suffix", got)
+	}
+	fb2Author := model.PersonValue{LastName: "Васильев"}
+	if got := disambiguator.LastName(fb2Author); got != "Васильев" {
+		t.Fatalf("FB2 LastName() = %q, want unchanged", got)
+	}
+	if logs.FilterMessage("INPX DB author disambiguated").Len() != 2 {
+		t.Fatalf("debug logs = %#v, want two disambiguation messages", logs.All())
+	}
+}
+
+func TestDBAuthorAmbiguityCollectorFallsBackToID(t *testing.T) {
+	t.Parallel()
+
+	collector := NewDBAuthorAmbiguityCollector()
+	collector.AddContributor(model.Contributor{ID: 1, FirstName: "First", MiddleName: "Middle", LastName: "Last", NickName: "same"})
+	collector.AddContributor(model.Contributor{ID: 2, FirstName: "First", MiddleName: "Middle", LastName: "Last", NickName: "same"})
+	disambiguator := NewAuthorDisambiguator(collector.Metadata(), nil, false)
+	if got := disambiguator.LastName(model.PersonValue{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "2"}},
+		LastName:   "Last",
+	}); got != "Last [#2]" {
+		t.Fatalf("LastName() = %q, want ID suffix", got)
+	}
+}
+
 func writeDatasetInput(prefix string, dataset model.Dataset, records ...model.DatasetRecord) error {
 	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {

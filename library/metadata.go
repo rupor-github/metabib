@@ -74,6 +74,7 @@ func datasetDatabase(database DatabaseManifestDecision) *model.DatasetDatabase {
 		Format:      string(database.Format),
 		DumpDirHint: database.DumpDir,
 		DumpDate:    database.DumpDate,
+		INPX:        database.INPX,
 	}
 	for _, dump := range database.Dumps {
 		out.Dumps = append(out.Dumps, model.DatasetDump{

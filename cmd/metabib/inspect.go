@@ -16,6 +16,7 @@ import (
 	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
+	"metabib/state"
 )
 
 const inspectNoMatchExitCode = 4
@@ -31,28 +32,32 @@ type inspectOptions struct {
 	Archives bool
 	JSON     bool
 	Validate bool
+	Verbose  bool
 }
 
 type inspectSummary struct {
-	Input           string `json:"input"`
-	Schema          string `json:"schema"`
-	ID              string `json:"id,omitempty"`
-	RecordSchema    string `json:"record_schema"`
-	Library         string `json:"library,omitempty"`
-	Created         string `json:"created,omitempty"`
-	Records         int64  `json:"records"`
-	Generator       string `json:"generator,omitempty"`
-	Database        string `json:"database,omitempty"`
-	DumpDate        string `json:"dump_date,omitempty"`
-	Archives        int    `json:"archives"`
-	ArchiveEntries  int    `json:"archive_entries"`
-	FB2Entries      int    `json:"fb2_entries"`
-	Ordering        string `json:"ordering,omitempty"`
-	ParseFB2        bool   `json:"parse_fb2"`
-	FB2Coverage     string `json:"fb2_coverage,omitempty"`
-	ContentChecksum string `json:"content_checksum,omitempty"`
-	RecordsRead     int64  `json:"records_read,omitempty"`
-	Validation      string `json:"validation,omitempty"`
+	Input                   string                             `json:"input"`
+	Schema                  string                             `json:"schema"`
+	ID                      string                             `json:"id,omitempty"`
+	RecordSchema            string                             `json:"record_schema"`
+	Library                 string                             `json:"library,omitempty"`
+	Created                 string                             `json:"created,omitempty"`
+	Records                 int64                              `json:"records"`
+	Generator               string                             `json:"generator,omitempty"`
+	Database                string                             `json:"database,omitempty"`
+	DumpDate                string                             `json:"dump_date,omitempty"`
+	AmbiguousDBAuthorGroups int                                `json:"ambiguous_db_author_groups"`
+	AmbiguousDBAuthors      int                                `json:"ambiguous_db_authors"`
+	AmbiguousDBAuthorMap    []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map,omitempty"`
+	Archives                int                                `json:"archives"`
+	ArchiveEntries          int                                `json:"archive_entries"`
+	FB2Entries              int                                `json:"fb2_entries"`
+	Ordering                string                             `json:"ordering,omitempty"`
+	ParseFB2                bool                               `json:"parse_fb2"`
+	FB2Coverage             string                             `json:"fb2_coverage,omitempty"`
+	ContentChecksum         string                             `json:"content_checksum,omitempty"`
+	RecordsRead             int64                              `json:"records_read,omitempty"`
+	Validation              string                             `json:"validation,omitempty"`
 }
 
 type inspectRecordResult struct {
@@ -99,6 +104,7 @@ func runInspect(ctx context.Context, cmd *cli.Command) error {
 		Archives: cmd.Bool("archives"),
 		JSON:     cmd.Bool("json"),
 		Validate: cmd.Bool("validate"),
+		Verbose:  state.EnvFromContext(ctx).Verbose,
 	}, os.Stdout)
 	if errors.Is(err, errInspectNoMatch) {
 		return cli.Exit(err, inspectNoMatchExitCode)
@@ -124,7 +130,7 @@ func inspectDataset(ctx context.Context, opts inspectOptions, out io.Writer) err
 		}
 		if value.Header {
 			dataset = value.Dataset
-			summary = datasetInspectSummary(inputPath, dataset)
+			summary = datasetInspectSummary(inputPath, dataset, opts.Verbose)
 			if opts.Archives {
 				return writeInspectArchives(
 					out,
@@ -238,11 +244,22 @@ func datasetRecordHasFile(rec model.DatasetRecord, key string) bool {
 	return false
 }
 
-func datasetInspectSummary(inputPath string, dataset model.Dataset) inspectSummary {
+func datasetInspectSummary(inputPath string, dataset model.Dataset, verbose bool) inspectSummary {
 	var database, dumpDate string
+	var ambiguousGroups, ambiguousAuthors int
+	var ambiguousMap []model.INPXAmbiguousDBAuthorGroup
 	if dataset.Database != nil {
 		database = dataset.Database.ID
 		dumpDate = dataset.Database.DumpDate
+		if dataset.Database.INPX != nil {
+			ambiguousGroups = len(dataset.Database.INPX.AmbiguousDBAuthors)
+			for _, group := range dataset.Database.INPX.AmbiguousDBAuthors {
+				ambiguousAuthors += len(group.Authors)
+			}
+			if verbose {
+				ambiguousMap = dataset.Database.INPX.AmbiguousDBAuthors
+			}
+		}
 	}
 	var entries, fb2Entries int
 	for _, archive := range dataset.Archives {
@@ -250,23 +267,26 @@ func datasetInspectSummary(inputPath string, dataset model.Dataset) inspectSumma
 		fb2Entries += archive.FB2Entries
 	}
 	return inspectSummary{
-		Input:           inputPath,
-		Schema:          dataset.Schema,
-		ID:              dataset.ID,
-		RecordSchema:    dataset.RecordSchema,
-		Library:         dataset.Library,
-		Created:         dataset.Created,
-		Records:         dataset.Records,
-		Generator:       strings.TrimSpace(dataset.Generator.Name + " " + dataset.Generator.Version),
-		Database:        database,
-		DumpDate:        dumpDate,
-		Archives:        len(dataset.Archives),
-		ArchiveEntries:  entries,
-		FB2Entries:      fb2Entries,
-		Ordering:        dataset.Ordering.Mode,
-		ParseFB2:        dataset.Processing.ParseFB2,
-		FB2Coverage:     dataset.Processing.FB2Coverage,
-		ContentChecksum: dataset.Processing.ArchiveContentChecksum.Algorithm,
+		Input:                   inputPath,
+		Schema:                  dataset.Schema,
+		ID:                      dataset.ID,
+		RecordSchema:            dataset.RecordSchema,
+		Library:                 dataset.Library,
+		Created:                 dataset.Created,
+		Records:                 dataset.Records,
+		Generator:               strings.TrimSpace(dataset.Generator.Name + " " + dataset.Generator.Version),
+		Database:                database,
+		DumpDate:                dumpDate,
+		AmbiguousDBAuthorGroups: ambiguousGroups,
+		AmbiguousDBAuthors:      ambiguousAuthors,
+		AmbiguousDBAuthorMap:    ambiguousMap,
+		Archives:                len(dataset.Archives),
+		ArchiveEntries:          entries,
+		FB2Entries:              fb2Entries,
+		Ordering:                dataset.Ordering.Mode,
+		ParseFB2:                dataset.Processing.ParseFB2,
+		FB2Coverage:             dataset.Processing.FB2Coverage,
+		ContentChecksum:         dataset.Processing.ArchiveContentChecksum.Algorithm,
 	}
 }
 
@@ -287,6 +307,8 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 			"  generator: %s\n"+
 			"  database: %s\n"+
 			"  dump date: %s\n"+
+			"  ambiguous db author groups: %d\n"+
+			"  ambiguous db authors: %d\n"+
 			"  archives: %d\n"+
 			"  archive entries: %d\n"+
 			"  fb2 entries: %d\n"+
@@ -304,6 +326,8 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 		summary.Generator,
 		summary.Database,
 		summary.DumpDate,
+		summary.AmbiguousDBAuthorGroups,
+		summary.AmbiguousDBAuthors,
 		summary.Archives,
 		summary.ArchiveEntries,
 		summary.FB2Entries,
@@ -315,10 +339,40 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 	if err != nil {
 		return err
 	}
+	if len(summary.AmbiguousDBAuthorMap) > 0 {
+		if err := writeInspectAmbiguousDBAuthors(out, summary.AmbiguousDBAuthorMap); err != nil {
+			return err
+		}
+	}
 	if summary.Validation != "" {
 		_, err = fmt.Fprintf(out, "  validation: %s\n  records read: %d\n", summary.Validation, summary.RecordsRead)
 	}
 	return err
+}
+
+func writeInspectAmbiguousDBAuthors(out io.Writer, groups []model.INPXAmbiguousDBAuthorGroup) error {
+	if _, err := fmt.Fprintln(out, "  ambiguous db author map:"); err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if _, err := fmt.Fprintf(out, "    %s\n", group.Key); err != nil {
+			return err
+		}
+		for _, author := range group.Authors {
+			if _, err := fmt.Fprintf(
+				out,
+				"      %s: %s, %s, %s (%s)\n",
+				author.ID,
+				author.LastName,
+				author.FirstName,
+				author.MiddleName,
+				author.NickName,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func writeInspectRecord(out io.Writer, result inspectRecordResult, jsonOutput bool) error {

@@ -622,17 +622,19 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	stats, err := mhlinpx.Generate(ctx, mhlinpx.Options{
-		InputPrefix:     cmd.String("input"),
-		OutputPrefix:    cmd.String("output"),
-		Format:          format,
-		SequenceMode:    sequence,
-		FB2Preference:   preference,
-		QuickFix:        cfg.INPX.QuickFix,
-		Limits:          limits,
-		Language:        language,
-		CommentTemplate: cfg.INPX.CommentTemplate,
-		VersionTemplate: cfg.INPX.VersionTemplate,
-		Log:             env.Log,
+		InputPrefix:         cmd.String("input"),
+		OutputPrefix:        cmd.String("output"),
+		Format:              format,
+		SequenceMode:        sequence,
+		FB2Preference:       preference,
+		QuickFix:            cfg.INPX.QuickFix,
+		DisambiguateAuthors: cfg.INPX.DisambiguateAuthors,
+		Limits:              limits,
+		Language:            language,
+		CommentTemplate:     cfg.INPX.CommentTemplate,
+		VersionTemplate:     cfg.INPX.VersionTemplate,
+		Log:                 env.Log,
+		Verbose:             env.Verbose,
 	})
 	if err != nil {
 		return err
@@ -679,18 +681,20 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	stats, err := flibinpx.Generate(ctx, flibinpx.Options{
-		InputPrefix:      cmd.String("input"),
-		OutputPrefix:     cmd.String("output"),
-		SequenceMode:     sequence,
-		FB2Preference:    preference,
-		FlattenMode:      flatten,
-		DedupMode:        dedup,
-		FB2PathSeparator: cfg.INPX.FLibrary.FB2PathSeparator,
-		SourceLib:        cmd.String("source-lib"),
-		Language:         language,
-		CommentTemplate:  cfg.INPX.CommentTemplate,
-		VersionTemplate:  cfg.INPX.VersionTemplate,
-		Log:              env.Log,
+		InputPrefix:         cmd.String("input"),
+		OutputPrefix:        cmd.String("output"),
+		SequenceMode:        sequence,
+		FB2Preference:       preference,
+		FlattenMode:         flatten,
+		DedupMode:           dedup,
+		FB2PathSeparator:    cfg.INPX.FLibrary.FB2PathSeparator,
+		SourceLib:           cmd.String("source-lib"),
+		DisambiguateAuthors: cfg.INPX.DisambiguateAuthors,
+		Language:            language,
+		CommentTemplate:     cfg.INPX.CommentTemplate,
+		VersionTemplate:     cfg.INPX.VersionTemplate,
+		Log:                 env.Log,
+		Verbose:             env.Verbose,
 	})
 	if err != nil {
 		return err

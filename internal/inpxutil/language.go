@@ -40,6 +40,11 @@ type LanguageResolver struct {
 	verbose         bool
 }
 
+type LanguageSelection struct {
+	Canonicalized bool
+	Ignored       bool
+}
+
 type languageContextRule struct {
 	from                  string
 	to                    string
@@ -138,8 +143,14 @@ func NewLanguageResolver(opts LanguageResolverOptions) (*LanguageResolver, error
 }
 
 func (r *LanguageResolver) SelectLanguage(rec model.DatasetRecord, view DatasetRecordView) string {
+	value, _ := r.SelectLanguageWithReport(rec, view)
+	return value
+}
+
+func (r *LanguageResolver) SelectLanguageWithReport(rec model.DatasetRecord, view DatasetRecordView) (string, LanguageSelection) {
+	selection := LanguageSelection{}
 	if r == nil || !r.enabled {
-		return firstLanguage(view.Database.Language, view.FB2.Language)
+		return firstLanguage(view.Database.Language, view.FB2.Language), selection
 	}
 	ctx := languageContext(rec, view)
 	candidates := []languageCandidate{
@@ -152,19 +163,21 @@ func (r *LanguageResolver) SelectLanguage(rec model.DatasetRecord, view DatasetR
 		}
 		resolved := r.resolve(candidate, ctx)
 		if resolved.Ignored {
+			selection.Ignored = true
 			r.logVerbose("Ignored INPX language", candidate, ctx, resolved)
 			continue
 		}
 		if resolved.Resolved {
 			if resolved.Value != strings.TrimSpace(candidate.Value) {
+				selection.Canonicalized = true
 				r.logVerbose("Canonicalized INPX language", candidate, ctx, resolved)
 			}
-			return resolved.Value
+			return resolved.Value, selection
 		}
 		r.logUnresolved(candidate, ctx, resolved)
-		return strings.TrimSpace(candidate.Value)
+		return strings.TrimSpace(candidate.Value), selection
 	}
-	return ""
+	return "", selection
 }
 
 func firstLanguage(db string, fb2 string) string {

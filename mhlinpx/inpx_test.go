@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
@@ -90,6 +93,69 @@ func TestGenerate(t *testing.T) {
 	}
 	if !strings.Contains(entries["collection.info"], "flibusta_20260603") {
 		t.Fatalf("collection.info = %q", entries["collection.info"])
+	}
+}
+
+func TestGenerateLogsEntryDiagnosticsSummary(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	rec := mhlDatasetRecord("archive-0001", 0, "42.fb2", 42)
+	rec.Claims.Bibliographic.Language = []model.Claim{{Observation: "db", Value: "RU"}}
+	rec.Claims.Bibliographic.Authors = []model.Claim{{Observation: "db", Value: []model.PersonValue{{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "19026"}},
+		FirstName:  "Сергей",
+		MiddleName: "Александрович",
+		LastName:   "Васильев",
+		NickName:   "археолог",
+	}}}}
+	core, logs := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+	language, err := inpxutil.NewLanguageResolver(inpxutil.LanguageResolverOptions{Enabled: true, Log: logger})
+	if err != nil {
+		t.Fatalf("NewLanguageResolver() error = %v", err)
+	}
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database: &model.DatasetDatabase{
+			DumpDate: "20260603",
+			INPX:     ambiguousAuthorMetadata(),
+		},
+		Archives: []model.DatasetArchive{{ID: "archive-0001", Name: "books.zip", PathHint: filepath.Join(dir, "books.zip"), Entries: 1}},
+	}, rec)
+
+	_, err = Generate(context.Background(), Options{
+		InputPrefix:         prefix,
+		OutputPrefix:        filepath.Join(dir, "flibusta"),
+		Format:              Format2X,
+		SequenceMode:        SequenceAuthor,
+		FB2Preference:       PreferComplement,
+		QuickFix:            true,
+		Limits:              DefaultLimits(),
+		DisambiguateAuthors: true,
+		Language:            language,
+		Log:                 logger,
+		CommentTemplate:     "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:     "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if logs.FilterMessage("Disambiguated INPX DB author").Len() != 0 || logs.FilterMessage("Canonicalized INPX language").Len() != 0 {
+		t.Fatalf("per-book logs without verbose = %#v", logs.All())
+	}
+	entries := logs.FilterMessage("INPX entry created").All()
+	if len(entries) != 1 {
+		t.Fatalf("entry logs = %#v", logs.All())
+	}
+	fields := entries[0].ContextMap()
+	if fields["disambiguated_author_books"] != int64(1) || fields["disambiguated_authors"] != int64(1) ||
+		fields["canonicalized_language_books"] != int64(1) {
+		t.Fatalf("entry log fields = %#v", fields)
 	}
 }
 
@@ -200,6 +266,28 @@ func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 	}
 }
 
+func TestAuthorLastNamePreservesDisambiguationSuffixWithQuickFix(t *testing.T) {
+	t.Parallel()
+
+	got := authorLastName(
+		model.PersonValue{LastName: "VeryLongFamilyName"},
+		" [#123]",
+		Options{QuickFix: true, Limits: Limits{AuthorFamily: 12}},
+	)
+	if got != "Very [#123]" {
+		t.Fatalf("authorLastName() = %q, want suffix preserved", got)
+	}
+
+	got = authorLastName(
+		model.PersonValue{LastName: "VeryLongFamilyName"},
+		"[#123456789]",
+		Options{QuickFix: true, Limits: Limits{AuthorFamily: 5}},
+	)
+	if got != "[#123456789]" {
+		t.Fatalf("authorLastName() = %q, want full suffix over truncation", got)
+	}
+}
+
 func TestGenresStringSanitizesGenreSeparators(t *testing.T) {
 	t.Parallel()
 
@@ -268,7 +356,7 @@ func TestRecordLineRUKSAppendsMD5AndReplacement(t *testing.T) {
 		Observation: "db",
 		Target:      &model.IdentityTarget{Scheme: "flibusta.book", Value: "42"},
 	}}
-	line, _, err := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
+	line, _, _, err := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
 	if err != nil {
 		t.Fatalf("recordLine() error = %v", err)
 	}
@@ -322,7 +410,7 @@ func TestRecordLineUsesArtifactStemForFB2OnlyLIBID(t *testing.T) {
 		}},
 	}
 
-	line, _, err := recordLine(rec, Options{
+	line, _, _, err := recordLine(rec, Options{
 		Format:        Format2X,
 		SequenceMode:  SequenceAuthor,
 		FB2Preference: PreferComplement,
@@ -372,7 +460,7 @@ func TestRecordLineSanitizesFieldSeparators(t *testing.T) {
 	rec.Claims.Catalog.Time = []model.Claim{{Observation: "db", Value: "bad" + fieldSep + "date"}}
 	rec.Claims.Catalog.Deleted = []model.Claim{{Observation: "db", Value: model.DeletionValue{Raw: "bad\rdelete"}}}
 	rec.Claims.Catalog.Status = []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2" + fieldSep + "bad"}}}
-	line, _, err := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
+	line, _, _, err := recordLine(rec, Options{Format: FormatRUKS, QuickFix: true, Limits: DefaultLimits()})
 	if err != nil {
 		t.Fatalf("recordLine() error = %v", err)
 	}
@@ -385,6 +473,53 @@ func TestRecordLineSanitizesFieldSeparators(t *testing.T) {
 			t.Fatalf("field %d = %q contains unsanitized layout character", idx, field)
 		}
 	}
+}
+
+func TestRecordLineLogsDisambiguatedDBAuthor(t *testing.T) {
+	t.Parallel()
+
+	position := int64(1)
+	rec := mhlOnlineDatasetRecord(42, "Title")
+	rec.Claims.Bibliographic.Authors = []model.Claim{{Observation: "db", Value: []model.PersonValue{{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "19026"}},
+		FirstName:  "Сергей",
+		MiddleName: "Александрович",
+		LastName:   "Васильев",
+		NickName:   "археолог",
+		Position:   &position,
+	}}}}
+	core, logs := observer.New(zap.DebugLevel)
+	_, _, _, err := recordLine(rec, Options{
+		Format:              Format2X,
+		FB2Preference:       PreferComplement,
+		QuickFix:            true,
+		Limits:              DefaultLimits(),
+		AuthorDisambiguator: inpxutil.NewAuthorDisambiguator(ambiguousAuthorMetadata(), nil, false),
+		Log:                 zap.New(core),
+		DisambiguateAuthors: true,
+		Verbose:             true,
+	})
+	if err != nil {
+		t.Fatalf("recordLine() error = %v", err)
+	}
+	entries := logs.FilterMessage("Disambiguated INPX DB author").All()
+	if len(entries) != 1 {
+		t.Fatalf("debug logs = %#v, want one disambiguation message", logs.All())
+	}
+	fields := entries[0].ContextMap()
+	if fields["book_id"] != "42" || fields["flibusta_person_id"] != "19026" || fields["suffix"] != "[археолог]" {
+		t.Fatalf("log fields = %#v", fields)
+	}
+}
+
+func ambiguousAuthorMetadata() *model.INPXMetadata {
+	return &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+		Key: "Васильев,Сергей,Александрович",
+		Authors: []model.INPXAmbiguousDBAuthor{
+			{ID: "19026", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"},
+			{ID: "77926", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"},
+		},
+	}}}
 }
 
 func writeDataset(t *testing.T, prefix string, dataset model.Dataset, records ...model.DatasetRecord) {

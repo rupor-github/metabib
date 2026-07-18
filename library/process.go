@@ -21,6 +21,7 @@ import (
 	"metabib/config"
 	"metabib/db"
 	"metabib/fb2"
+	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
 )
@@ -148,6 +149,7 @@ func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Log
 func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger, verbose bool, manifest DatabaseManifestDecision) error {
 	start := time.Now()
 	var manifestOut *manifestWriter
+	var authorCollector *inpxutil.DBAuthorAmbiguityCollector
 	if manifest.Create {
 		format, err := repo.DetectFormat(ctx)
 		if err != nil {
@@ -165,6 +167,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		if err != nil {
 			return err
 		}
+		authorCollector = inpxutil.NewDBAuthorAmbiguityCollector()
 		defer manifestOut.Abort()
 		if verbose && log != nil {
 			log.Info("Database manifest creation started", zap.String("manifest", manifest.ManifestPath))
@@ -311,6 +314,11 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 				}
 			}
 			if manifestOut != nil {
+				if authorCollector != nil {
+					for _, author := range rec.Source.Database.Authors {
+						authorCollector.AddContributor(author)
+					}
+				}
 				if err := manifestOut.Write(rec); err != nil {
 					return err
 				}
@@ -377,6 +385,9 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	}
 	if manifestOut != nil {
 		manifestStart := time.Now()
+		if authorCollector != nil {
+			manifest.INPX = authorCollector.Metadata()
+		}
 		header := databaseManifestHeaderFor(cfg, manifest, processed)
 		if err := manifestOut.Close(header); err != nil {
 			return err
