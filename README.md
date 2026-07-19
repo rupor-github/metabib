@@ -552,6 +552,9 @@ Available `flib-inpx` arguments:
   `all`, `leaf`, `path`, and `path-leaf`. Default is `all`.
 - `--source-lib VALUE`: `SOURCELIB` field value. Default is the dataset header
   library name.
+- `--additional`: also write supported FLibrary additional artifacts next to the
+  INPX output. Database-only inputs have no archive-derived additional source
+  data, so this flag is ignored with a warning for those datasets.
 
 FLibrary-specific settings that are not command-line arguments live under
 `inpx.flibrary`:

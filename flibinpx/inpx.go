@@ -59,6 +59,7 @@ const (
 type Options struct {
 	InputPrefix         string
 	OutputPrefix        string
+	Additional          bool
 	SequenceMode        SequenceMode
 	FB2Preference       FB2Preference
 	FlattenMode         FlattenMode
@@ -187,10 +188,14 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	}
 	var stream *streamINPXWriter
 	var tmpPath string
+	var additionalTmpPath string
 	cleanupTemp := true
 	defer func() {
 		if cleanupTemp && tmpPath != "" {
 			_ = os.Remove(tmpPath)
+		}
+		if cleanupTemp && additionalTmpPath != "" {
+			_ = os.Remove(additionalTmpPath)
 		}
 	}()
 
@@ -214,6 +219,12 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 				return err
 			}
 			stats.OutputPath = outputPath
+			if opts.Additional && len(dataset.Archives) == 0 {
+				if opts.Log != nil {
+					opts.Log.Warn("Skipping FLibrary additional artifacts for database-only input")
+				}
+				opts.Additional = false
+			}
 			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 				return fmt.Errorf("create FLibrary INPX output directory: %w", err)
 			}
@@ -230,10 +241,27 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			} else if err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("stat FLibrary INPX output %q: %w", outputPath, err)
 			}
+			if opts.Additional {
+				additionalOutputPath := annotationsOutputPath(outputPath)
+				stats.AdditionalOutputPath = additionalOutputPath
+				additionalTmpFile, err := os.CreateTemp(filepath.Dir(additionalOutputPath), filepath.Base(additionalOutputPath)+"-*.tmp")
+				if err != nil {
+					return fmt.Errorf("create temporary FLibrary additional output: %w", err)
+				}
+				additionalTmpPath = additionalTmpFile.Name()
+				if err := additionalTmpFile.Close(); err != nil {
+					return fmt.Errorf("close temporary FLibrary additional output %q: %w", additionalTmpPath, err)
+				}
+				if _, err := os.Stat(additionalOutputPath); err == nil && opts.Log != nil {
+					opts.Log.Warn("Overwriting existing FLibrary additional output", zap.String("file", additionalOutputPath))
+				} else if err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("stat FLibrary additional output %q: %w", additionalOutputPath, err)
+				}
+			}
 			if opts.Log != nil {
 				opts.Log.Info("FLibrary INPX creation started", zap.String("file", outputPath), zap.Int("archives", len(dataset.Archives)))
 			}
-			stream, err = newStreamINPXWriter(tmpPath, meta, dataset, opts)
+			stream, err = newStreamINPXWriter(tmpPath, additionalTmpPath, meta, dataset, opts)
 			return err
 		},
 		func(rec model.DatasetRecord) error {
@@ -265,8 +293,17 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if err := fileutil.ReplaceOutputFile(tmpPath, stats.OutputPath); err != nil {
 		return stats, fmt.Errorf("replace FLibrary INPX output %q: %w", stats.OutputPath, err)
 	}
+	if stats.AdditionalOutputPath != "" {
+		if err := fileutil.ReplaceOutputFile(additionalTmpPath, stats.AdditionalOutputPath); err != nil {
+			return stats, fmt.Errorf("replace FLibrary additional output %q: %w", stats.AdditionalOutputPath, err)
+		}
+	}
 	cleanupTemp = false
 	return stats, nil
+}
+
+func annotationsOutputPath(outputPath string) string {
+	return strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "-annotations.zip"
 }
 
 type streamINPXWriter struct {
@@ -285,9 +322,10 @@ type streamINPXWriter struct {
 	insNo       int
 	bw          *bufio.Writer
 	stats       Stats
+	annotations *annotationWriter
 }
 
-func newStreamINPXWriter(path string, meta inpxutil.Metadata, dataset model.Dataset, opts Options) (*streamINPXWriter, error) {
+func newStreamINPXWriter(path string, annotationsPath string, meta inpxutil.Metadata, dataset model.Dataset, opts Options) (*streamINPXWriter, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("create FLibrary INPX %q: %w", path, err)
@@ -299,6 +337,15 @@ func newStreamINPXWriter(path string, meta inpxutil.Metadata, dataset model.Data
 	for idx, archive := range archives {
 		archiveByID[archive.Meta.ID] = idx
 	}
+	var annotations *annotationWriter
+	if opts.Additional {
+		annotations, err = newAnnotationWriter(annotationsPath, meta)
+		if err != nil {
+			_ = zw.Close()
+			_ = f.Close()
+			return nil, err
+		}
+	}
 	return &streamINPXWriter{
 		path:        path,
 		meta:        meta,
@@ -309,6 +356,7 @@ func newStreamINPXWriter(path string, meta inpxutil.Metadata, dataset model.Data
 		archiveByID: archiveByID,
 		active:      -1,
 		stats:       Stats{DumpDate: meta.DumpDate},
+		annotations: annotations,
 	}, nil
 }
 
@@ -327,6 +375,15 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 	fields, view, diagnostics, ok, err := buildRecordFields(rec, archive.Meta, w.opts)
 	if err != nil || !ok {
 		return err
+	}
+	if w.annotations != nil {
+		name := fields.File
+		if fields.Ext != "" {
+			name += "." + fields.Ext
+		}
+		if err := w.annotations.WriteRecord(name, fb2Annotation(rec)); err != nil {
+			return err
+		}
 	}
 	w.stats.Files++
 	w.activeDiag.add(diagnostics)
@@ -399,6 +456,11 @@ func (w *streamINPXWriter) openNext() error {
 		return fmt.Errorf("create FLibrary INPX entry %q: %w", name, err)
 	}
 	w.bw = bufio.NewWriter(zw)
+	if w.annotations != nil {
+		if err := w.annotations.OpenArchive(archive.Meta); err != nil {
+			return err
+		}
+	}
 	w.active = w.nextArchive
 	w.activeStart = time.Now()
 	w.activeStats = w.stats
@@ -412,6 +474,11 @@ func (w *streamINPXWriter) finishActive() error {
 	archive := w.archives[w.active]
 	if err := w.bw.Flush(); err != nil {
 		return err
+	}
+	if w.annotations != nil {
+		if err := w.annotations.FinishArchive(); err != nil {
+			return err
+		}
 	}
 	if w.opts.Log != nil {
 		archiveStats := w.statsSinceActiveStart()
@@ -493,20 +560,134 @@ func (w *streamINPXWriter) Finish() (Stats, error) {
 }
 
 func (w *streamINPXWriter) Close() error {
+	var errs []error
 	if w.zw != nil {
 		if err := w.zw.Close(); err != nil {
-			w.f.Close()
-			return fmt.Errorf("close FLibrary INPX zip %q: %w", w.path, err)
+			errs = append(errs, fmt.Errorf("close FLibrary INPX zip %q: %w", w.path, err))
 		}
 		w.zw = nil
 	}
 	if w.f != nil {
 		if err := w.f.Close(); err != nil {
-			return fmt.Errorf("close FLibrary INPX %q: %w", w.path, err)
+			errs = append(errs, fmt.Errorf("close FLibrary INPX %q: %w", w.path, err))
 		}
 		w.f = nil
 	}
+	if w.annotations != nil {
+		errs = append(errs, w.annotations.Close())
+		w.annotations = nil
+	}
+	return errors.Join(errs...)
+}
+
+type annotationWriter struct {
+	path string
+	zw   *zip.Writer
+	f    *os.File
+	bw   *bufio.Writer
+}
+
+func newAnnotationWriter(path string, meta inpxutil.Metadata) (*annotationWriter, error) {
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, fmt.Errorf("create FLibrary additional output %q: %w", path, err)
+	}
+	zw := zip.NewWriter(f)
+	zw.SetComment(inpxutil.ZipComment(meta))
+	return &annotationWriter{path: path, zw: zw, f: f}, nil
+}
+
+func (w *annotationWriter) OpenArchive(archive model.DatasetArchive) error {
+	zw, err := w.zw.Create(archive.Name)
+	if err != nil {
+		return fmt.Errorf("create FLibrary additional entry %q: %w", archive.Name, err)
+	}
+	w.bw = bufio.NewWriter(zw)
+	if _, err := w.bw.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<folder name=\""); err != nil {
+		return err
+	}
+	if _, err := w.bw.WriteString(xmlEscape(archive.Name)); err != nil {
+		return err
+	}
+	_, err = w.bw.WriteString("\">\n")
+	return err
+}
+
+func (w *annotationWriter) WriteRecord(name string, annotation string) error {
+	if strings.TrimSpace(annotation) == "" {
+		return nil
+	}
+	if _, err := w.bw.WriteString("\t<file name=\""); err != nil {
+		return err
+	}
+	if _, err := w.bw.WriteString(xmlEscape(name)); err != nil {
+		return err
+	}
+	if _, err := w.bw.WriteString("\">\n\t\t<p>"); err != nil {
+		return err
+	}
+	if _, err := w.bw.WriteString(xmlEscape(strings.TrimSpace(annotation))); err != nil {
+		return err
+	}
+	_, err := w.bw.WriteString("</p>\n\t</file>\n")
+	return err
+}
+
+func (w *annotationWriter) FinishArchive() error {
+	if w.bw == nil {
+		return nil
+	}
+	if _, err := w.bw.WriteString("</folder>\n"); err != nil {
+		return err
+	}
+	if err := w.bw.Flush(); err != nil {
+		return err
+	}
+	w.bw = nil
 	return nil
+}
+
+func (w *annotationWriter) Close() error {
+	var errs []error
+	if w.zw != nil {
+		if err := w.zw.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close FLibrary additional zip %q: %w", w.path, err))
+		}
+		w.zw = nil
+	}
+	if w.f != nil {
+		if err := w.f.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close FLibrary additional output %q: %w", w.path, err))
+		}
+		w.f = nil
+	}
+	return errors.Join(errs...)
+}
+
+func fb2Annotation(rec model.DatasetRecord) string {
+	if rec.Claims.Bibliographic == nil {
+		return ""
+	}
+	for _, claim := range rec.Claims.Bibliographic.Annotation {
+		if claim.Observation != "fb2" {
+			continue
+		}
+		if annotation, ok := claim.Value.(string); ok {
+			return annotation
+		}
+	}
+	return ""
+}
+
+func xmlEscape(value string) string {
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"\"", "&quot;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(value)
 }
 
 func templateOptions(opts Options) inpxutil.TemplateOptions {

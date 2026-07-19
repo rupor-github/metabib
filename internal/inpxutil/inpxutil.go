@@ -46,14 +46,15 @@ var genreCodeReplacer = strings.NewReplacer(
 )
 
 type Stats struct {
-	OutputPath string
-	DumpDate   string
-	Archives   int
-	Files      int
-	Records    int64
-	DBRecords  int64
-	FB2Records int64
-	Dummy      int64
+	OutputPath           string
+	AdditionalOutputPath string
+	DumpDate             string
+	Archives             int
+	Files                int
+	Records              int64
+	DBRecords            int64
+	FB2Records           int64
+	Dummy                int64
 }
 
 type DatasetArchiveRows struct {

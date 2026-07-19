@@ -257,6 +257,10 @@ func flibINPXCommand() *cli.Command {
 				Usage: "FB2 sequence flattening `MODE` (all, leaf, path, path-leaf)",
 			},
 			&cli.StringFlag{Name: "source-lib", Usage: "SOURCELIB field value; defaults to dataset library name"},
+			&cli.BoolFlag{
+				Name:  "additional",
+				Usage: "write additional FLibrary artifacts; FLibrary expects .7z archives but processes .zip files after renaming",
+			},
 		},
 		Action: runFLibINPX,
 	}
@@ -683,6 +687,7 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	stats, err := flibinpx.Generate(ctx, flibinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
+		Additional:          cmd.Bool("additional"),
 		SequenceMode:        sequence,
 		FB2Preference:       preference,
 		FlattenMode:         flatten,
@@ -703,6 +708,7 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 		env.Log.Info(
 			"FLibrary INPX created",
 			zap.String("file", stats.OutputPath),
+			zap.String("additional_file", stats.AdditionalOutputPath),
 			zap.String("dump_date", stats.DumpDate),
 			zap.Int("archives", stats.Archives),
 			zap.Int("files", stats.Files),

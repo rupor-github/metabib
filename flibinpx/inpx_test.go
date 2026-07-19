@@ -375,6 +375,88 @@ func TestBuildRecordFieldsLogsDisambiguatedDBAuthor(t *testing.T) {
 	}
 }
 
+func TestGenerateFLibraryAdditionalAnnotations(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:      "archive-0001",
+			Name:    "books.zip",
+			Entries: 1,
+		}},
+	}, flibRecord("archive-0001", 0, "1.fb2"))
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:      prefix,
+		OutputPrefix:     filepath.Join(dir, "flibusta"),
+		Additional:       true,
+		CommentTemplate:  "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:  "{{ .DumpDate }}\r\n",
+		SequenceMode:     SequenceAuthor,
+		FB2Preference:    PreferComplement,
+		FlattenMode:      FlattenAll,
+		DedupMode:        DedupCaseInsensitive,
+		FB2PathSeparator: " / ",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if filepath.Base(stats.AdditionalOutputPath) != "flibusta_20260603-annotations.zip" {
+		t.Fatalf("additional output = %q", stats.AdditionalOutputPath)
+	}
+	entries := readZipEntries(t, stats.AdditionalOutputPath)
+	want := "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<folder name=\"books.zip\">\n" +
+		"\t<file name=\"1.fb2\">\n\t\t<p>Annotation &amp; details &lt;test&gt;</p>\n\t</file>\n</folder>\n"
+	if entries["books.zip"] != want {
+		t.Fatalf("annotation entry = %q", entries["books.zip"])
+	}
+}
+
+func TestGenerateFLibraryAdditionalIgnoredForDatabaseOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+	}, flibOnlineRecord(1))
+	core, logs := observer.New(zap.WarnLevel)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:      prefix,
+		OutputPrefix:     filepath.Join(dir, "flibusta"),
+		Additional:       true,
+		CommentTemplate:  "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:  "{{ .DumpDate }}\r\n",
+		SequenceMode:     SequenceAuthor,
+		FB2Preference:    PreferComplement,
+		FlattenMode:      FlattenAll,
+		DedupMode:        DedupCaseInsensitive,
+		FB2PathSeparator: " / ",
+		Log:              zap.New(core),
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.AdditionalOutputPath != "" {
+		t.Fatalf("additional output = %q, want empty", stats.AdditionalOutputPath)
+	}
+	if logs.FilterMessage("Skipping FLibrary additional artifacts for database-only input").Len() != 1 {
+		t.Fatalf("logs = %#v, want database-only warning", logs.All())
+	}
+}
+
 func TestGenresStringSanitizesGenreSeparators(t *testing.T) {
 	t.Parallel()
 
@@ -443,11 +525,12 @@ func flibRecord(source string, index int, entry string) model.DatasetRecord {
 		},
 		Claims: model.Claims{
 			Bibliographic: &model.BibliographicClaims{
-				Title:    []model.Claim{{Observation: "db", Value: "Title"}, {Observation: "fb2", Value: "FB2 Title"}},
-				Authors:  []model.Claim{{Observation: "db", Value: []model.PersonValue{{FirstName: "First", LastName: "Last"}}}},
-				Genres:   []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf"}}}},
-				Language: []model.Claim{{Observation: "db", Value: "ru"}, {Observation: "fb2", Value: "ru"}},
-				Keywords: []model.Claim{{Observation: "db", Value: "one,two;three"}},
+				Title:      []model.Claim{{Observation: "db", Value: "Title"}, {Observation: "fb2", Value: "FB2 Title"}},
+				Authors:    []model.Claim{{Observation: "db", Value: []model.PersonValue{{FirstName: "First", LastName: "Last"}}}},
+				Genres:     []model.Claim{{Observation: "db", Value: []model.GenreValue{{Code: "sf"}}}},
+				Annotation: []model.Claim{{Observation: "fb2", Value: "Annotation & details <test>"}},
+				Language:   []model.Claim{{Observation: "db", Value: "ru"}, {Observation: "fb2", Value: "ru"}},
+				Keywords:   []model.Claim{{Observation: "db", Value: "one,two;three"}},
 				Sequences: []model.Claim{
 					{Observation: "db", Value: []model.SequenceValue{
 						{
