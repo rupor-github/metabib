@@ -88,20 +88,20 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	first := strings.Split(lines[0], inpxutil.FieldSep)
 	second := strings.Split(lines[1], inpxutil.FieldSep)
 	third := strings.Split(lines[2], inpxutil.FieldSep)
-	if len(first) != 19 || len(second) != 19 || len(third) != 19 {
+	if len(first) != 17 || len(second) != 17 || len(third) != 17 {
 		t.Fatalf("field counts = %d, %d, %d first=%#v second=%#v third=%#v", len(first), len(second), len(third), first, second, third)
 	}
-	if first[3] != "Cycle" || first[4] != "1" || first[11] != "1" || first[12] != filepath.Base(archivePath) {
+	if first[3] != "Cycle" || first[4] != "1" || first[11] != "ru" {
 		t.Fatalf("first fields = %#v", first)
 	}
-	if second[3] != "Publisher Series" || second[4] != "10" || second[11] != "2" {
+	if second[3] != "Publisher Series" || second[4] != "10" {
 		t.Fatalf("second fields = %#v", second)
 	}
-	if third[3] != "Universe / Cycle" || third[4] != "7" || third[11] != "3" {
+	if third[3] != "Universe / Cycle" || third[4] != "7" {
 		t.Fatalf("third fields = %#v", third)
 	}
-	if first[15] != "one:two:three:" || first[16] != "2025" || first[17] != "flibusta" {
-		t.Fatalf("extended fields = %#v", first[15:18])
+	if first[13] != "one:two:three:" || first[14] != "2025" || first[15] != "flibusta" {
+		t.Fatalf("extended fields = %#v", first[13:16])
 	}
 }
 
@@ -355,7 +355,7 @@ func TestBuildRecordFieldsLogsDisambiguatedDBAuthor(t *testing.T) {
 		Position:   &position,
 	}}}}
 	core, logs := observer.New(zap.DebugLevel)
-	_, _, _, ok, err := buildRecordFields(rec, model.DatasetArchive{ID: "archive-0001", Name: "books.zip", PathHint: "/data/books.zip"}, Options{
+	_, _, _, ok, err := buildRecordFields(rec, Options{
 		FB2Preference:       PreferComplement,
 		AuthorDisambiguator: inpxutil.NewAuthorDisambiguator(ambiguousAuthorMetadata(), nil, false),
 		Log:                 zap.New(core),

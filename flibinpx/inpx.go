@@ -20,7 +20,7 @@ import (
 	"metabib/model"
 )
 
-const structureInfo = "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;INSNO;FOLDER;LANG;LIBRATE;KEYWORDS;YEAR;SOURCELIB;"
+const structureInfo = "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;LIBRATE;KEYWORDS;YEAR;SOURCELIB;"
 
 type SequenceMode string
 
@@ -93,7 +93,6 @@ type recordFields struct {
 	Deleted  string
 	Ext      string
 	Date     string
-	Folder   string
 	Lang     string
 	Rate     string
 	Keywords string
@@ -319,7 +318,6 @@ type streamINPXWriter struct {
 	activeStart time.Time
 	activeStats Stats
 	activeDiag  entryDiagnostics
-	insNo       int
 	bw          *bufio.Writer
 	stats       Stats
 	annotations *annotationWriter
@@ -372,7 +370,7 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 	if inpxutil.InRanges(archive.Meta.Ignored, index) {
 		return nil
 	}
-	fields, view, diagnostics, ok, err := buildRecordFields(rec, archive.Meta, w.opts)
+	fields, view, diagnostics, ok, err := buildRecordFields(rec, w.opts)
 	if err != nil || !ok {
 		return err
 	}
@@ -393,8 +391,7 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 	}
 	name := strings.TrimSuffix(archive.Meta.Name, filepath.Ext(archive.Meta.Name)) + ".inp"
 	for _, seq := range sequences {
-		w.insNo++
-		if _, err := w.bw.WriteString(recordLine(fields, seq, w.insNo)); err != nil {
+		if _, err := w.bw.WriteString(recordLine(fields, seq)); err != nil {
 			return fmt.Errorf("write FLibrary INPX entry %q: %w", name, err)
 		}
 		w.stats.Records++
@@ -465,7 +462,6 @@ func (w *streamINPXWriter) openNext() error {
 	w.activeStart = time.Now()
 	w.activeStats = w.stats
 	w.activeDiag = entryDiagnostics{}
-	w.insNo = 0
 	w.nextArchive++
 	return nil
 }
@@ -696,7 +692,6 @@ func templateOptions(opts Options) inpxutil.TemplateOptions {
 
 func buildRecordFields(
 	rec model.DatasetRecord,
-	archive model.DatasetArchive,
 	opts Options,
 ) (recordFields, inpxutil.DatasetRecordView, entryDiagnostics, bool, error) {
 	view, err := inpxutil.DatasetRecordClaims(rec)
@@ -739,10 +734,6 @@ func buildRecordFields(
 	if year == "" {
 		year = view.FB2Publication.Year
 	}
-	folder := filepath.Base(archive.PathHint)
-	if folder == "." || folder == string(filepath.Separator) || folder == "" {
-		folder = archive.Name
-	}
 	authors := authorsString(view.HasDatabase, view.Database.Authors, view.FB2.Authors, opts)
 	if count := logDisambiguatedDBAuthors(rec, view, authors, opts); count > 0 {
 		diagnostics.DisambiguatedAuthorBooks = 1
@@ -758,7 +749,6 @@ func buildRecordFields(
 		Deleted:  inpxutil.Cleanse(view.Catalog.Deleted),
 		Ext:      inpxutil.Cleanse(strings.TrimPrefix(ext, ".")),
 		Date:     inpxutil.Cleanse(date),
-		Folder:   inpxutil.Cleanse(folder),
 		Lang:     inpxutil.Cleanse(strings.TrimSpace(lang)),
 		Rate:     view.Catalog.Rating,
 		Keywords: keywordsString(keywords),
@@ -778,7 +768,7 @@ func recordLanguage(rec model.DatasetRecord, view inpxutil.DatasetRecordView, op
 	return lang, inpxutil.LanguageSelection{}
 }
 
-func recordLine(fields recordFields, seq sequence, insNo int) string {
+func recordLine(fields recordFields, seq sequence) string {
 	values := []string{
 		fields.Authors,
 		fields.Genres,
@@ -791,8 +781,6 @@ func recordLine(fields recordFields, seq sequence, insNo int) string {
 		fields.Deleted,
 		fields.Ext,
 		fields.Date,
-		strconv.Itoa(insNo),
-		fields.Folder,
 		fields.Lang,
 		fields.Rate,
 		fields.Keywords,
