@@ -12,10 +12,10 @@
 *.syso
 *.fb2
 
-build/
-build_*/
-release/
-release_*/
+/build/
+/build_*/
+/release/
+/release_*/
 *.jsonl
 *.jsonl.gz
 *.jsonl.zst
@@ -25,5 +25,5 @@ release_*/
 *.meta.json.zst
 *.meta.json.zip
 *.inpx
-data/
+/data/
 misc/version.go
