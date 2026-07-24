@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	jsonv2 "encoding/json/v2"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
@@ -187,14 +188,19 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	}
 	var stream *streamINPXWriter
 	var tmpPath string
-	var additionalTmpPath string
+	var annotationsTmpPath string
+	var compilationsTmpPath string
+	var compilationsOutputPath string
 	cleanupTemp := true
 	defer func() {
 		if cleanupTemp && tmpPath != "" {
 			_ = os.Remove(tmpPath)
 		}
-		if cleanupTemp && additionalTmpPath != "" {
-			_ = os.Remove(additionalTmpPath)
+		if cleanupTemp && annotationsTmpPath != "" {
+			_ = os.Remove(annotationsTmpPath)
+		}
+		if cleanupTemp && compilationsTmpPath != "" {
+			_ = os.Remove(compilationsTmpPath)
 		}
 	}()
 
@@ -247,20 +253,43 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 				if err != nil {
 					return fmt.Errorf("create temporary FLibrary additional output: %w", err)
 				}
-				additionalTmpPath = additionalTmpFile.Name()
+				annotationsTmpPath = additionalTmpFile.Name()
 				if err := additionalTmpFile.Close(); err != nil {
-					return fmt.Errorf("close temporary FLibrary additional output %q: %w", additionalTmpPath, err)
+					return fmt.Errorf("close temporary FLibrary additional output %q: %w", annotationsTmpPath, err)
 				}
 				if _, err := os.Stat(additionalOutputPath); err == nil && opts.Log != nil {
 					opts.Log.Warn("Overwriting existing FLibrary additional output", zap.String("file", additionalOutputPath))
 				} else if err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("stat FLibrary additional output %q: %w", additionalOutputPath, err)
 				}
+				if dataset.Processing.FB2BodyFingerprints == nil || dataset.Processing.FB2BodyFingerprints.Coverage == model.FB2BodyFingerprintCoverageNone {
+					if opts.Log != nil {
+						opts.Log.Warn("Skipping FLibrary compilations output because dataset has no FB2 body fingerprints")
+					}
+				} else {
+					if dataset.Processing.FB2BodyFingerprints.Coverage == model.FB2BodyFingerprintCoveragePartial && opts.Log != nil {
+						opts.Log.Warn("Generating FLibrary compilations output from partial FB2 body fingerprint coverage")
+					}
+					compilationsOutputPath = compilationsOutputPathFor(outputPath)
+					compilationsTmpFile, err := os.CreateTemp(filepath.Dir(compilationsOutputPath), filepath.Base(compilationsOutputPath)+"-*.tmp")
+					if err != nil {
+						return fmt.Errorf("create temporary FLibrary compilations output: %w", err)
+					}
+					compilationsTmpPath = compilationsTmpFile.Name()
+					if err := compilationsTmpFile.Close(); err != nil {
+						return fmt.Errorf("close temporary FLibrary compilations output %q: %w", compilationsTmpPath, err)
+					}
+					if _, err := os.Stat(compilationsOutputPath); err == nil && opts.Log != nil {
+						opts.Log.Warn("Overwriting existing FLibrary compilations output", zap.String("file", compilationsOutputPath))
+					} else if err != nil && !os.IsNotExist(err) {
+						return fmt.Errorf("stat FLibrary compilations output %q: %w", compilationsOutputPath, err)
+					}
+				}
 			}
 			if opts.Log != nil {
 				opts.Log.Info("FLibrary INPX creation started", zap.String("file", outputPath), zap.Int("archives", len(dataset.Archives)))
 			}
-			stream, err = newStreamINPXWriter(tmpPath, additionalTmpPath, meta, dataset, opts)
+			stream, err = newStreamINPXWriter(tmpPath, annotationsTmpPath, compilationsTmpPath, meta, dataset, opts)
 			return err
 		},
 		func(rec model.DatasetRecord) error {
@@ -293,8 +322,18 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 		return stats, fmt.Errorf("replace FLibrary INPX output %q: %w", stats.OutputPath, err)
 	}
 	if stats.AdditionalOutputPath != "" {
-		if err := fileutil.ReplaceOutputFile(additionalTmpPath, stats.AdditionalOutputPath); err != nil {
+		if err := fileutil.ReplaceOutputFile(annotationsTmpPath, stats.AdditionalOutputPath); err != nil {
 			return stats, fmt.Errorf("replace FLibrary additional output %q: %w", stats.AdditionalOutputPath, err)
+		}
+	}
+	if compilationsOutputPath != "" && compilationsTmpPath != "" {
+		if _, err := os.Stat(compilationsTmpPath); err == nil {
+			if err := fileutil.ReplaceOutputFile(compilationsTmpPath, compilationsOutputPath); err != nil {
+				return stats, fmt.Errorf("replace FLibrary compilations output %q: %w", compilationsOutputPath, err)
+			}
+			compilationsTmpPath = ""
+		} else if !os.IsNotExist(err) {
+			return stats, fmt.Errorf("stat FLibrary compilations output %q: %w", compilationsTmpPath, err)
 		}
 	}
 	cleanupTemp = false
@@ -305,25 +344,37 @@ func annotationsOutputPath(outputPath string) string {
 	return strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "-annotations.zip"
 }
 
-type streamINPXWriter struct {
-	path        string
-	meta        inpxutil.Metadata
-	opts        Options
-	zw          *zip.Writer
-	f           *os.File
-	archives    []*inpxutil.DatasetArchiveRows
-	archiveByID map[string]int
-	nextArchive int
-	active      int
-	activeStart time.Time
-	activeStats Stats
-	activeDiag  entryDiagnostics
-	bw          *bufio.Writer
-	stats       Stats
-	annotations *annotationWriter
+func compilationsOutputPathFor(outputPath string) string {
+	return strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "-compilations.zip"
 }
 
-func newStreamINPXWriter(path string, annotationsPath string, meta inpxutil.Metadata, dataset model.Dataset, opts Options) (*streamINPXWriter, error) {
+type streamINPXWriter struct {
+	path         string
+	meta         inpxutil.Metadata
+	opts         Options
+	zw           *zip.Writer
+	f            *os.File
+	archives     []*inpxutil.DatasetArchiveRows
+	archiveByID  map[string]int
+	nextArchive  int
+	active       int
+	activeStart  time.Time
+	activeStats  Stats
+	activeDiag   entryDiagnostics
+	bw           *bufio.Writer
+	stats        Stats
+	annotations  *annotationWriter
+	compilations *compilationCollector
+}
+
+func newStreamINPXWriter(
+	path string,
+	annotationsPath string,
+	compilationsPath string,
+	meta inpxutil.Metadata,
+	dataset model.Dataset,
+	opts Options,
+) (*streamINPXWriter, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("create FLibrary INPX %q: %w", path, err)
@@ -344,17 +395,22 @@ func newStreamINPXWriter(path string, annotationsPath string, meta inpxutil.Meta
 			return nil, err
 		}
 	}
+	var compilations *compilationCollector
+	if compilationsPath != "" {
+		compilations = newCompilationCollector(compilationsPath, meta, opts.Log)
+	}
 	return &streamINPXWriter{
-		path:        path,
-		meta:        meta,
-		opts:        opts,
-		zw:          zw,
-		f:           f,
-		archives:    archives,
-		archiveByID: archiveByID,
-		active:      -1,
-		stats:       Stats{DumpDate: meta.DumpDate},
-		annotations: annotations,
+		path:         path,
+		meta:         meta,
+		opts:         opts,
+		zw:           zw,
+		f:            f,
+		archives:     archives,
+		archiveByID:  archiveByID,
+		active:       -1,
+		stats:        Stats{DumpDate: meta.DumpDate},
+		annotations:  annotations,
+		compilations: compilations,
 	}, nil
 }
 
@@ -382,6 +438,13 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 		if err := w.annotations.WriteRecord(name, fb2Annotation(rec)); err != nil {
 			return err
 		}
+	}
+	if w.compilations != nil {
+		fileName := fields.File
+		if fields.Ext != "" {
+			fileName += "." + fields.Ext
+		}
+		w.compilations.AddRecord(rec, archive.Meta.Name, fileName)
 	}
 	w.stats.Files++
 	w.activeDiag.add(diagnostics)
@@ -552,6 +615,12 @@ func (w *streamINPXWriter) Finish() (Stats, error) {
 		w.Close()
 		return w.stats, err
 	}
+	if w.compilations != nil {
+		if err := w.compilations.Write(); err != nil {
+			w.Close()
+			return w.stats, err
+		}
+	}
 	return w.stats, w.Close()
 }
 
@@ -658,6 +727,183 @@ func (w *annotationWriter) Close() error {
 		w.f = nil
 	}
 	return errors.Join(errs...)
+}
+
+type compilationCollector struct {
+	path    string
+	meta    inpxutil.Metadata
+	log     *zap.Logger
+	books   []compilationBook
+	missing int
+}
+
+type compilationBook struct {
+	folder string
+	file   string
+	root   *compilationSection
+}
+
+type compilationSection struct {
+	key      string
+	leaf     bool
+	children []*compilationSection
+}
+
+type compilationOutput struct {
+	Folder      string                  `json:"folder"`
+	File        string                  `json:"file"`
+	Compilation []compilationOutputPart `json:"compilation"`
+	Covered     bool                    `json:"covered"`
+}
+
+type compilationOutputPart struct {
+	Part   int    `json:"part"`
+	Folder string `json:"folder"`
+	File   string `json:"file"`
+}
+
+func newCompilationCollector(path string, meta inpxutil.Metadata, log *zap.Logger) *compilationCollector {
+	return &compilationCollector{path: path, meta: meta, log: log}
+}
+
+func (c *compilationCollector) AddRecord(rec model.DatasetRecord, folder string, file string) {
+	fingerprint := recordFB2BodyFingerprint(rec)
+	if fingerprint == nil || len(fingerprint.Sections) == 0 {
+		c.missing++
+		return
+	}
+	root := compilationSectionTree(fingerprint.Sections)
+	if root == nil {
+		c.missing++
+		return
+	}
+	c.books = append(c.books, compilationBook{folder: folder, file: file, root: root})
+}
+
+func (c *compilationCollector) Write() error {
+	if c.missing > 0 && c.log != nil {
+		c.log.Warn("Some FLibrary INPX records lack FB2 body fingerprints", zap.Int("records", c.missing))
+	}
+	outputs := c.compilations()
+	if len(outputs) == 0 {
+		if c.log != nil {
+			c.log.Warn("Skipping FLibrary compilations output because no compilations were detected")
+		}
+		if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove empty FLibrary compilations output %q: %w", c.path, err)
+		}
+		return nil
+	}
+	data, err := jsonv2.Marshal(outputs)
+	if err != nil {
+		return fmt.Errorf("marshal FLibrary compilations JSON: %w", err)
+	}
+	f, err := os.Create(c.path)
+	if err != nil {
+		return fmt.Errorf("create FLibrary compilations output %q: %w", c.path, err)
+	}
+	zw := zip.NewWriter(f)
+	zw.SetComment(inpxutil.ZipComment(c.meta))
+	if err := inpxutil.WriteZipText(zw, "compilations.json", string(data)); err != nil {
+		_ = zw.Close()
+		_ = f.Close()
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("close FLibrary compilations zip %q: %w", c.path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close FLibrary compilations output %q: %w", c.path, err)
+	}
+	return nil
+}
+
+func (c *compilationCollector) compilations() []compilationOutput {
+	rootToBooks := make(map[string][]int, len(c.books))
+	for idx, book := range c.books {
+		rootToBooks[book.root.key] = append(rootToBooks[book.root.key], idx)
+	}
+	outputs := make([]compilationOutput, 0)
+	for idx, book := range c.books {
+		parts, covered, found := c.compilationParts(idx, rootToBooks)
+		if found <= 1 {
+			continue
+		}
+		outputs = append(outputs, compilationOutput{
+			Folder:      book.folder,
+			File:        book.file,
+			Compilation: parts,
+			Covered:     covered,
+		})
+	}
+	return outputs
+}
+
+func (c *compilationCollector) compilationParts(owner int, rootToBooks map[string][]int) ([]compilationOutputPart, bool, int) {
+	book := c.books[owner]
+	found := make(map[string]struct{})
+	notFound := make(map[string]struct{})
+	var parts []compilationOutputPart
+	var walk func([]*compilationSection)
+	walk = func(sections []*compilationSection) {
+		for _, section := range sections {
+			if section.key == book.root.key {
+				walk(section.children)
+				continue
+			}
+			matches := rootToBooks[section.key]
+			if len(matches) > 0 {
+				part := len(found)
+				for _, match := range matches {
+					matched := c.books[match]
+					parts = append(parts, compilationOutputPart{Part: part, Folder: matched.folder, File: matched.file})
+				}
+				found[section.key] = struct{}{}
+				continue
+			}
+			if section.leaf {
+				notFound[section.key] = struct{}{}
+				continue
+			}
+			walk(section.children)
+		}
+	}
+	walk(book.root.children)
+	return parts, len(notFound) == 0, len(found)
+}
+
+func recordFB2BodyFingerprint(rec model.DatasetRecord) *model.FB2BodyFingerprint {
+	for _, artifact := range rec.Artifacts {
+		if artifact.Fingerprints != nil && artifact.Fingerprints.FB2Body != nil {
+			return artifact.Fingerprints.FB2Body
+		}
+	}
+	return nil
+}
+
+func compilationSectionTree(sections []model.FB2BodySectionFingerprint) *compilationSection {
+	var root *compilationSection
+	stack := make([]*compilationSection, 0)
+	for _, section := range sections {
+		node := &compilationSection{key: section.Key, leaf: section.Leaf}
+		if section.Depth == 0 {
+			if root != nil {
+				return nil
+			}
+			root = node
+			stack = []*compilationSection{node}
+			continue
+		}
+		if root == nil || section.Depth > len(stack) {
+			return nil
+		}
+		stack = stack[:section.Depth]
+		parent := stack[len(stack)-1]
+		parent.children = append(parent.children, node)
+		stack = append(stack, node)
+	}
+	return root
 }
 
 func fb2Annotation(rec model.DatasetRecord) string {

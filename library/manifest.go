@@ -31,12 +31,13 @@ const (
 )
 
 type ArchiveManifestDecision struct {
-	ArchivePath  string
-	ManifestPath string
-	Use          bool
-	Create       bool
-	ArchiveMD5   string
-	Records      int64
+	ArchivePath         string
+	ManifestPath        string
+	Use                 bool
+	Create              bool
+	ArchiveMD5          string
+	Records             int64
+	FB2BodyFingerprints bool
 }
 
 type DatabaseManifestDecision struct {
@@ -68,15 +69,26 @@ func (r ManifestReport) Ready(allowStale bool) bool {
 }
 
 type manifestProcessing struct {
-	ParseFB2           bool `json:"parse_fb2"`
-	FB2DescriptionTree bool `json:"fb2_description_tree"`
-	ArchiveContentMD5  bool `json:"archive_content_md5"`
+	ParseFB2            bool `json:"parse_fb2"`
+	FB2DescriptionTree  bool `json:"fb2_description_tree"`
+	FB2BodyFingerprints bool `json:"fb2_body_fingerprints"`
+	ArchiveContentMD5   bool `json:"archive_content_md5"`
+}
+
+type manifestFeatures struct {
+	FB2BodyFingerprints *manifestFeature `json:"fb2_body_fingerprints,omitempty"`
+}
+
+type manifestFeature struct {
+	Model           string `json:"model"`
+	SectionEncoding string `json:"section_encoding"`
 }
 
 type archiveManifestHeader struct {
 	Schema     string                `json:"schema"`
 	Source     ArchiveManifestSource `json:"source"`
 	Processing manifestProcessing    `json:"processing"`
+	Features   *manifestFeatures     `json:"features,omitempty"`
 	Created    string                `json:"created"`
 	Records    int64                 `json:"records"`
 }
@@ -657,6 +669,7 @@ func planArchiveManifest(
 		if fresh {
 			decision.Use = true
 			decision.Records = header.Records
+			decision.FB2BodyFingerprints = archiveManifestHasFB2BodyFingerprints(header)
 			if verbose && log != nil {
 				message := "Archive manifest selected"
 				if checkMD5 {
@@ -762,6 +775,7 @@ func validateArchiveManifest(
 	report.Valid = true
 	report.Records = header.Records
 	decision.Records = header.Records
+	decision.FB2BodyFingerprints = archiveManifestHasFB2BodyFingerprints(header)
 	decision.Use = true
 	if !archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), false) {
 		report.Valid = false
@@ -1067,10 +1081,27 @@ func readManifestHeader(path string, header any) error {
 
 func processingManifest(cfg *config.Config) manifestProcessing {
 	return manifestProcessing{
-		ParseFB2:           cfg.Processing.ParseFB2,
-		FB2DescriptionTree: cfg.Processing.FB2DescriptionTree,
-		ArchiveContentMD5:  cfg.Processing.ArchiveContentMD5,
+		ParseFB2:            cfg.Processing.ParseFB2,
+		FB2DescriptionTree:  cfg.Processing.FB2DescriptionTree,
+		FB2BodyFingerprints: cfg.Processing.FB2BodyFingerprints,
+		ArchiveContentMD5:   cfg.Processing.ArchiveContentMD5,
 	}
+}
+
+func manifestFeaturesFor(cfg *config.Config) *manifestFeatures {
+	if !cfg.Processing.FB2BodyFingerprints {
+		return nil
+	}
+	return &manifestFeatures{FB2BodyFingerprints: &manifestFeature{
+		Model:           model.FB2BodyFingerprintModel,
+		SectionEncoding: model.FB2BodySectionEncoding,
+	}}
+}
+
+func archiveManifestHasFB2BodyFingerprints(header archiveManifestHeader) bool {
+	return header.Features != nil && header.Features.FB2BodyFingerprints != nil &&
+		header.Features.FB2BodyFingerprints.Model == model.FB2BodyFingerprintModel &&
+		header.Features.FB2BodyFingerprints.SectionEncoding == model.FB2BodySectionEncoding
 }
 
 func archiveManifestMatches(header archiveManifestHeader, cfg *config.Config, archive string, md5sum string) bool {
@@ -1080,6 +1111,9 @@ func archiveManifestMatches(header archiveManifestHeader, cfg *config.Config, ar
 
 func archiveManifestLightMatches(header archiveManifestHeader, cfg *config.Config, archive string, modified time.Time, compareModified bool) bool {
 	if filepath.Base(header.Source.Path) != filepath.Base(archive) || header.Processing != processingManifest(cfg) {
+		return false
+	}
+	if cfg.Processing.FB2BodyFingerprints && !archiveManifestHasFB2BodyFingerprints(header) {
 		return false
 	}
 	return !compareModified || sourceMTimeMatches(header.Source.Modified, modified)
@@ -1189,6 +1223,7 @@ func archiveManifestHeaderFor(cfg *config.Config, decision ArchiveManifestDecisi
 			MD5:      decision.ArchiveMD5,
 		},
 		Processing: processingManifest(cfg),
+		Features:   manifestFeaturesFor(cfg),
 		Created:    time.Now().Format(time.RFC3339Nano),
 		Records:    records,
 	}, nil

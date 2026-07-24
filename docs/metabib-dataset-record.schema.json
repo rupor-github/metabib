@@ -286,7 +286,8 @@
         "media_type": {"type": "string"},
         "size": {"type": "array", "items": {"$ref": "#/$defs/artifact_size"}},
         "checksums": {"type": "array", "items": {"$ref": "#/$defs/artifact_checksum"}},
-        "occurrences": {"type": "array", "items": {"$ref": "#/$defs/occurrence"}}
+        "occurrences": {"type": "array", "items": {"$ref": "#/$defs/occurrence"}},
+        "fp": {"type": "string"}
       },
       "additionalProperties": false
     },

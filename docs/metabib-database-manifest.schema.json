@@ -48,10 +48,11 @@
     },
     "processing": {
       "type": "object",
-      "required": ["parse_fb2", "fb2_description_tree", "archive_content_md5"],
+      "required": ["parse_fb2", "fb2_description_tree", "fb2_body_fingerprints", "archive_content_md5"],
       "properties": {
         "parse_fb2": {"type": "boolean"},
         "fb2_description_tree": {"type": "boolean"},
+        "fb2_body_fingerprints": {"type": "boolean"},
         "archive_content_md5": {"type": "boolean"}
       },
       "additionalProperties": false

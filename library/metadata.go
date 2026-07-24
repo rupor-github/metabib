@@ -45,6 +45,7 @@ func DatasetFor(
 				Enabled:   processing.ArchiveContentMD5,
 				Algorithm: checksumAlgorithm(processing.ArchiveContentMD5),
 			},
+			FB2BodyFingerprints: datasetFB2BodyFingerprints(archives),
 		},
 	}
 	if database.ManifestPath != "" || database.DumpDate != "" || database.DumpDir != "" {
@@ -132,6 +133,30 @@ func datasetFB2Coverage(processing config.ProcessingConfig) string {
 		return "description"
 	}
 	return "title_info"
+}
+
+func datasetFB2BodyFingerprints(archives []ArchiveManifestDecision) *model.DatasetFB2BodyFingerprints {
+	if len(archives) == 0 {
+		return nil
+	}
+	available := 0
+	for _, archive := range archives {
+		if archive.FB2BodyFingerprints {
+			available++
+		}
+	}
+	if available == 0 {
+		return nil
+	}
+	coverage := model.FB2BodyFingerprintCoveragePartial
+	if available == len(archives) {
+		coverage = model.FB2BodyFingerprintCoverageComplete
+	}
+	return &model.DatasetFB2BodyFingerprints{
+		Coverage:        coverage,
+		Model:           model.FB2BodyFingerprintModel,
+		SectionEncoding: model.FB2BodySectionEncoding,
+	}
 }
 
 func checksumAlgorithm(enabled bool) string {

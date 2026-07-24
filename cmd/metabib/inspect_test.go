@@ -147,6 +147,38 @@ func TestInspectDatasetFindsFile(t *testing.T) {
 	}
 }
 
+func TestInspectDatasetDecodesFingerprints(t *testing.T) {
+	t.Parallel()
+
+	prefix := writeInspectDataset(t)
+	var out bytes.Buffer
+	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, File: "42.fb2", Index: -1, DecodeFP: true}, &out); err != nil {
+		t.Fatalf("inspectDataset(decode fp) error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{"Decoded fingerprints", "artifact: 42.fb2", "277ad517c5695f487f9ffde0727d5ec7", "53c9a571d04ef10aec16835b00c7b908"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspect decoded fp = %q, missing %q", text, want)
+		}
+	}
+}
+
+func TestInspectDatasetDecodesFingerprintsAsJSON(t *testing.T) {
+	t.Parallel()
+
+	prefix := writeInspectDataset(t)
+	var out bytes.Buffer
+	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, File: "42.fb2", Index: -1, DecodeFP: true, JSON: true}, &out); err != nil {
+		t.Fatalf("inspectDataset(decode fp json) error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{`"fp":"`, `"decoded_fingerprints":[`, `"artifact":"42.fb2"`, `"leaf":true`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspect decoded fp JSON = %q, missing %q", text, want)
+		}
+	}
+}
+
 func TestInspectDatasetNoMatch(t *testing.T) {
 	t.Parallel()
 
@@ -239,6 +271,10 @@ func inspectTestRecord() model.DatasetRecord {
 				Index:            index,
 				UncompressedSize: 123,
 			}},
+			Fingerprints: &model.ArtifactFingerprints{FB2Body: &model.FB2BodyFingerprint{Sections: []model.FB2BodySectionFingerprint{
+				{Depth: 0, Key: "J3rVF8VpX0h_n_3gcn1exw"},
+				{Depth: 1, Key: "U8mlcdBO8QrsFoNbAMe5CA", Leaf: true},
+			}}},
 		}},
 		Observations: []model.Observation{
 			{

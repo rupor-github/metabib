@@ -388,6 +388,11 @@ func fullDataset() model.Dataset {
 			ParseFB2:               true,
 			FB2Coverage:            "description",
 			ArchiveContentChecksum: model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
+			FB2BodyFingerprints: &model.DatasetFB2BodyFingerprints{
+				Coverage:        "complete",
+				Model:           model.FB2BodyFingerprintModel,
+				SectionEncoding: model.FB2BodySectionEncoding,
+			},
 		},
 	}
 }
@@ -440,6 +445,10 @@ func fullDatasetRecord() model.DatasetRecord {
 				UncompressedSize: 123456,
 				Modified:         "2026-07-13T00:00:00Z",
 			}},
+			Fingerprints: &model.ArtifactFingerprints{FB2Body: &model.FB2BodyFingerprint{Sections: []model.FB2BodySectionFingerprint{
+				{Depth: 0, Key: "gL5vU79DxqcbTqk3lTY5dw"},
+				{Depth: 1, Key: "GvXixSKMNxQ7y35Tz89LGg", Leaf: true},
+			}}},
 		}},
 		Observations: []model.Observation{
 			{
@@ -614,7 +623,9 @@ func fullRecord() model.Record {
 				PublishInfo: &model.FB2PublishInfo{BookName: "Paper", Publisher: "Pub", City: "City", Year: "1973", ISBN: "isbn", Sequences: []model.FB2Sequence{{Name: "PaperSeq", Number: "3"}}},
 				CustomInfo:  []model.FB2CustomInfo{{Type: "source", Text: "custom"}},
 				Output:      []model.FB2Output{{Mode: "free", IncludeAll: "allow", Price: "1.25", Currency: "USD", Parts: []model.FB2OutputPart{{Type: "simple", Href: "#part", Include: "require"}}, OutputDocumentClasses: []model.FB2OutputDocumentClass{{Name: "reader", Create: "allow", Price: "0", Parts: []model.FB2OutputPart{{Href: "#part2", Include: "deny"}}}}}},
-			}},
+			}, Fingerprints: &model.ArtifactFingerprints{FB2Body: &model.FB2BodyFingerprint{Sections: []model.FB2BodySectionFingerprint{
+				{Depth: 0, Key: "gL5vU79DxqcbTqk3lTY5dw"},
+			}}}},
 		},
 		Errors: []string{"warning"},
 	}

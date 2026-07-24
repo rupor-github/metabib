@@ -111,8 +111,9 @@ type DBJoinedBook struct {
 }
 
 type FB2Source struct {
-	Present     bool            `json:"present"`
-	Description *FB2Description `json:"description,omitempty"`
+	Present      bool                  `json:"present"`
+	Description  *FB2Description       `json:"description,omitempty"`
+	Fingerprints *ArtifactFingerprints `json:"fp,omitempty"`
 }
 
 type FB2Description struct {

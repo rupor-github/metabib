@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	jsonstd "encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +35,7 @@ type inspectOptions struct {
 	JSON     bool
 	Validate bool
 	Verbose  bool
+	DecodeFP bool
 }
 
 type inspectSummary struct {
@@ -55,15 +58,28 @@ type inspectSummary struct {
 	Ordering                string                             `json:"ordering,omitempty"`
 	ParseFB2                bool                               `json:"parse_fb2"`
 	FB2Coverage             string                             `json:"fb2_coverage,omitempty"`
+	FB2BodyFingerprints     string                             `json:"fb2_body_fingerprints,omitempty"`
 	ContentChecksum         string                             `json:"content_checksum,omitempty"`
 	RecordsRead             int64                              `json:"records_read,omitempty"`
 	Validation              string                             `json:"validation,omitempty"`
 }
 
 type inspectRecordResult struct {
-	Input        string              `json:"input"`
-	RecordNumber int64               `json:"record_number"`
-	Record       model.DatasetRecord `json:"record"`
+	Input               string                      `json:"input"`
+	RecordNumber        int64                       `json:"record_number"`
+	Record              model.DatasetRecord         `json:"record"`
+	DecodedFingerprints []inspectDecodedFingerprint `json:"decoded_fingerprints,omitempty"`
+}
+
+type inspectDecodedFingerprint struct {
+	Artifact string                  `json:"artifact"`
+	Sections []inspectDecodedSection `json:"sections"`
+}
+
+type inspectDecodedSection struct {
+	Depth int    `json:"depth"`
+	Key   string `json:"key"`
+	Leaf  bool   `json:"leaf,omitempty"`
 }
 
 type inspectArchivesResult struct {
@@ -87,6 +103,7 @@ func inspectCommand() *cli.Command {
 			&cli.IntFlag{Name: "index", Value: -1, Usage: "show record at zero-based archive entry `INDEX`; requires --archive"},
 			&cli.StringFlag{Name: "file", Usage: "show first record with artifact or occurrence file `NAME`"},
 			&cli.BoolFlag{Name: "archives", Usage: "list dataset archive source IDs and path hints"},
+			&cli.BoolFlag{Name: "decode-fp", Usage: "decode compact artifact fp payloads in record lookup output"},
 			&cli.BoolFlag{Name: "json", Usage: "write machine-readable JSON output"},
 			&cli.BoolFlag{Name: "validate", Usage: "consume the whole dataset and report validation status"},
 		},
@@ -105,6 +122,7 @@ func runInspect(ctx context.Context, cmd *cli.Command) error {
 		JSON:     cmd.Bool("json"),
 		Validate: cmd.Bool("validate"),
 		Verbose:  state.EnvFromContext(ctx).Verbose,
+		DecodeFP: cmd.Bool("decode-fp"),
 	}, os.Stdout)
 	if errors.Is(err, errInspectNoMatch) {
 		return cli.Exit(err, inspectNoMatchExitCode)
@@ -145,9 +163,13 @@ func inspectDataset(ctx context.Context, opts inspectOptions, out io.Writer) err
 		}
 		recordsRead++
 		if filter != nil && filter(value.Record) {
+			result := inspectRecordResult{Input: inputPath, RecordNumber: recordsRead, Record: value.Record}
+			if opts.DecodeFP {
+				result.DecodedFingerprints = decodedRecordFingerprints(value.Record)
+			}
 			return writeInspectRecord(
 				out,
-				inspectRecordResult{Input: inputPath, RecordNumber: recordsRead, Record: value.Record},
+				result,
 				opts.JSON,
 			)
 		}
@@ -286,8 +308,16 @@ func datasetInspectSummary(inputPath string, dataset model.Dataset, verbose bool
 		Ordering:                dataset.Ordering.Mode,
 		ParseFB2:                dataset.Processing.ParseFB2,
 		FB2Coverage:             dataset.Processing.FB2Coverage,
+		FB2BodyFingerprints:     fb2BodyFingerprintCoverage(dataset),
 		ContentChecksum:         dataset.Processing.ArchiveContentChecksum.Algorithm,
 	}
+}
+
+func fb2BodyFingerprintCoverage(dataset model.Dataset) string {
+	if dataset.Processing.FB2BodyFingerprints == nil {
+		return ""
+	}
+	return dataset.Processing.FB2BodyFingerprints.Coverage
 }
 
 func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool) error {
@@ -315,6 +345,7 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 			"  ordering: %s\n"+
 			"  parse fb2: %t\n"+
 			"  fb2 coverage: %s\n"+
+			"  fb2 body fingerprints: %s\n"+
 			"  content checksum: %s\n",
 		summary.Input,
 		summary.Schema,
@@ -334,6 +365,7 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 		summary.Ordering,
 		summary.ParseFB2,
 		summary.FB2Coverage,
+		summary.FB2BodyFingerprints,
 		summary.ContentChecksum,
 	)
 	if err != nil {
@@ -383,8 +415,64 @@ func writeInspectRecord(out io.Writer, result inspectRecordResult, jsonOutput bo
 	if err != nil {
 		return fmt.Errorf("marshal inspect record: %w", err)
 	}
-	_, err = fmt.Fprintf(out, "Record\n  input: %s\n  record number: %d\n%s\n", result.Input, result.RecordNumber, data)
-	return err
+	if _, err = fmt.Fprintf(out, "Record\n  input: %s\n  record number: %d\n%s\n", result.Input, result.RecordNumber, data); err != nil {
+		return err
+	}
+	if len(result.DecodedFingerprints) > 0 {
+		return writeInspectDecodedFingerprints(out, result.DecodedFingerprints)
+	}
+	return nil
+}
+
+func decodedRecordFingerprints(rec model.DatasetRecord) []inspectDecodedFingerprint {
+	out := make([]inspectDecodedFingerprint, 0)
+	for _, artifact := range rec.Artifacts {
+		if artifact.Fingerprints == nil || artifact.Fingerprints.FB2Body == nil || len(artifact.Fingerprints.FB2Body.Sections) == 0 {
+			continue
+		}
+		decoded := inspectDecodedFingerprint{Artifact: artifact.Name}
+		for _, section := range artifact.Fingerprints.FB2Body.Sections {
+			decoded.Sections = append(decoded.Sections, inspectDecodedSection{
+				Depth: section.Depth,
+				Key:   fingerprintKeyHex(section.Key),
+				Leaf:  section.Leaf,
+			})
+		}
+		out = append(out, decoded)
+	}
+	return out
+}
+
+func fingerprintKeyHex(key string) string {
+	data, err := base64.RawURLEncoding.DecodeString(key)
+	if err != nil {
+		return key
+	}
+	return hex.EncodeToString(data)
+}
+
+func writeInspectDecodedFingerprints(out io.Writer, fingerprints []inspectDecodedFingerprint) error {
+	if _, err := fmt.Fprintln(out, "Decoded fingerprints"); err != nil {
+		return err
+	}
+	for _, fingerprint := range fingerprints {
+		if _, err := fmt.Fprintf(out, "  artifact: %s\n", fingerprint.Artifact); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(out, "  DEPTH  LEAF  KEY"); err != nil {
+			return err
+		}
+		for _, section := range fingerprint.Sections {
+			leaf := 0
+			if section.Leaf {
+				leaf = 1
+			}
+			if _, err := fmt.Fprintf(out, "  %-5d  %-4d  %s\n", section.Depth, leaf, section.Key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func writeInspectArchives(out io.Writer, result inspectArchivesResult, jsonOutput bool) error {

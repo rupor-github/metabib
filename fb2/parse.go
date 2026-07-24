@@ -1,11 +1,15 @@
 package fb2
 
 import (
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
+	"unicode"
 
 	"golang.org/x/net/html/charset"
 
@@ -16,11 +20,12 @@ const (
 	// Defensive limits for FB2 metadata parsing. These are intentionally much larger
 	// than normal library metadata needs; they exist to stop pathological or malicious
 	// inputs from consuming unbounded stack, memory, or decompression work.
-	MaxXMLDepth            = 256
-	MaxXMLNodes            = 1_000_000
-	MaxTextBytes           = 64 * 1024 * 1024
-	MaxDecompressedBytes   = 256 * 1024 * 1024
-	MaxNestedSequenceDepth = 64
+	MaxXMLDepth                     = 256
+	MaxXMLNodes                     = 1_000_000
+	MaxTextBytes                    = 64 * 1024 * 1024
+	MaxDecompressedBytes            = 256 * 1024 * 1024
+	MaxNestedSequenceDepth          = 64
+	bodyFingerprintSectionThreshold = 100
 )
 
 var ErrLimitExceeded = errors.New("FB2 parsing limit exceeded")
@@ -37,7 +42,23 @@ type element struct {
 	Children []element
 }
 
+type ParseOptions struct {
+	PreserveDescription bool
+	BodyFingerprints    bool
+}
+
 func Parse(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
+	return ParseWithOptions(r, ParseOptions{PreserveDescription: preserveDescription})
+}
+
+func ParseWithOptions(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
+	if !opts.BodyFingerprints {
+		return parseMetadataOnly(r, opts.PreserveDescription)
+	}
+	return parseWithBodyFingerprints(r, opts)
+}
+
+func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
 	dec := xml.NewDecoder(r)
 	dec.CharsetReader = charset.NewReaderLabel
 	dec.Strict = false
@@ -64,6 +85,73 @@ func Parse(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
 		description := parseDescription(node, true)
 		return model.FB2Source{Present: true, Description: &description}, nil
 	}
+}
+
+func parseWithBodyFingerprints(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
+	dec := xml.NewDecoder(r)
+	dec.CharsetReader = charset.NewReaderLabel
+	dec.Strict = false
+	state := &parseState{}
+	fingerprints := newBodyFingerprintBuilder()
+	var description *model.FB2Description
+	var stack []string
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			if err == io.EOF {
+				return fb2ParseResult(description, fingerprints.finish()), nil
+			}
+			return model.FB2Source{}, fmt.Errorf("parse FB2 XML: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if err := state.addNode(); err != nil {
+				return model.FB2Source{}, err
+			}
+			if len(stack)+1 > MaxXMLDepth {
+				return model.FB2Source{}, fmt.Errorf("%w: XML depth exceeds %d", ErrLimitExceeded, MaxXMLDepth)
+			}
+			if t.Name.Local == "description" && len(stack) == 1 && stack[0] == "FictionBook" {
+				node, err := readElement(dec, t, len(stack)+1, 0, state)
+				if err != nil {
+					return model.FB2Source{}, err
+				}
+				desc := parseDescription(node, opts.PreserveDescription)
+				description = &desc
+				continue
+			}
+			if t.Name.Local == "body" && len(stack) == 1 && stack[0] == "FictionBook" {
+				fingerprints.openBody()
+			} else if t.Name.Local == "section" && fingerprints.inBody() {
+				fingerprints.openSection()
+			}
+			stack = append(stack, t.Name.Local)
+		case xml.CharData:
+			if fingerprints.inBody() {
+				if err := state.addText(len(t)); err != nil {
+					return model.FB2Source{}, err
+				}
+				fingerprints.addText(string(t))
+			}
+		case xml.EndElement:
+			if t.Name.Local == "section" && fingerprints.inBody() {
+				fingerprints.closeSection()
+			} else if t.Name.Local == "body" && fingerprints.inBody() {
+				fingerprints.closeBody()
+			}
+			if len(stack) > 0 {
+				stack = stack[:len(stack)-1]
+			}
+		}
+	}
+}
+
+func fb2ParseResult(description *model.FB2Description, fingerprint *model.FB2BodyFingerprint) model.FB2Source {
+	out := model.FB2Source{Present: description != nil || fingerprint != nil, Description: description}
+	if fingerprint != nil {
+		out.Fingerprints = &model.ArtifactFingerprints{FB2Body: fingerprint}
+	}
+	return out
 }
 
 func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
@@ -148,6 +236,197 @@ func (s *parseState) addText(bytes int) error {
 		return fmt.Errorf("%w: text size exceeds %d bytes", ErrLimitExceeded, MaxTextBytes)
 	}
 	return nil
+}
+
+func (s *parseState) addNode() error {
+	s.nodes++
+	if s.nodes > MaxXMLNodes {
+		return fmt.Errorf("%w: XML node count exceeds %d", ErrLimitExceeded, MaxXMLNodes)
+	}
+	return nil
+}
+
+type bodyFingerprintBuilder struct {
+	root      *sectionAccumulator
+	stack     []*sectionAccumulator
+	preorder  []*sectionAccumulator
+	bodyDepth int
+}
+
+type sectionAccumulator struct {
+	depth    int
+	hist     map[string]int
+	children []*sectionAccumulator
+}
+
+func newBodyFingerprintBuilder() *bodyFingerprintBuilder {
+	return &bodyFingerprintBuilder{}
+}
+
+func (b *bodyFingerprintBuilder) openBody() {
+	if b.root == nil {
+		b.root = newSectionAccumulator(0)
+		b.preorder = append(b.preorder, b.root)
+	}
+	b.bodyDepth++
+	b.stack = []*sectionAccumulator{b.root}
+}
+
+func (b *bodyFingerprintBuilder) closeBody() {
+	if b.bodyDepth > 0 {
+		b.bodyDepth--
+	}
+	b.stack = nil
+}
+
+func (b *bodyFingerprintBuilder) inBody() bool {
+	return b.bodyDepth > 0
+}
+
+func (b *bodyFingerprintBuilder) openSection() {
+	if len(b.stack) == 0 {
+		b.openBody()
+	}
+	parent := b.stack[len(b.stack)-1]
+	section := newSectionAccumulator(len(b.stack))
+	parent.children = append(parent.children, section)
+	b.preorder = append(b.preorder, section)
+	b.stack = append(b.stack, section)
+}
+
+func (b *bodyFingerprintBuilder) closeSection() {
+	if len(b.stack) <= 1 {
+		return
+	}
+	section := b.stack[len(b.stack)-1]
+	b.stack = b.stack[:len(b.stack)-1]
+	mergeHistogram(b.stack[len(b.stack)-1].hist, section.hist)
+}
+
+func (b *bodyFingerprintBuilder) addText(text string) {
+	if len(b.stack) == 0 {
+		return
+	}
+	section := b.stack[len(b.stack)-1]
+	for _, word := range normalizedWords(text) {
+		section.hist[word]++
+	}
+}
+
+func (b *bodyFingerprintBuilder) finish() *model.FB2BodyFingerprint {
+	if b.root == nil {
+		return nil
+	}
+	for len(b.stack) > 1 {
+		b.closeSection()
+	}
+	sections := make([]model.FB2BodySectionFingerprint, 0, len(b.preorder))
+	for _, section := range b.preorder {
+		fingerprint := sectionFingerprint(section)
+		if section.depth == 0 || fingerprint.count >= bodyFingerprintSectionThreshold {
+			sections = append(sections, fingerprint.section)
+		}
+	}
+	return &model.FB2BodyFingerprint{Sections: sections}
+}
+
+func newSectionAccumulator(depth int) *sectionAccumulator {
+	return &sectionAccumulator{depth: depth, hist: make(map[string]int)}
+}
+
+func mergeHistogram(dst map[string]int, src map[string]int) {
+	for word, count := range src {
+		dst[word] += count
+	}
+}
+
+func normalizedWords(text string) []string {
+	normalized := normalizeBodyText(text)
+	parts := strings.Split(normalized, " ")
+	words := make([]string, 0, len(parts))
+	for _, part := range parts {
+		word := keepLetters(part)
+		if word != "" {
+			words = append(words, word)
+		}
+	}
+	return words
+}
+
+func normalizeBodyText(text string) string {
+	text = strings.ToLower(text)
+	text = strings.NewReplacer("ё", "е", "й", "и", "ъ", "ь").Replace(text)
+	var out strings.Builder
+	out.Grow(len(text))
+	for _, r := range text {
+		if unicode.In(r, unicode.Zs, unicode.Zl, unicode.Zp) || unicode.IsControl(r) || unicode.IsPunct(r) {
+			out.WriteByte(' ')
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return strings.ReplaceAll(out.String(), "ыо", "ью")
+}
+
+func keepLetters(word string) string {
+	var out strings.Builder
+	for _, r := range word {
+		if unicode.IsLetter(r) {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+type rankedWord struct {
+	word  string
+	count int
+}
+
+type sectionFingerprintResult struct {
+	section model.FB2BodySectionFingerprint
+	count   int
+}
+
+func sectionFingerprint(section *sectionAccumulator) sectionFingerprintResult {
+	words := make([]rankedWord, 0, len(section.hist))
+	for word, count := range section.hist {
+		words = append(words, rankedWord{word: word, count: count})
+	}
+	sort.Slice(words, func(i int, j int) bool {
+		left := words[i]
+		right := words[j]
+		if leftBucket, rightBucket := wordLengthBucket(left.word), wordLengthBucket(right.word); leftBucket != rightBucket {
+			return leftBucket > rightBucket
+		}
+		if left.count != right.count {
+			return left.count > right.count
+		}
+		return left.word > right.word
+	})
+	hash := md5.New()
+	for idx, word := range words {
+		if idx == 10 {
+			break
+		}
+		_, _ = hash.Write([]byte(word.word))
+	}
+	return sectionFingerprintResult{
+		section: model.FB2BodySectionFingerprint{
+			Depth: section.depth,
+			Key:   base64.RawURLEncoding.EncodeToString(hash.Sum(nil)),
+			Leaf:  len(section.children) == 0,
+		},
+		count: len(section.hist),
+	}
+}
+
+func wordLengthBucket(word string) int {
+	length := len([]rune(word))
+	if length > 8 {
+		return 8
+	}
+	return length
 }
 
 func appendChildText(text *strings.Builder, child element, state *parseState) error {

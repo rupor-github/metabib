@@ -1,6 +1,8 @@
 package fb2
 
 import (
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"strings"
@@ -56,6 +58,52 @@ func TestParseTitleInfoOnly(t *testing.T) {
 	if len(titleInfo.Sequences) != 1 || len(titleInfo.Sequences[0].Nested) != 1 {
 		t.Fatalf("sequences = %#v", titleInfo.Sequences)
 	}
+}
+
+func TestParseWithBodyFingerprints(t *testing.T) {
+	t.Parallel()
+
+	words := uniqueLetterWords(100)
+	src, err := ParseWithOptions(strings.NewReader(`<FictionBook>
+  <description><title-info><book-title>Ignored Metadata</book-title></title-info></description>
+  <body>Alpha beta!<section>`+strings.Join(words, " ")+`</section><section>Leaf</section></body>
+</FictionBook>`), ParseOptions{BodyFingerprints: true})
+	if err != nil {
+		t.Fatalf("ParseWithOptions() error = %v", err)
+	}
+	if !src.Present || src.Description == nil || src.Description.TitleInfo == nil {
+		t.Fatalf("source metadata missing: %#v", src)
+	}
+	if src.Fingerprints == nil || src.Fingerprints.FB2Body == nil {
+		t.Fatalf("fingerprints missing: %#v", src.Fingerprints)
+	}
+	sections := src.Fingerprints.FB2Body.Sections
+	if len(sections) != 2 {
+		t.Fatalf("sections = %#v, want root and one retained section", sections)
+	}
+	assertSection := func(index int, depth int, keyInput string, leaf bool) {
+		t.Helper()
+		section := sections[index]
+		if section.Depth != depth || section.Key != md5Key(keyInput) || section.Leaf != leaf {
+			t.Fatalf("section[%d] = %#v, want depth=%d keyInput=%q leaf=%t", index, section, depth, keyInput, leaf)
+		}
+	}
+	top10 := "worddvwordduworddtworddsworddrworddqworddpworddoworddnworddm"
+	assertSection(0, 0, top10, false)
+	assertSection(1, 1, top10, true)
+}
+
+func uniqueLetterWords(count int) []string {
+	words := make([]string, 0, count)
+	for idx := range count {
+		words = append(words, "word"+string(rune('a'+idx/26))+string(rune('a'+idx%26)))
+	}
+	return words
+}
+
+func md5Key(input string) string {
+	sum := md5.Sum([]byte(input))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func TestParsePreservesDescription(t *testing.T) {

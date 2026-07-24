@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -59,16 +60,17 @@ type DatabaseConfig struct {
 }
 
 type ProcessingConfig struct {
-	ParseFB2           bool           `yaml:"parse_fb2"`
-	FB2DescriptionTree bool           `yaml:"fb2_description_tree"`
-	ArchiveContentMD5  bool           `yaml:"archive_content_md5"`
-	Manifests          ManifestConfig `yaml:"manifests"`
-	DatabaseWorkers    int            `yaml:"database_workers" validate:"min=0"`
-	DatabaseBatchSize  int            `yaml:"database_batch_size" validate:"min=1"`
-	ArchiveWorkers     int            `yaml:"archive_workers" validate:"min=0"`
-	ArchiveBatchSize   int            `yaml:"archive_batch_size" validate:"min=1"`
-	ArchiveReadBuffer  int            `yaml:"archive_read_buffer_size" validate:"min=0"`
-	Rebuild            bool           `yaml:"-"`
+	ParseFB2            bool           `yaml:"parse_fb2"`
+	FB2DescriptionTree  bool           `yaml:"fb2_description_tree"`
+	FB2BodyFingerprints bool           `yaml:"fb2_body_fingerprints"`
+	ArchiveContentMD5   bool           `yaml:"archive_content_md5"`
+	Manifests           ManifestConfig `yaml:"manifests"`
+	DatabaseWorkers     int            `yaml:"database_workers" validate:"min=0"`
+	DatabaseBatchSize   int            `yaml:"database_batch_size" validate:"min=1"`
+	ArchiveWorkers      int            `yaml:"archive_workers" validate:"min=0"`
+	ArchiveBatchSize    int            `yaml:"archive_batch_size" validate:"min=1"`
+	ArchiveReadBuffer   int            `yaml:"archive_read_buffer_size" validate:"min=0"`
+	Rebuild             bool           `yaml:"-"`
 }
 
 type FetchConfig struct {
@@ -155,8 +157,18 @@ func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {
 		if err := gencfg.Validate(cfg); err != nil {
 			return nil, fmt.Errorf("failed to validate configuration: %w", err)
 		}
+		if err := validateConfig(cfg); err != nil {
+			return nil, fmt.Errorf("failed to validate configuration: %w", err)
+		}
 	}
 	return cfg, nil
+}
+
+func validateConfig(cfg *Config) error {
+	if cfg.Processing.FB2BodyFingerprints && !cfg.Processing.ParseFB2 {
+		return errors.New("processing.fb2_body_fingerprints requires processing.parse_fb2")
+	}
+	return nil
 }
 
 func LoadConfiguration(path string, options ...func(*gencfg.ProcessingOptions)) (*Config, error) {

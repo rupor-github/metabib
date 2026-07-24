@@ -89,6 +89,7 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"  validate_crc: true",
 		"processing:",
 		"  parse_fb2: false",
+		"  fb2_body_fingerprints: false",
 		"inpx:",
 		"  language:",
 		"    canonicalize: false",
@@ -136,6 +137,24 @@ func TestLoadConfigurationRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir())); err == nil {
 		t.Fatal("LoadConfiguration() error = nil, want unknown field error")
+	}
+}
+
+func TestLoadConfigurationRejectsFB2BodyFingerprintsWithoutParseFB2(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"processing:",
+		"  parse_fb2: false",
+		"  fb2_body_fingerprints: true",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err == nil || !strings.Contains(err.Error(), "processing.fb2_body_fingerprints requires processing.parse_fb2") {
+		t.Fatalf("LoadConfiguration() error = %v, want fb2_body_fingerprints validation error", err)
 	}
 }
 

@@ -14,27 +14,21 @@
 
 `metabib` extracts metadata from Flibusta/Librusec SQL dumps and FB2 archives into
 JSON Lines. It first builds cache manifests for database dumps and/or archives,
-then merges those cached artifacts into final JSONL. The project is intended as
-a modern replacement for the outdated and cross-platform maintenance-heavy
-[InpxCreator](https://github.com/rupor-github/InpxCreator), which depends on an
-embedded MySQL library that was dropped by both MySQL and MariaDB many versions
-ago.
+then merges those cached artifacts into final JSONL.
 
-`metabib` is not trying to reproduce the full `lib2inpx`/`InpxCreator` feature
-set. The intentionally unported areas include:
+`metabib` is intentionally focused on current FB2 metadata workflows. Unsupported
+areas include:
 
 - library content formats other than FB2;
 - non-FB2 Librusec update archives such as PDF updates;
-- historical dump schema changes and migration compatibility;
-- legacy INPX compatibility quirks for specific catalog readers.
-- creation of INPX daily updates is not presently supported because the legacy
-approach has too many limitations.
+- dump schemas outside the current supported schemas;
+- reader-specific INPX quirks that are not part of the generated formats;
+- INPX daily updates.
 
-Instead, `metabib` aims to provide an easily parsable source of truth for the
-growing number of catalog programs. INPX is useful as an interchange artifact,
-but it is far from optimal as a primary metadata source: it carries limitations
-and assumptions from the program it was originally created for, MyHomeLib,
-rather than representing a neutral catalog model.
+Instead, `metabib` aims to provide an easily parsable source of truth for catalog
+programs. INPX is useful as an interchange artifact, but it is far from optimal
+as a primary metadata source because it carries reader-specific field and layout
+constraints rather than representing a neutral catalog model.
 
 `metabib` caches information extracted from SQL dumps and book archives into
 manifest files so expensive extraction work can be reused later. Database dumps
@@ -68,7 +62,7 @@ Schema definitions are maintained in [`docs/`](docs/):
 - `inspect` summarizes and validates merged dataset JSONL or locates individual
   records without producing another artifact;
 - `mhl-inpx` consumes the merged dataset JSONL to produce a MyHomeLib-compatible
-  FB2 INPX without coupling the main extraction pipeline to legacy output
+  FB2 INPX without coupling the main extraction pipeline to INPX output
   constraints;
 - `flib-inpx` consumes the same merged dataset JSONL to produce a
   FLibrary-compatible FB2 INPX with extended fields and multiple flat series
@@ -204,8 +198,8 @@ logging:
 ```
 
 With that configuration, the script log includes phase separators, `metabib`
-debug messages, and MariaDB process/client output. The script no longer manages
-or renames `metabib.log`.
+debug messages, and MariaDB process/client output. The script leaves application
+file logging to `metabib` logging configuration.
 
 ### Fetch Remote Updates
 
@@ -217,10 +211,10 @@ metabib fetch --library flibusta --to upd_flibusta --tosql flibusta_20260622 --c
 metabib fetch --library librusec --to upd_librusec --tosql librusec_20260713 --continue
 ```
 
-`fetch` replaces the old `libget2` role. It reads profiles from the `fetch`
-section of the YAML configuration, discovers the last local book ID from existing
-range-named ZIPs in `--to` the same way `libget2` did, downloads only newer daily
-archive updates, and decompresses downloaded `*.sql.gz` dumps into `--tosql`.
+`fetch` reads profiles from the `fetch` section of the YAML configuration,
+discovers the last local book ID from existing range-named ZIPs in `--to`,
+downloads only newer daily archive updates, and decompresses downloaded
+`*.sql.gz` dumps into `--tosql`.
 Both rollup archives such as `fb2-000001-000100.zip` and retained daily updates
 such as `f.fb2.000101-000150.zip` count toward the local high-water mark. When
 `--tosql` is omitted, the SQL output directory is generated from the library name
@@ -231,11 +225,10 @@ Librusec daily FB2 updates use dated names such as
 `2026-07-12.818211-818248.503.fb2.zip`; `metabib` downloads only the FB2 update
 archives and skips other content formats.
 
-The command preserves the old `libget2` automation exit-code contract: exit code
-`0` means no new archive updates were downloaded, exit code `1` means an error
-occurred, and exit code `2` means one or more new archive updates were downloaded.
-Use code `2` to decide whether archive rollup or index/cache rebuild work is
-needed.
+Exit code `0` means no new archive updates were downloaded, exit code `1` means
+an error occurred, and exit code `2` means one or more new archive updates were
+downloaded. Use code `2` to decide whether archive rollup or index/cache rebuild
+work is needed.
 
 Available `fetch` arguments:
 
@@ -259,12 +252,12 @@ Roll downloaded daily update ZIPs into local size-bounded FB2 archives:
 metabib rollup --archives flibusta --updates upd_flibusta
 ```
 
-`rollup` replaces the old `libmerge` role. It keeps finalized archives and the
-active `.merging` archive in `--archives`, reads daily update ZIPs from each
-`--updates` directory, and appends ZIP entries without recompressing them. If no
-`--updates` directory is provided, `rollup` scans `--archives` for update ZIPs as
-well. Generated archive names use the ID width of the existing `.merging` archive
-or latest finalized `fb2-*.zip`; new archive directories default to 10-digit IDs.
+`rollup` keeps finalized archives and the active `.merging` archive in
+`--archives`, reads daily update ZIPs from each `--updates` directory, and appends
+ZIP entries without recompressing them. If no `--updates` directory is provided,
+`rollup` scans `--archives` for update ZIPs as well. Generated archive names use
+the ID width of the existing `.merging` archive or latest finalized `fb2-*.zip`;
+new archive directories default to 10-digit IDs.
 Daily update ZIPs are always preserved; retention and cleanup are separate
 operational concerns.
 
@@ -278,10 +271,9 @@ numeric entry for CRC-32 validation before copying it. Validation can significan
 reduce performance, but entries are still copied in their original compressed form
 without recompression.
 
-The command preserves the old `libmerge` automation exit-code contract: exit code
-`0` means no finalized archive was produced, exit code `1` means an error
-occurred, and exit code `2` means one or more finalized `fb2-*.zip` archives were
-created. Use code `2` to decide whether cache/index rebuild work is needed.
+Exit code `0` means no finalized archive was produced, exit code `1` means an
+error occurred, and exit code `2` means one or more finalized `fb2-*.zip` archives
+were created. Use code `2` to decide whether cache/index rebuild work is needed.
 
 Available `rollup` arguments:
 
@@ -343,6 +335,11 @@ kept as provenance, but manifest matching uses archive or dump file names,
 recorded metadata, processing settings, timestamps for freshness, and optional
 MD5 checksums when `--check-md5` is enabled.
 
+Set `processing.fb2_body_fingerprints: true` to calculate compact FB2 body and
+section fingerprints while archive manifests are built. This requires
+`processing.parse_fb2: true`. Archive manifests built with different fingerprint
+settings, model, or section encoding are rejected and must be rebuilt.
+
 By default, `cache` requires all SQL dump files to report the same dump date
 before import. Use `cache --allow-dump-date-mismatch` to accept mixed dump dates;
 per-file dump dates are still recorded, while the top-level manifest `dump_date`
@@ -390,8 +387,15 @@ such as `all.jsonl.zst`. Existing output files are replaced; when that happens,
 
 The first JSONL value is a dataset header (`metabib.dataset/1`) with the database
 dump date, archive entry layout, processing options, and declared ordering. Every
-following value is a dataset record (`metabib.dataset_record/1`). Legacy
-`metabib.record/1` merged JSONL input is rejected by INPX generation.
+following value is a dataset record (`metabib.dataset_record/1`). INPX generation
+requires this dataset shape and rejects `metabib.record/1` input.
+
+When archive manifests contain FB2 body fingerprints, merge records dataset-level
+fingerprint coverage as `none`, `partial`, or `complete` and copies compact
+per-book section fingerprints onto the FB2 artifact as `fp`. The value is a
+base64url-no-padding encoded binary payload containing the synthetic root plus
+compilation-relevant sections; sections with normalized word count below 100 are
+omitted to keep manifests small.
 
 Archive records are anchored by dataset archive ordinal and ZIP entry index.
 Physical record order is never inferred from entry filenames or database book IDs.
@@ -432,6 +436,10 @@ With no mode flag, `inspect` reads the dataset header and prints its schema,
 record count, source totals, processing settings, and other summary metadata. It
 does not scan the record stream in this mode.
 
+Inspect summary output includes FB2 body fingerprint coverage when present. Record
+lookup output includes the optional artifact `fp` payload in both text and JSON
+modes.
+
 Available modes and options:
 
 - `--archives`: list archive source IDs, ordinals, entry counts, names, and path
@@ -446,6 +454,8 @@ Available modes and options:
   in the specified dataset archive source.
 - `--file NAME`: return the first record whose artifact name or archive occurrence
   entry matches `NAME`; matching is case-insensitive.
+- `--decode-fp`: when returning a record, also decode compact artifact `fp`
+  payloads into root-first section rows with depth, leaf flag, and MD5 hex key.
 - `--json`: emit the selected summary, archive list, validation result, or record
   as machine-readable JSON.
 
@@ -470,9 +480,8 @@ does not read SQL dumps, start MariaDB, or parse FB2 archives directly. Database
 and FB2 metadata are read from normalized v2 claims.
 
 When the merge input is database-only and has no archives, `mhl-inpx` writes the
-records into `online.inp`, matching the legacy `lib2inpx` database-only output.
-When archive metadata is present, `online.inp` is not created; archive-less
-records are ignored to preserve the historical archive-based behavior.
+records into `online.inp`. When archive metadata is present, `online.inp` is not
+created and archive-less records are ignored.
 
 Available `mhl-inpx` arguments:
 
@@ -483,19 +492,18 @@ Available `mhl-inpx` arguments:
   dataset header is appended automatically, so `--output flibusta` writes a file
   named like `flibusta_20260603.inpx`.
 - `--format MODE`: INPX record layout. Supported values are `2x` and `ruks`.
-  Default is `2x`, matching the classic MyHomeLib/lib2inpx format. `ruks` appends
-  MD5 and replacement fields when available.
+  Default is `2x`. `ruks` appends MD5 and replacement fields when available.
 - `--sequence MODE`: database sequence selection. Supported values are `author`,
-  `publisher`, and `ignore`. Default is `author`, matching lib2inpx FB2 mode.
+  `publisher`, and `ignore`. Default is `author`.
 - `--prefer-fb2 MODE`: how FB2 metadata is used relative to database metadata for
   authors and sequences. Supported values are `ignore`, `merge`, `complement`,
-  and `replace`. Default is `complement`, matching the historical Flibusta script:
-  database authors and sequence data are preferred when present, and FB2 metadata
-  fills missing values. Use `replace` when FB2 author order should win.
+  and `replace`. Default is `complement`: database authors and sequence data are
+  preferred when present, and FB2 metadata fills missing values. Use `replace`
+  when FB2 author order should win.
 
 INPX-specific defaults live under the `inpx` section of the YAML configuration.
 They include MyHomeLib field length limits and the `collection.info` template.
-The default template is lib2inpx-compatible.
+The default template includes the metadata fields expected by MyHomeLib readers.
 
 ```yaml
 inpx:
@@ -509,15 +517,13 @@ When `disambiguate_authors` is enabled, database cache manifest creation records
 DB authors whose cleansed, non-truncated `LastName,FirstName,MiddleName` value
 collides with a different database contributor ID. INPX generation uses that
 metadata to append a stable suffix to the exported last-name field for both
-Flibusta and Librusec datasets. FB2-only authors are not changed. Existing
-database manifests without this optional metadata behave as before; rebuild the
-database cache to populate it.
+Flibusta and Librusec datasets. FB2-only authors are not changed.
 
 `comment_template` and `version_template` are Go `text/template` values rendered
 when `collection.info` and `version.info` are written. Available values are
 `.DatabaseName`, `.DumpDate`, and `.DisplayDate`; slim-sprig template functions
-are available. If you replace the collection template and still need
-MyHomeLib/lib2inpx compatibility, keep the leading `\ufeff` BOM.
+are available. Keep the leading `\ufeff` BOM when the target reader expects a BOM
+at the start of `collection.info`.
 
 Build a FLibrary-compatible FB2 INPX from the same merged dataset JSONL:
 
@@ -556,6 +562,12 @@ Available `flib-inpx` arguments:
   INPX output. Database-only inputs have no archive-derived additional source
   data, so this flag is ignored with a warning for those datasets.
 
+With `--additional`, `flib-inpx` writes `prefix-annotations.zip`. When the input
+dataset has FB2 body fingerprints and compilations are detected, it also writes
+`prefix-compilations.zip` containing compact `compilations.json`. Partial
+fingerprint coverage is accepted with a warning; datasets without fingerprints
+skip the compilations artifact.
+
 FLibrary-specific settings that are not command-line arguments live under
 `inpx.flibrary`:
 
@@ -570,11 +582,11 @@ inpx:
 `fb2_path_separator` is used by `--fb2-flatten path` and `path-leaf`.
 
 Both INPX generators canonicalize language values at generation time by default.
-Raw merged dataset JSONL remains unchanged. Database language still wins over FB2
-language, except ignored placeholder values are treated as absent so FB2 can be
-used as a fallback. Resolved output is the base language subtag, so values such as
-`RU`, `en-US`, and `sr-Latn` become `ru`, `en`, and `sr`. Explicit aliases handle
-known noisy values such as `sp -> es`, `gr -> el`, and `un -> und`.
+Raw merged dataset JSONL remains unchanged. Database language has priority over
+FB2 language, except ignored placeholder values are treated as absent so FB2 can
+be used as a fallback. Resolved output is the base language subtag, so values such
+as `RU`, `en-US`, and `sr-Latn` become `ru`, `en`, and `sr`. Explicit aliases
+handle known noisy values such as `sp -> es`, `gr -> el`, and `un -> und`.
 
 The shared resolver is configured under `inpx.language`:
 
@@ -613,11 +625,11 @@ same-record context does not match. `ignore_patterns` are regular expressions fo
 values that should be skipped entirely. `context_rules` apply only when another
 source-language observation on the same record supports the correction.
 
-Unresolved canonicalization attempts are emitted raw for compatibility and always
-logged as warnings with book ID, source field, observation, original value,
-candidate value, locator, artifact, source languages, and context language. With
-global `--verbose`, ignored values and successful canonicalizations that change
-the output are logged with the same identifying details.
+Unresolved canonicalization attempts are emitted raw and logged as warnings with
+book ID, source field, observation, original value, candidate value, locator,
+artifact, source languages, and context language. With global `--verbose`,
+ignored values and successful canonicalizations that change the output are logged
+with the same identifying details.
 
 Existing INPX output is replaced only after the new archive is fully written. If
 an existing file is overwritten, `metabib` logs a warning. During generation,

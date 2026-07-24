@@ -91,9 +91,10 @@ type DatasetOrdering struct {
 }
 
 type DatasetProcessing struct {
-	ParseFB2               bool                  `json:"parse_fb2"`
-	FB2Coverage            string                `json:"fb2_coverage,omitempty"`
-	ArchiveContentChecksum DatasetChecksumOption `json:"archive_content_checksum"`
+	ParseFB2               bool                        `json:"parse_fb2"`
+	FB2Coverage            string                      `json:"fb2_coverage,omitempty"`
+	ArchiveContentChecksum DatasetChecksumOption       `json:"archive_content_checksum"`
+	FB2BodyFingerprints    *DatasetFB2BodyFingerprints `json:"fb2_body_fingerprints,omitempty"`
 }
 
 type DatasetChecksumOption struct {
@@ -292,11 +293,12 @@ type CatalogClaims struct {
 }
 
 type Artifact struct {
-	Name        string             `json:"name"`
-	MediaType   string             `json:"media_type,omitempty"`
-	Size        []ArtifactSize     `json:"size,omitempty"`
-	Checksums   []ArtifactChecksum `json:"checksums,omitempty"`
-	Occurrences []Occurrence       `json:"occurrences,omitempty"`
+	Name         string                `json:"name"`
+	MediaType    string                `json:"media_type,omitempty"`
+	Size         []ArtifactSize        `json:"size,omitempty"`
+	Checksums    []ArtifactChecksum    `json:"checksums,omitempty"`
+	Occurrences  []Occurrence          `json:"occurrences,omitempty"`
+	Fingerprints *ArtifactFingerprints `json:"fp,omitempty"`
 }
 
 type ArtifactSize struct {

@@ -801,7 +801,10 @@ func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *co
 				parser = io.TeeReader(reader, hash)
 			}
 			parseStart := time.Now()
-			fb2Source, err := fb2.Parse(parser, cfg.Processing.FB2DescriptionTree)
+			fb2Source, err := fb2.ParseWithOptions(parser, fb2.ParseOptions{
+				PreserveDescription: cfg.Processing.FB2DescriptionTree,
+				BodyFingerprints:    cfg.Processing.FB2BodyFingerprints,
+			})
 			timing.FB2ParseElapsed += time.Since(parseStart)
 			if cfg.Processing.ArchiveContentMD5 {
 				md5Start := time.Now()

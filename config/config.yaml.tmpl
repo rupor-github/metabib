@@ -85,6 +85,10 @@ processing:
   # title-info and is faster, but loses document-info/publish-info/custom-info.
   fb2_description_tree: true
 
+  # Calculate FB2 body/section fingerprints for later FLibrary compilation
+  # detection. Requires parse_fb2 because it extends the same XML parse pass.
+  fb2_body_fingerprints: true
+
   # Calculate MD5 of the uncompressed archive entry content. For FB2 this reuses
   # the parser stream, but still has to drain the whole entry after description.
   archive_content_md5: true

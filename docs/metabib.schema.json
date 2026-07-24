@@ -154,7 +154,8 @@
       "required": ["present"],
       "properties": {
         "present": {"type": "boolean"},
-        "description": {"$ref": "#/$defs/fb2_description"}
+        "description": {"$ref": "#/$defs/fb2_description"},
+        "fp": {"type": "string"}
       },
       "additionalProperties": false
     },

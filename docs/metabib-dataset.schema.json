@@ -127,7 +127,18 @@
       "properties": {
         "parse_fb2": {"type": "boolean"},
         "fb2_coverage": {"enum": ["title_info", "description"]},
-        "archive_content_checksum": {"$ref": "#/$defs/checksum_option"}
+        "archive_content_checksum": {"$ref": "#/$defs/checksum_option"},
+        "fb2_body_fingerprints": {"$ref": "#/$defs/fb2_body_fingerprints"}
+      },
+      "additionalProperties": false
+    },
+    "fb2_body_fingerprints": {
+      "type": "object",
+      "required": ["coverage"],
+      "properties": {
+        "coverage": {"enum": ["none", "partial", "complete"]},
+        "model": {"type": "string"},
+        "section_encoding": {"type": "string"}
       },
       "additionalProperties": false
     },

@@ -71,6 +71,9 @@ func datasetRecordFromRecordWithMatch(
 				Value:       rec.ID.Archive.ContentMD5,
 			})
 		}
+		if rec.Source.FB2.Fingerprints != nil {
+			artifact.Fingerprints = rec.Source.FB2.Fingerprints
+		}
 		out.Artifacts = []model.Artifact{artifact}
 		appendDatabaseObservation(&out, rec, databaseMatch)
 		appendInferredCatalogIdentity(&out, inferredBookID)
