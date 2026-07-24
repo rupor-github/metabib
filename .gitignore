@@ -16,7 +16,6 @@ build/
 build_*/
 release/
 release_*/
-vendor/
 *.jsonl
 *.jsonl.gz
 *.jsonl.zst

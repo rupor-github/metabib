@@ -1,0 +1,47 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - gci
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/go-task)
+        - localmodule
+
+linters:
+  enable:
+    - depguard
+    - gosec
+    - mirror
+    - misspell
+    - modernize
+    - noctx
+    - paralleltest
+    - thelper
+    - tparallel
+    - usetesting
+  settings:
+    gosec:
+      excludes:
+        - G306
+    depguard:
+      rules:
+        main:
+          files:
+            - $all
+            - '!$test'
+            - '!**/errors/*.go'
+          deny:
+            - pkg: errors
+              desc: Use github.com/go-task/task/v3/errors instead
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
