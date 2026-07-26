@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/net/html/charset"
 
@@ -112,11 +112,10 @@ func parseWithBodyFingerprints(r io.Reader, opts ParseOptions) (model.FB2Source,
 				return model.FB2Source{}, fmt.Errorf("%w: XML depth exceeds %d", ErrLimitExceeded, MaxXMLDepth)
 			}
 			if t.Name.Local == "description" && len(stack) == 1 && stack[0] == "FictionBook" {
-				node, err := readElement(dec, t, len(stack)+1, 0, state)
+				desc, err := parseDescriptionElement(dec, t, opts.PreserveDescription, len(stack)+1, state)
 				if err != nil {
 					return model.FB2Source{}, err
 				}
-				desc := parseDescription(node, opts.PreserveDescription)
 				description = &desc
 				continue
 			}
@@ -131,7 +130,7 @@ func parseWithBodyFingerprints(r io.Reader, opts ParseOptions) (model.FB2Source,
 				if err := state.addText(len(t)); err != nil {
 					return model.FB2Source{}, err
 				}
-				fingerprints.addText(string(t))
+				fingerprints.addText(t)
 			}
 		case xml.EndElement:
 			if t.Name.Local == "section" && fingerprints.inBody() {
@@ -180,6 +179,51 @@ func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
 		case xml.EndElement:
 			if t.Name.Local == "description" {
 				return model.FB2Source{Present: true}, nil
+			}
+		}
+	}
+}
+
+func parseDescriptionElement(dec *xml.Decoder, start xml.StartElement, full bool, depth int, state *parseState) (model.FB2Description, error) {
+	if full {
+		node, err := readElement(dec, start, depth, 0, state)
+		if err != nil {
+			return model.FB2Description{}, err
+		}
+		return parseDescription(node, true), nil
+	}
+	return parseDescriptionTitleInfoOnly(dec, depth, state)
+}
+
+func parseDescriptionTitleInfoOnly(dec *xml.Decoder, depth int, state *parseState) (model.FB2Description, error) {
+	var description model.FB2Description
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return description, fmt.Errorf("parse FB2 description: %w", err)
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if depth+1 > MaxXMLDepth {
+				return description, fmt.Errorf("%w: XML depth exceeds %d", ErrLimitExceeded, MaxXMLDepth)
+			}
+			if t.Name.Local == "title-info" {
+				node, err := readElement(dec, t, depth+1, 0, state)
+				if err != nil {
+					return description, err
+				}
+				description.TitleInfo = parseTitleInfo(node)
+				continue
+			}
+			if err := state.addNode(); err != nil {
+				return description, err
+			}
+			if err := dec.Skip(); err != nil {
+				return description, fmt.Errorf("skip FB2 description node %q: %w", t.Name.Local, err)
+			}
+		case xml.EndElement:
+			if t.Name.Local == "description" {
+				return description, nil
 			}
 		}
 	}
@@ -247,10 +291,12 @@ func (s *parseState) addNode() error {
 }
 
 type bodyFingerprintBuilder struct {
-	root      *sectionAccumulator
-	stack     []*sectionAccumulator
-	preorder  []*sectionAccumulator
-	bodyDepth int
+	root         *sectionAccumulator
+	stack        []*sectionAccumulator
+	preorder     []*sectionAccumulator
+	bodyDepth    int
+	tokenScratch []rune
+	wordScratch  []rune
 }
 
 type sectionAccumulator struct {
@@ -303,14 +349,12 @@ func (b *bodyFingerprintBuilder) closeSection() {
 	mergeHistogram(b.stack[len(b.stack)-1].hist, section.hist)
 }
 
-func (b *bodyFingerprintBuilder) addText(text string) {
+func (b *bodyFingerprintBuilder) addText(text []byte) {
 	if len(b.stack) == 0 {
 		return
 	}
 	section := b.stack[len(b.stack)-1]
-	for _, word := range normalizedWords(text) {
-		section.hist[word]++
-	}
+	b.tokenScratch, b.wordScratch = addNormalizedWords(text, section.hist, b.tokenScratch[:0], b.wordScratch[:0])
 }
 
 func (b *bodyFingerprintBuilder) finish() *model.FB2BodyFingerprint {
@@ -322,10 +366,11 @@ func (b *bodyFingerprintBuilder) finish() *model.FB2BodyFingerprint {
 	}
 	sections := make([]model.FB2BodySectionFingerprint, 0, len(b.preorder))
 	for _, section := range b.preorder {
-		fingerprint := sectionFingerprint(section)
-		if section.depth == 0 || fingerprint.count >= bodyFingerprintSectionThreshold {
-			sections = append(sections, fingerprint.section)
+		count := len(section.hist)
+		if section.depth != 0 && count < bodyFingerprintSectionThreshold {
+			continue
 		}
+		sections = append(sections, sectionFingerprint(section))
 	}
 	return &model.FB2BodyFingerprint{Sections: sections}
 }
@@ -340,91 +385,121 @@ func mergeHistogram(dst map[string]int, src map[string]int) {
 	}
 }
 
-func normalizedWords(text string) []string {
-	normalized := normalizeBodyText(text)
-	parts := strings.Split(normalized, " ")
-	words := make([]string, 0, len(parts))
-	for _, part := range parts {
-		word := keepLetters(part)
-		if word != "" {
-			words = append(words, word)
-		}
-	}
-	return words
+type rankedWord struct {
+	word   string
+	count  int
+	bucket int
 }
 
-func normalizeBodyText(text string) string {
-	text = strings.ToLower(text)
-	text = strings.NewReplacer("ё", "е", "й", "и", "ъ", "ь").Replace(text)
-	var out strings.Builder
-	out.Grow(len(text))
-	for _, r := range text {
-		if unicode.In(r, unicode.Zs, unicode.Zl, unicode.Zp) || unicode.IsControl(r) || unicode.IsPunct(r) {
-			out.WriteByte(' ')
+func addNormalizedWords(text []byte, hist map[string]int, token []rune, word []rune) ([]rune, []rune) {
+	for len(text) > 0 {
+		r, size := utf8.DecodeRune(text)
+		text = text[size:]
+		r = normalizeBodyRune(unicode.ToLower(r))
+		if isBodyWordSeparator(r) {
+			flushBodyToken(&token, &word, hist)
 			continue
 		}
-		out.WriteRune(r)
+		token = append(token, r)
 	}
-	return strings.ReplaceAll(out.String(), "ыо", "ью")
+	flushBodyToken(&token, &word, hist)
+	return token[:0], word[:0]
 }
 
-func keepLetters(word string) string {
-	var out strings.Builder
-	for _, r := range word {
+func normalizeBodyRune(r rune) rune {
+	switch r {
+	case 'ё':
+		return 'е'
+	case 'й':
+		return 'и'
+	case 'ъ':
+		return 'ь'
+	default:
+		return r
+	}
+}
+
+func isBodyWordSeparator(r rune) bool {
+	return unicode.In(r, unicode.Zs, unicode.Zl, unicode.Zp) || unicode.IsControl(r) || unicode.IsPunct(r)
+}
+
+func flushBodyToken(token *[]rune, word *[]rune, hist map[string]int) {
+	if len(*token) == 0 {
+		return
+	}
+	src := *token
+	out := (*word)[:0]
+	for idx := 0; idx < len(src); idx++ {
+		r := src[idx]
+		if r == 'ы' && idx+1 < len(src) && src[idx+1] == 'о' {
+			out = append(out, 'ь', 'ю')
+			idx++
+			continue
+		}
 		if unicode.IsLetter(r) {
-			out.WriteRune(r)
+			out = append(out, r)
 		}
 	}
-	return out.String()
+	if len(out) > 0 {
+		hist[string(out)]++
+	}
+	*token = src[:0]
+	*word = out[:0]
 }
 
-type rankedWord struct {
-	word  string
-	count int
-}
-
-type sectionFingerprintResult struct {
-	section model.FB2BodySectionFingerprint
-	count   int
-}
-
-func sectionFingerprint(section *sectionAccumulator) sectionFingerprintResult {
-	words := make([]rankedWord, 0, len(section.hist))
+func sectionFingerprint(section *sectionAccumulator) model.FB2BodySectionFingerprint {
+	top := make([]rankedWord, 0, 10)
 	for word, count := range section.hist {
-		words = append(words, rankedWord{word: word, count: count})
+		top = insertRankedWord(top, rankedWord{word: word, count: count, bucket: wordLengthBucket(word)})
 	}
-	sort.Slice(words, func(i int, j int) bool {
-		left := words[i]
-		right := words[j]
-		if leftBucket, rightBucket := wordLengthBucket(left.word), wordLengthBucket(right.word); leftBucket != rightBucket {
-			return leftBucket > rightBucket
-		}
-		if left.count != right.count {
-			return left.count > right.count
-		}
-		return left.word > right.word
-	})
 	hash := md5.New()
-	for idx, word := range words {
-		if idx == 10 {
-			break
-		}
+	for _, word := range top {
 		_, _ = hash.Write([]byte(word.word))
 	}
-	return sectionFingerprintResult{
-		section: model.FB2BodySectionFingerprint{
-			Depth: section.depth,
-			Key:   base64.RawURLEncoding.EncodeToString(hash.Sum(nil)),
-			Leaf:  len(section.children) == 0,
-		},
-		count: len(section.hist),
+	return model.FB2BodySectionFingerprint{
+		Depth: section.depth,
+		Key:   base64.RawURLEncoding.EncodeToString(hash.Sum(nil)),
+		Leaf:  len(section.children) == 0,
 	}
+}
+
+func insertRankedWord(top []rankedWord, word rankedWord) []rankedWord {
+	if len(top) < 10 {
+		top = append(top, word)
+		moveRankedWordUp(top, len(top)-1)
+		return top
+	}
+	if !rankedWordBefore(word, top[len(top)-1]) {
+		return top
+	}
+	top[len(top)-1] = word
+	moveRankedWordUp(top, len(top)-1)
+	return top
+}
+
+func moveRankedWordUp(top []rankedWord, index int) {
+	for idx := index; idx > 0 && rankedWordBefore(top[idx], top[idx-1]); idx-- {
+		top[idx], top[idx-1] = top[idx-1], top[idx]
+	}
+}
+
+func rankedWordBefore(left rankedWord, right rankedWord) bool {
+	if left.bucket != right.bucket {
+		return left.bucket > right.bucket
+	}
+	if left.count != right.count {
+		return left.count > right.count
+	}
+	return left.word > right.word
 }
 
 func wordLengthBucket(word string) int {
-	length := len([]rune(word))
-	if length > 8 {
-		return 8
+	var length int
+	for range word {
+		length++
+		if length == 8 {
+			return 8
+		}
 	}
 	return length
 }
