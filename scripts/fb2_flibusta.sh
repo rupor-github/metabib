@@ -172,7 +172,8 @@ build_flib_inpx() {
 	"${metabib}" "${metabib_args[@]}" flib-inpx \
 		--input "${merge_prefix}" \
 		--output "${odir}/${name}_flib" \
-		--source-lib "${name}"
+		--source-lib "${name}" \
+		--additional
 
 	res=$?
 	if (( res != 0 )); then
