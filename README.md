@@ -173,8 +173,19 @@ The script writes generated INPX files with non-overlapping output prefixes:
 
 - `mhl` mode writes `inpx/flibusta_mhl_<dump-date>.inpx`.
 - `flib` mode writes `inpx/flibusta_flib_<dump-date>.inpx` and passes
-  `--source-lib flibusta` so FLibrary receives the original source library name.
+  `--source-lib flibusta --additional` so FLibrary receives the original source
+  library name and additional artifacts are generated next to the INPX.
 - `both` mode writes both files from the same merged JSONL input.
+
+In `flib` and `both` modes, additional FLibrary outputs use the same prefix as
+the INPX: `flibusta_flib_<dump-date>-annotations.zip` is written when annotation
+data is available, and `flibusta_flib_<dump-date>-compilations.zip` is written
+when FB2 body fingerprints detect compilations.
+
+After a successful download, `full` mode keeps the five newest SQL dump
+directories and also keeps the newest SQL dump directory that already contains
+`database.manifest.zst`, so reindexing can reuse the latest database cache even
+when it is older than the newest downloads.
 
 Expected library layout under `<library-root>`:
 

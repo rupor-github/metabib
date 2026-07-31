@@ -141,6 +141,36 @@ latest_dump_dir() {
 	printf '%s\n' "${dirs[@]}" | sort -nr | head -n 1
 }
 
+# Keep recent SQL dumps for rollback while preserving the newest imported dump
+# with a database manifest, so reindex can reuse its cache after new downloads.
+cleanup_old_sql_dump_dirs() {
+	local dir i manifest_dir=""
+	local -a dirs delete
+
+	while IFS= read -r dir; do
+		dirs+=("${dir}")
+	done < <(find "${root}" -maxdepth 1 -type d -name "${name}_*" | sort -nr)
+
+	for dir in "${dirs[@]}"; do
+		if [[ -f "${dir}/database.manifest.zst" ]]; then
+			manifest_dir="${dir}"
+			break
+		fi
+	done
+
+	for i in "${!dirs[@]}"; do
+		dir="${dirs[${i}]}"
+		if (( i < 5 )) || [[ -n "${manifest_dir}" && "${dir}" == "${manifest_dir}" ]]; then
+			continue
+		fi
+		delete+=("${dir}")
+	done
+
+	for dir in "${delete[@]}"; do
+		rm -rf "${dir}/"
+	done
+}
+
 log_phase() {
 	echo
 	echo "========================================================================"
@@ -275,7 +305,8 @@ fi
 log_phase "Cleaning old SQL dump directories"
 
 # Clean old database directories - we have at least one good download.
-find "${root}" -maxdepth 1 -type d -name "${name}_*" | sort -nr | tail -n +6 | xargs -r -I {} rm -rf {}/
+# Keep the newest dumps and the newest dump that already has a database manifest.
+cleanup_old_sql_dump_dirs
 
 log_phase "Rolling up ${name} archives"
 
