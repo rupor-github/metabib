@@ -221,8 +221,8 @@ link_flib_additional_artifacts() {
 	local output_prefix="${odir}/${name}_flib_${dump_date}"
 
 	mkdir -p "${link_dir}"
-	link_flib_additional_artifact "${output_prefix}-annotations.zip" "${link_dir}/annotations.7z" || return 1
-	link_flib_additional_artifact "${output_prefix}-compilations.zip" "${link_dir}/compilations.7z" || return 1
+	link_flib_additional_artifact "${output_prefix}-annotations.zip" "${link_dir}/annotations.zip" || return 1
+	link_flib_additional_artifact "${output_prefix}-compilations.zip" "${link_dir}/compilations.zip" || return 1
 }
 
 build_flib_inpx() {
