@@ -80,6 +80,9 @@ adir="${root}/${name}"
 # Directory for generated INPX and intermediate merged JSONL files.
 odir="${root}/inpx"
 
+# Subdirectory under the INPX directory for stable FLibrary additional-artifact links.
+flib_additional_link_dir="flib-etc"
+
 # Per-run SQL dump directory populated by `metabib fetch`.
 wdir="${adir}_${cdate}"
 
@@ -194,8 +197,36 @@ build_mhl_inpx() {
 	fi
 }
 
+link_flib_additional_artifact() {
+	local source="$1" link="$2"
+
+	if [[ -f "${source}" ]]; then
+		if [[ -e "${link}" && ! -L "${link}" ]]; then
+			echo "Unable to replace non-symlink ${link}"
+			return 1
+		fi
+		ln -sfn "../$(basename "${source}")" "${link}"
+		return 0
+	fi
+
+	if [[ -L "${link}" ]]; then
+		rm -f "${link}"
+	fi
+	return 0
+}
+
+link_flib_additional_artifacts() {
+	local dump_date="$1"
+	local link_dir="${odir}/${flib_additional_link_dir}"
+	local output_prefix="${odir}/${name}_flib_${dump_date}"
+
+	mkdir -p "${link_dir}"
+	link_flib_additional_artifact "${output_prefix}-annotations.zip" "${link_dir}/annotations.7z" || return 1
+	link_flib_additional_artifact "${output_prefix}-compilations.zip" "${link_dir}/compilations.7z" || return 1
+}
+
 build_flib_inpx() {
-	local merge_prefix="$1" res
+	local merge_prefix="$1" dump_date="$2" res
 
 	log_phase "Building FLibrary INPX"
 
@@ -210,21 +241,26 @@ build_flib_inpx() {
 		echo "Unable to build FLibrary INPX - ${res}"
 		exit 1
 	fi
+
+	if ! link_flib_additional_artifacts "${dump_date}"; then
+		echo "Unable to link FLibrary additional artifacts"
+		exit 1
+	fi
 }
 
 build_selected_inpx() {
-	local merge_prefix="$1"
+	local merge_prefix="$1" dump_date="$2"
 
 	case "${inpx_mode}" in
 		mhl)
 			build_mhl_inpx "${merge_prefix}"
 			;;
 		flib)
-			build_flib_inpx "${merge_prefix}"
+			build_flib_inpx "${merge_prefix}" "${dump_date}"
 			;;
 		both)
 			build_mhl_inpx "${merge_prefix}"
-			build_flib_inpx "${merge_prefix}"
+			build_flib_inpx "${merge_prefix}" "${dump_date}"
 			;;
 	esac
 }
@@ -265,7 +301,7 @@ build_inpx_from_existing_data() {
 		exit 1
 	fi
 
-	build_selected_inpx "${merge_prefix}"
+	build_selected_inpx "${merge_prefix}" "${dump_date}"
 }
 
 exec 3>&1 4>&2

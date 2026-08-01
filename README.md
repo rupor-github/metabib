@@ -182,6 +182,11 @@ the INPX: `flibusta_flib_<dump-date>-annotations.zip` is written when annotation
 data is available, and `flibusta_flib_<dump-date>-compilations.zip` is written
 when FB2 body fingerprints detect compilations.
 
+After FLibrary additional artifacts are written, the script updates stable links
+under `inpx/flib-etc/`: `annotations.7z` points to the current annotations ZIP,
+and `compilations.7z` points to the current compilations ZIP when one was
+generated. Stale symlinks are removed when an optional artifact is absent.
+
 After a successful download, `full` mode keeps the five newest SQL dump
 directories and also keeps the newest SQL dump directory that already contains
 `database.manifest.zst`, so reindexing can reuse the latest database cache even
