@@ -21,7 +21,6 @@ vars:
 env:
   GOPATH: '{{default (joinPath (default "/tmp" (env "TEMP")) "gopkg_metabib") (env "GOPATH")}}'
   GOTOOLCHAIN: 'local+path'
-  GOEXPERIMENT: 'jsonv2'
 
 tasks:
   default:
