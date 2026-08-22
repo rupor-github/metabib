@@ -32,7 +32,7 @@ func TestManifestWriterAndIterator(t *testing.T) {
 	if err := w.Close(archiveManifestHeader{Schema: archiveManifestSchema, Records: 1}); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "records.manifest.zst*.tmp")); err != nil || len(matches) != 0 {
+	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".records.manifest.zst*.tmp")); err != nil || len(matches) != 0 {
 		t.Fatalf("manifest temp matches after close = %#v err=%v, want none", matches, err)
 	}
 
@@ -86,7 +86,7 @@ func TestManifestWritersUseUniqueTempPaths(t *testing.T) {
 	if first.tmpRecords == second.tmpRecords {
 		t.Fatalf("manifest records temp paths collided: %q", first.tmpRecords)
 	}
-	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), "records.manifest.zst.records-*.tmp")); err != nil || len(matches) != 2 {
+	if matches, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".records.manifest.zst.records-*.tmp")); err != nil || len(matches) != 2 {
 		t.Fatalf("manifest records temp matches = %#v err=%v, want 2", matches, err)
 	}
 }

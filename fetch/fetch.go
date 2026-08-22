@@ -20,6 +20,7 @@ import (
 	"golang.org/x/net/proxy"
 
 	"metabib/config"
+	"metabib/internal/fileutil"
 	"metabib/misc"
 )
 
@@ -291,7 +292,7 @@ func (f fetcher) fetchFile(ctx context.Context, sourceURL string, tmpIn string, 
 			out, err = os.Create(tmpIn)
 		}
 	} else {
-		out, err = os.CreateTemp("", "metabib-fetch-")
+		out, err = fileutil.CreateHiddenTemp("", "metabib-fetch")
 		if err == nil {
 			tmpOut = out.Name()
 		}

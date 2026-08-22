@@ -19,6 +19,7 @@ import (
 
 	"metabib/config"
 	"metabib/db"
+	"metabib/internal/fileutil"
 	"metabib/jsonl"
 	"metabib/model"
 )
@@ -491,7 +492,7 @@ func newManifestWriter(path string) (*manifestWriter, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create manifest directory: %w", err)
 	}
-	recordsPattern := filepath.Base(path) + ".records-*.tmp"
+	recordsPattern := fileutil.HiddenTempPattern(filepath.Base(path) + ".records")
 	f, err := os.CreateTemp(filepath.Dir(path), recordsPattern)
 	if err != nil {
 		return nil, fmt.Errorf("create manifest records %q: %w", filepath.Join(filepath.Dir(path), recordsPattern), err)
@@ -528,9 +529,10 @@ func (w *manifestWriter) Close(header any) error {
 		}
 	}
 
-	tmpManifestFile, err := os.CreateTemp(filepath.Dir(w.path), filepath.Base(w.path)+"-*.tmp")
+	manifestPattern := fileutil.HiddenTempPattern(filepath.Base(w.path))
+	tmpManifestFile, err := os.CreateTemp(filepath.Dir(w.path), manifestPattern)
 	if err != nil {
-		return fmt.Errorf("create manifest %q: %w", filepath.Join(filepath.Dir(w.path), filepath.Base(w.path)+"-*.tmp"), err)
+		return fmt.Errorf("create manifest %q: %w", filepath.Join(filepath.Dir(w.path), manifestPattern), err)
 	}
 	tmpManifest := tmpManifestFile.Name()
 	if err := tmpManifestFile.Close(); err != nil {

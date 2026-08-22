@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"metabib/config"
+	"metabib/internal/fileutil"
 )
 
 type Runtime struct {
@@ -204,7 +205,7 @@ func (r *Runtime) Managed() bool {
 
 func (r *Runtime) prepareManagedPaths() error {
 	if r.Config.Temporary {
-		tmp, err := os.MkdirTemp("", "metabib-mariadb-*")
+		tmp, err := os.MkdirTemp("", fileutil.HiddenTempPattern("metabib-mariadb"))
 		if err != nil {
 			return fmt.Errorf("create temporary MariaDB directory: %w", err)
 		}

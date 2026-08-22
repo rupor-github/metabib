@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+
+	"metabib/internal/fileutil"
 )
 
 func CompressedPath(path string, compression Compression) string {
@@ -21,7 +23,7 @@ func CreateCompressedFile(path string, compression Compression) (*os.File, io.Wr
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, nil, nil, fmt.Errorf("create output directory: %w", err)
 	}
-	pattern := filepath.Base(path) + "-*.tmp"
+	pattern := fileutil.HiddenTempPattern(filepath.Base(path))
 	f, err := os.CreateTemp(filepath.Dir(path), pattern)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("create output %q: %w", filepath.Join(filepath.Dir(path), pattern), err)

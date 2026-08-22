@@ -26,6 +26,7 @@ import (
 	"metabib/misc"
 	"metabib/model"
 	"metabib/rollup"
+	"metabib/sliceinpx"
 	"metabib/state"
 )
 
@@ -120,6 +121,7 @@ func main() {
 			cacheCommand(),
 			mergeCommand(),
 			inspectCommand(),
+			inpxCommand(),
 			mhlINPXCommand(),
 			flibINPXCommand(),
 			{
@@ -188,6 +190,48 @@ func rollupCommand() *cli.Command {
 			&cli.IntFlag{Name: "size", Value: 2000, Usage: "finalized archive target size in decimal megabytes"},
 		},
 		Action: runRollup,
+	}
+}
+
+func inpxCommand() *cli.Command {
+	return &cli.Command{
+		Name:  "inpx",
+		Usage: "Build archive-backed filtered INPX from merged dataset JSONL",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:     "input",
+				Aliases:  []string{"i"},
+				Usage:    "read merged dataset JSONL using `PREFIX` or exact path",
+				Required: true,
+			},
+			&cli.StringFlag{
+				Name:     "output",
+				Aliases:  []string{"o"},
+				Usage:    "write INPX using `PREFIX` plus dump date",
+				Required: true,
+			},
+			&cli.StringFlag{Name: "where", Usage: "filter rows with Go template `TEMPLATE`"},
+			&cli.StringFlag{Name: "where-file", Usage: "filter rows with Go template from `FILE`"},
+			&cli.StringFlag{Name: "split-by", Usage: "split rows into INP entries with Go template `TEMPLATE`"},
+			&cli.StringFlag{Name: "split-by-file", Usage: "split rows into INP entries with Go template from `FILE`"},
+			&cli.StringFlag{
+				Name:  "sequence",
+				Value: string(sliceinpx.SequenceAuthor),
+				Usage: "sequence selection `MODE` (author, publisher, all, ignore)",
+			},
+			&cli.StringFlag{
+				Name:  "prefer-fb2",
+				Value: string(sliceinpx.PreferComplement),
+				Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)",
+			},
+			&cli.StringFlag{
+				Name:  "fb2-flatten",
+				Value: string(sliceinpx.FlattenAll),
+				Usage: "FB2 sequence flattening `MODE` (all, leaf, path, path-leaf)",
+			},
+			&cli.BoolFlag{Name: "additional", Usage: "write additional FLibrary-compatible annotation and compilation artifacts"},
+		},
+		Action: runINPX,
 	}
 }
 
@@ -595,6 +639,98 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	})
 	return err
+}
+
+func runINPX(ctx context.Context, cmd *cli.Command) error {
+	start := time.Now()
+	cfg := state.EnvFromContext(ctx).Cfg
+	env := state.EnvFromContext(ctx)
+	sequence, err := sliceinpx.ParseSequenceMode(cmd.String("sequence"))
+	if err != nil {
+		return err
+	}
+	preference, err := sliceinpx.ParseFB2Preference(cmd.String("prefer-fb2"))
+	if err != nil {
+		return err
+	}
+	flatten, err := sliceinpx.ParseFlattenMode(cmd.String("fb2-flatten"))
+	if err != nil {
+		return err
+	}
+	dedup, err := sliceinpx.ParseDedupMode(cfg.INPX.FLibrary.SequenceDedup)
+	if err != nil {
+		return err
+	}
+	where, err := templateOption(cmd, "where", "where-file")
+	if err != nil {
+		return err
+	}
+	splitBy, err := templateOption(cmd, "split-by", "split-by-file")
+	if err != nil {
+		return err
+	}
+	language, err := inpxLanguageResolver(cfg, env)
+	if err != nil {
+		return err
+	}
+	stats, err := sliceinpx.Generate(ctx, sliceinpx.Options{
+		InputPrefix:         cmd.String("input"),
+		OutputPrefix:        cmd.String("output"),
+		Additional:          cmd.Bool("additional"),
+		SequenceMode:        sequence,
+		FB2Preference:       preference,
+		FlattenMode:         flatten,
+		DedupMode:           dedup,
+		FB2PathSeparator:    cfg.INPX.FLibrary.FB2PathSeparator,
+		Where:               where,
+		SplitBy:             splitBy,
+		DisambiguateAuthors: cfg.INPX.DisambiguateAuthors,
+		Language:            language,
+		CommentTemplate:     cfg.INPX.CommentTemplate,
+		VersionTemplate:     cfg.INPX.VersionTemplate,
+		Log:                 env.Log,
+		Verbose:             env.Verbose,
+	})
+	if err != nil {
+		return err
+	}
+	if env.Log != nil {
+		env.Log.Info(
+			"INPX slice created",
+			zap.String("file", stats.OutputPath),
+			zap.String("additional_file", stats.AdditionalOutputPath),
+			zap.String("compilations_file", stats.CompilationsOutputPath),
+			zap.String("dump_date", stats.DumpDate),
+			zap.Int("archives", stats.Archives),
+			zap.Int64("books", stats.Files),
+			zap.Int64("records", stats.Records),
+			zap.Int64("db_records", stats.DBRecords),
+			zap.Int64("fb2_records", stats.FB2Records),
+			zap.Int64("filtered_records", stats.FilteredRecords),
+			zap.Int64("disambiguated_author_books", stats.DisambiguatedAuthorBooks),
+			zap.Int64("disambiguated_authors", stats.DisambiguatedAuthors),
+			zap.Int64("canonicalized_language_books", stats.CanonicalizedLangBooks),
+			zap.Int("split_entries", len(stats.Splits)),
+			zap.Duration("elapsed", time.Since(start)),
+		)
+	}
+	return nil
+}
+
+func templateOption(cmd *cli.Command, inlineName string, fileName string) (string, error) {
+	inline := cmd.String(inlineName)
+	path := cmd.String(fileName)
+	if inline != "" && path != "" {
+		return "", fmt.Errorf("--%s and --%s are mutually exclusive", inlineName, fileName)
+	}
+	if path == "" {
+		return inline, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read --%s %q: %w", fileName, path, err)
+	}
+	return string(data), nil
 }
 
 func runMHLINPX(ctx context.Context, cmd *cli.Command) error {

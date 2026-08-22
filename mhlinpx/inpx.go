@@ -182,7 +182,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 				return fmt.Errorf("create INPX output directory: %w", err)
 			}
-			tmpFile, err := os.CreateTemp(filepath.Dir(outputPath), filepath.Base(outputPath)+"-*.tmp")
+			tmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(outputPath), filepath.Base(outputPath))
 			if err != nil {
 				return fmt.Errorf("create temporary INPX output: %w", err)
 			}

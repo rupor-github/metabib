@@ -375,7 +375,7 @@ func openWorkArchive(opts Options, last archive, merge archive, updates *[]archi
 }
 
 func createNewWorkArchive(dir string) (*workArchive, error) {
-	f, err := os.CreateTemp(dir, "rollup-")
+	f, err := fileutil.CreateHiddenTemp(dir, "rollup")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary archive in %q: %w", dir, err)
 	}
@@ -388,7 +388,7 @@ func rewriteExistingMergeArchive(path string, firstBook int, lastBook int, exist
 		return nil, fmt.Errorf("open merge archive %q: %w", path, err)
 	}
 	defer reader.Close()
-	tmp, err := os.CreateTemp(filepath.Dir(path), "rollup-")
+	tmp, err := fileutil.CreateHiddenTemp(filepath.Dir(path), "rollup")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary archive in %q: %w", filepath.Dir(path), err)
 	}

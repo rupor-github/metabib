@@ -233,7 +233,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
 				return fmt.Errorf("create FLibrary INPX output directory: %w", err)
 			}
-			tmpFile, err := os.CreateTemp(filepath.Dir(outputPath), filepath.Base(outputPath)+"-*.tmp")
+			tmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(outputPath), filepath.Base(outputPath))
 			if err != nil {
 				return fmt.Errorf("create temporary FLibrary INPX output: %w", err)
 			}
@@ -249,7 +249,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			if opts.Additional {
 				additionalOutputPath := annotationsOutputPath(outputPath)
 				stats.AdditionalOutputPath = additionalOutputPath
-				additionalTmpFile, err := os.CreateTemp(filepath.Dir(additionalOutputPath), filepath.Base(additionalOutputPath)+"-*.tmp")
+				additionalTmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(additionalOutputPath), filepath.Base(additionalOutputPath))
 				if err != nil {
 					return fmt.Errorf("create temporary FLibrary additional output: %w", err)
 				}
@@ -271,7 +271,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 						opts.Log.Warn("Generating FLibrary compilations output from partial FB2 body fingerprint coverage")
 					}
 					compilationsOutputPath = compilationsOutputPathFor(outputPath)
-					compilationsTmpFile, err := os.CreateTemp(filepath.Dir(compilationsOutputPath), filepath.Base(compilationsOutputPath)+"-*.tmp")
+					compilationsTmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(compilationsOutputPath), filepath.Base(compilationsOutputPath))
 					if err != nil {
 						return fmt.Errorf("create temporary FLibrary compilations output: %w", err)
 					}

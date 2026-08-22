@@ -485,7 +485,7 @@ and checksums for long-term correlation across regenerated datasets.
 
 ### INPX Generation
 
-Build a MyHomeLib-compatible FB2 INPX from merged dataset JSONL:
+Build a MyHomeLib-compatible "historical" FB2 INPX from merged dataset JSONL:
 
 ```sh
 metabib mhl-inpx --input all --output flibusta
@@ -516,30 +516,6 @@ Available `mhl-inpx` arguments:
   and `replace`. Default is `complement`: database authors and sequence data are
   preferred when present, and FB2 metadata fills missing values. Use `replace`
   when FB2 author order should win.
-
-INPX-specific defaults live under the `inpx` section of the YAML configuration.
-They include MyHomeLib field length limits and the `collection.info` template.
-The default template includes the metadata fields expected by MyHomeLib readers.
-
-```yaml
-inpx:
-  quick_fix: true
-  disambiguate_authors: true
-  comment_template: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}"
-  version_template: "{{ .DumpDate }}\r\n"
-```
-
-When `disambiguate_authors` is enabled, database cache manifest creation records
-DB authors whose cleansed, non-truncated `LastName,FirstName,MiddleName` value
-collides with a different database contributor ID. INPX generation uses that
-metadata to append a stable suffix to the exported last-name field for both
-Flibusta and Librusec datasets. FB2-only authors are not changed.
-
-`comment_template` and `version_template` are Go `text/template` values rendered
-when `collection.info` and `version.info` are written. Available values are
-`.DatabaseName`, `.DumpDate`, and `.DisplayDate`; slim-sprig template functions
-are available. Keep the leading `\ufeff` BOM when the target reader expects a BOM
-at the start of `collection.info`.
 
 Build a FLibrary-compatible FB2 INPX from the same merged dataset JSONL:
 
@@ -597,17 +573,125 @@ inpx:
 `sequence_dedup` supports `case-insensitive` and `case-sensitive`.
 `fb2_path_separator` is used by `--fb2-flatten path` and `path-leaf`.
 
-Both INPX generators canonicalize language values at generation time by default.
-Raw merged dataset JSONL remains unchanged. Database language has priority over
-FB2 language, except ignored placeholder values are treated as absent so FB2 can
-be used as a fallback. Resolved output is the base language subtag, so values such
-as `RU`, `en-US`, and `sr-Latn` become `ru`, `en`, and `sr`. Explicit aliases
-handle known noisy values such as `sp -> es`, `gr -> el`, and `un -> und`.
+Build an archive-backed filtered/split INPX from the same merged dataset JSONL:
 
-The shared resolver is configured under `inpx.language`:
+```sh
+metabib inpx --input all --output ru --where '{{eq .Lang "ru"}}'
+```
+
+`inpx` is archive-only. It rejects database-only datasets because its output uses
+explicit `FOLDER` and `INSNO` fields to point at source archive entries. When
+archive metadata is present, archive-less records are skipped. Filtered records
+are omitted entirely, and no dummy records are emitted.
+
+Filtering happens after INPX normalization. Templates see final output fields,
+including canonicalized language values such as `ru`, not raw source values such
+as `RU` or `russian`. Canonicalization only normalizes existing language values;
+it does not infer language when both database and FB2 language claims are absent.
+Use `{{ne .Lang ""}}` to exclude missing-language records, or `{{default
+"unknown" .Lang}}` to route them into an explicit split bucket.
+
+Available `inpx` arguments:
+
+- `--input PREFIX`, `-i PREFIX`: required input prefix, discovered the same way
+  as `mhl-inpx`.
+- `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date is
+  appended automatically, so `--output flibusta` writes a file named like
+  `flibusta_20260603.inpx`.
+- `--where TEMPLATE`: keep rows when the Go template renders `true`, `1`, `yes`,
+  or `on`; drop rows when it renders empty output, `false`, `0`, `no`, or `off`.
+- `--where-file FILE`: load the filter template from a file. Mutually exclusive
+  with `--where`.
+- `--split-by TEMPLATE`: write accepted books to `<key>.inp` entries using a Go
+  template. Without this flag, all accepted rows go to `books.inp`.
+- `--split-by-file FILE`: load the split template from a file. Mutually exclusive
+  with `--split-by`.
+- `--prefer-fb2 MODE`, `--sequence MODE`, and `--fb2-flatten MODE`: same
+  sequence-source and FB2 flattening semantics as `flib-inpx`.
+- `--additional`: write FLibrary-compatible additional artifacts for accepted
+  books only.
+
+Filter and split templates use Go `text/template` with slim-sprig functions plus
+`oneOf`, `containsValue`, and `rangeName` helpers:
+
+```sh
+metabib inpx --input all --output by-lang --split-by '{{.Lang}}'
+metabib inpx --input all --output ru-sf --where '{{and (eq .Lang "ru") (containsValue .Genres "sf_history")}}'
+metabib inpx --input all --output by-lang-state --split-by '{{if .Deleted}}deleted-{{default "unknown" .Lang}}{{else}}{{default "unknown" .Lang}}{{end}}'
+metabib inpx --input all --output by-libid --split-by '{{rangeName .LibID 10000 "other"}}'
+metabib inpx --input all --output chunks --split-by '{{rangeName .AcceptedBook 10000 "other"}}'
+```
+
+Available filter and split template fields:
+
+- `.InputRecord`: 1-based ordinal of the streamed dataset record. Available to
+  `--where` and `--split-by`.
+- `.AcceptedBook`: 1-based ordinal of the accepted book. It is set for
+  `--split-by` and is `0` while `--where` is evaluated.
+- `.AcceptedRow`: 1-based ordinal of the accepted output row. It is set for
+  `--split-by` and is `0` while `--where` is evaluated.
+- `.BookRow`: 1-based ordinal of the current sequence row within the book.
+- `.Author`: rendered INPX `AUTHOR` field.
+- `.Genre`: rendered INPX `GENRE` field, with colon-separated genre codes.
+- `.Title`: rendered INPX `TITLE` field.
+- `.Series`: rendered INPX `SERIES` field for the current row.
+- `.SerNo`: rendered INPX `SERNO` field for the current row.
+- `.File`: rendered INPX `FILE` field.
+- `.Size`: rendered INPX `SIZE` field.
+- `.LibID`: rendered INPX `LIBID` field.
+- `.Deleted`: boolean deletion state derived from the INPX `DEL` source value.
+- `.Ext`: rendered INPX `EXT` field.
+- `.Date`: rendered INPX `DATE` field.
+- `.InsNo`: integer source archive entry position written to INPX `INSNO`.
+- `.Folder`: rendered INPX `FOLDER` field.
+- `.Lang`: rendered canonical INPX `LANG` field.
+- `.LibRate`: rendered INPX `LIBRATE` field.
+- `.Keywords`: rendered INPX `KEYWORDS` field.
+- `.Year`: rendered INPX `YEAR` field.
+- `.Authors`: selected structured authors for the book.
+- `.Genres`: selected genre codes as a string slice.
+- `.Sequences`: selected sequences for the book; each item has `.Name`,
+  `.Number`, and `.Source`.
+- `.HasDatabase`: true when the record has database observation.
+- `.HasFB2`: true when the record has FB2 observation.
+- `.ArchiveID`: dataset archive source ID.
+- `.ArchiveName`: source archive file name.
+
+Each `.Authors` item has `.FirstName`, `.MiddleName`, `.LastName`, `.NickName`,
+and `.ID`. `.ID` is the `flibusta.person` identity when present.
+
+`rangeName VALUE SIZE FALLBACK` returns zero-padded inclusive range names.
+Pass any positive numeric value, such as `.AcceptedBook` or `.LibID`. Invalid,
+empty, or non-positive values return `FALLBACK`; invalid bucket sizes fail the
+run.
+
+Examples:
+
+- `{{rangeName .AcceptedBook 10000 "other"}}`: split by accepted-book ordinal.
+- `{{rangeName .LibID 10000 "other"}}`: split by numeric `LIBID` range.
+- `.LibID = "103995"` with size `10000` becomes
+  `0000100001-0000110000.inp`.
+
+`--split-by` does not sort rows. Splitting by `.Lang` is safe because language is
+single-valued. Splitting by genres or other multi-valued fields is lossy unless
+the template explicitly chooses one value, such as `{{index .Genres 0}}`. One
+book is never split across multiple `.inp` entries; if it writes multiple
+sequence rows, all accepted rows for that book go to the split key from the first
+accepted row.
+
+Because templates are flexible, every run logs loaded, written, filtered,
+skipped, and per-split counts so accidental lossy filters are visible without
+debug logging.
+
+Shared INPX settings live under the `inpx` section of the YAML configuration.
+Some fields are used by every INPX generator, while MHL-specific options such as
+`quick_fix` and `limits` also live there for historical compatibility.
 
 ```yaml
 inpx:
+  disambiguate_authors: true
+  comment_template: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}"
+  version_template: "{{ .DumpDate }}\r\n"
   language:
     canonicalize: true
     aliases:
@@ -631,6 +715,26 @@ inpx:
         when_any_source_language:
           - xal
 ```
+
+`comment_template` and `version_template` are Go `text/template` values rendered
+when `collection.info` and `version.info` are written. Available values are
+`.DatabaseName`, `.DumpDate`, and `.DisplayDate`; slim-sprig template functions
+are available. Keep the leading `\ufeff` BOM when the target reader expects a BOM
+at the start of `collection.info`.
+
+INPX generators apply database author disambiguation when
+`inpx.disambiguate_authors` is enabled. Database cache manifest creation records
+DB authors whose cleansed, non-truncated `LastName,FirstName,MiddleName` value
+collides with a different database contributor ID. INPX generation uses that
+metadata to append a stable suffix to the exported last-name field for both
+Flibusta and Librusec datasets. FB2-only authors are not changed.
+
+INPX generators canonicalize language values at generation time by default.
+Raw merged dataset JSONL remains unchanged. Database language has priority over
+FB2 language, except ignored placeholder values are treated as absent so FB2 can
+be used as a fallback. Resolved output is the base language subtag, so values such
+as `RU`, `en-US`, and `sr-Latn` become `ru`, `en`, and `sr`. Explicit aliases
+handle known noisy values such as `sp -> es`, `gr -> el`, and `un -> und`.
 
 `aliases` are matched case-insensitively after whitespace collapse. Full-value
 aliases are checked before comma splitting, so phrase aliases containing commas

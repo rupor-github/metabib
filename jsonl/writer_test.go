@@ -118,7 +118,7 @@ func TestWritersUseUniqueStagingPaths(t *testing.T) {
 	if first.stagedParts[0].stagePath == second.stagedParts[0].stagePath {
 		t.Fatalf("staging paths collided: %q", first.stagedParts[0].stagePath)
 	}
-	if matches := globOutput(t, filepath.Dir(base), "out.jsonl-*.tmp"); len(matches) != 2 {
+	if matches := globOutput(t, filepath.Dir(base), ".out.jsonl-*.tmp"); len(matches) != 2 {
 		t.Fatalf("staging matches = %#v, want 2", matches)
 	}
 	if err := first.Abort(); err != nil {
