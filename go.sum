@@ -336,8 +336,8 @@ gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntN
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
-honnef.co/go/tools v0.8.0 h1:UacpzPr7D6i5BAjTkA7sNVcx4kIbhAZcQ4zYtKiXx68=
-honnef.co/go/tools v0.8.0/go.mod h1:XA+OnlRA9EDh/ukGvXMNSZNKGwFQJ+5dER0ioUkOxks=
+honnef.co/go/tools v0.8.1 h1:+JKf3xJ1ni4CwrhVg4/pqsfPGP6vNAXcKbMXJodYx3w=
+honnef.co/go/tools v0.8.1/go.mod h1:XA+OnlRA9EDh/ukGvXMNSZNKGwFQJ+5dER0ioUkOxks=
 mvdan.cc/sh/moreinterp v0.0.0-20260817215856-d6550df7ed8d h1:VxKlXmio7XEU6iZ8AgMjDfm071ceDmbjpRnEcgxAqn0=
 mvdan.cc/sh/moreinterp v0.0.0-20260817215856-d6550df7ed8d/go.mod h1:SR7UOjTQQhhrUu6d6lNtjAmdqmlMqr0lR/UWTxY8wJM=
 mvdan.cc/sh/v3 v3.13.2-0.20260817215856-d6550df7ed8d h1:LlqUgrIy872/RmROjVtmRg3oK4RvvqZZr5SfqHSg7Ko=
