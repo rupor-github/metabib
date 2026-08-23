@@ -78,7 +78,7 @@ func (r *Repository) BookIDs(ctx context.Context) ([]int64, error) {
 	if r.currentFormat() == FormatLibrusecCurrent {
 		idColumn = "bid"
 	}
-	query := fmt.Sprintf("SELECT %s FROM libbook WHERE FileType = 'fb2' ORDER BY %s", idColumn, idColumn)
+	query := fmt.Sprintf("SELECT %s FROM libbook ORDER BY %s", idColumn, idColumn)
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query book ids: %w", err)

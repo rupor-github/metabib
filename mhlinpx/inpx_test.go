@@ -195,6 +195,169 @@ func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
 	}
 }
 
+func TestGenerateSkipsDummyOnlyArchive(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      0,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     "fb2-0000000001-0000000003.zip",
+			PathHint: filepath.Join(dir, "fb2-0000000001-0000000003.zip"),
+			Entries:  3,
+		}},
+	})
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "flibusta"),
+		Format:          Format2X,
+		SequenceMode:    SequenceAuthor,
+		FB2Preference:   PreferComplement,
+		QuickFix:        true,
+		Limits:          DefaultLimits(),
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Archives != 0 || stats.Files != 0 || stats.Records != 0 || stats.Dummy != 0 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries, _ := readZipEntries(t, stats.OutputPath)
+	for name := range entries {
+		if strings.HasSuffix(name, ".inp") {
+			t.Fatalf("unexpected dummy-only INP entry %q in %#v", name, entries)
+		}
+	}
+}
+
+func TestGenerateWritesLeadingDummiesBeforeRealRecord(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     "fb2-0000000001-0000000003.zip",
+			PathHint: filepath.Join(dir, "fb2-0000000001-0000000003.zip"),
+			Entries:  3,
+			Ignored:  []model.IndexRange{{Start: 1, End: 1}},
+		}},
+	}, mhlDatasetRecord("archive-0001", 2, "3.fb2", 3))
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "flibusta"),
+		Format:          Format2X,
+		SequenceMode:    SequenceAuthor,
+		FB2Preference:   PreferComplement,
+		QuickFix:        true,
+		Limits:          DefaultLimits(),
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Archives != 1 || stats.Files != 2 || stats.Records != 1 || stats.Dummy != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries, _ := readZipEntries(t, stats.OutputPath)
+	inp := entries["fb2-0000000001-0000000003.inp"]
+	if !strings.Contains(inp, "dummy record") || !strings.Contains(inp, "Last,First,") {
+		t.Fatalf("inp = %q", inp)
+	}
+}
+
+func TestGenerateDefaultsToFB2Content(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "online")
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "librusec",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260713"},
+	}, mhlOnlineNonFB2Record(1, "Online PDF"))
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "librusec"),
+		Format:          Format2X,
+		SequenceMode:    SequenceAuthor,
+		FB2Preference:   PreferComplement,
+		QuickFix:        true,
+		Limits:          DefaultLimits(),
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Records != 0 || stats.Files != 0 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries, _ := readZipEntries(t, stats.OutputPath)
+	for name := range entries {
+		if strings.HasSuffix(name, ".inp") {
+			t.Fatalf("unexpected empty INP entry %q in %#v", name, entries)
+		}
+	}
+}
+
+func TestGenerateUSRContentIncludesNonFB2(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "online")
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "librusec",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260713"},
+	}, mhlOnlineNonFB2Record(1, "Online PDF"))
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "librusec"),
+		ContentMode:     inpxutil.ContentUSR,
+		Format:          Format2X,
+		SequenceMode:    SequenceAuthor,
+		FB2Preference:   PreferComplement,
+		QuickFix:        true,
+		Limits:          DefaultLimits(),
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Records != 1 || stats.Files != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries, _ := readZipEntries(t, stats.OutputPath)
+	if !strings.Contains(entries["online.inp"], "Online PDF") || !strings.Contains(entries["online.inp"], fieldSep+"pdf"+fieldSep) {
+		t.Fatalf("online.inp = %q", entries["online.inp"])
+	}
+}
+
 func TestInfoTemplates(t *testing.T) {
 	t.Parallel()
 
@@ -587,6 +750,14 @@ func mhlOnlineDatasetRecord(bookID int64, title string) model.DatasetRecord {
 			},
 		},
 	}
+}
+
+func mhlOnlineNonFB2Record(bookID int64, title string) model.DatasetRecord {
+	rec := mhlOnlineDatasetRecord(bookID, title)
+	bookIDText := strconv.FormatInt(bookID, 10)
+	rec.Artifacts[0].Name = bookIDText + ".pdf"
+	rec.Claims.Catalog.Status = []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "pdf"}}}
+	return rec
 }
 
 func readZipEntries(t *testing.T, path string) (map[string]string, string) {

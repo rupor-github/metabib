@@ -24,8 +24,13 @@ func TestInspectDatasetSummary(t *testing.T) {
 	for _, want := range []string{
 		"Dataset",
 		"records: 1",
+		"scoped db author ambiguity: true",
 		"ambiguous db author groups: 1",
 		"ambiguous db authors: 2",
+		"ambiguous db author groups fb2: 1",
+		"ambiguous db authors fb2: 2",
+		"ambiguous db author groups usr: 1",
+		"ambiguous db authors usr: 2",
 		"archives: 1",
 		"parse fb2: true",
 	} {
@@ -49,9 +54,13 @@ func TestInspectDatasetSummaryVerbose(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"ambiguous db author map",
+		"ambiguous db author map fb2",
+		"ambiguous db author map usr",
 		"Васильев,Сергей,Александрович",
 		"19026: Васильев, Сергей, Александрович (археолог)",
 		"77926: Васильев, Сергей, Александрович (поэт)",
+		"Коллектив авторов,,",
+		"1: Коллектив авторов, ,  ()",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("inspect verbose summary = %q, missing %q", text, want)
@@ -70,6 +79,66 @@ func TestInspectDatasetValidate(t *testing.T) {
 	text := out.String()
 	if !strings.Contains(text, "validation: ok") || !strings.Contains(text, "records read: 1") {
 		t.Fatalf("inspect validation = %q", text)
+	}
+}
+
+func TestInspectDatasetValidateCountsIssues(t *testing.T) {
+	t.Parallel()
+
+	prefix := writeInspectIssueDataset(t)
+	var out bytes.Buffer
+	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, Index: -1, Validate: true}, &out); err != nil {
+		t.Fatalf("inspectDataset(validate issues) error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"validation: ok",
+		"records read: 1",
+		"issue records: 1",
+		"issues: 1",
+		"nested_archive_inspection: 1",
+		"nested_archive_invalid: 1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspect validation issues = %q, missing %q", text, want)
+		}
+	}
+}
+
+func TestInspectDatasetListsIssues(t *testing.T) {
+	t.Parallel()
+
+	prefix := writeInspectIssueDataset(t)
+	var out bytes.Buffer
+	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, Index: -1, Issues: true}, &out); err != nil {
+		t.Fatalf("inspectDataset(issues) error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"Issue Records",
+		"record 1: archive_entry archive-0001 index=1",
+		"artifacts: 42.fb2",
+		"nested_archive_inspection/nested_archive_invalid path=42.zip: zip: not a valid zip file",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspect issues = %q, missing %q", text, want)
+		}
+	}
+}
+
+func TestInspectDatasetListsIssuesAsJSON(t *testing.T) {
+	t.Parallel()
+
+	prefix := writeInspectIssueDataset(t)
+	var out bytes.Buffer
+	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, Index: -1, Issues: true, JSON: true}, &out); err != nil {
+		t.Fatalf("inspectDataset(issues json) error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{`"issue_records":1`, `"nested_archive_inspection":1`, `"nested_archive_invalid":1`, `"records":[`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspect issues JSON = %q, missing %q", text, want)
+		}
 	}
 }
 
@@ -192,19 +261,46 @@ func TestInspectDatasetNoMatch(t *testing.T) {
 
 func writeInspectDataset(t *testing.T) string {
 	t.Helper()
+	return writeInspectDatasetRecords(t, inspectTestDataset(), []model.DatasetRecord{inspectTestRecord()})
+}
+
+func writeInspectIssueDataset(t *testing.T) string {
+	t.Helper()
+	dataset := inspectTestDataset()
+	record := inspectTestRecord()
+	record.Issues = []model.Issue{{
+		Observation: "archive",
+		Stage:       "nested_archive_inspection",
+		Code:        "nested_archive_invalid",
+		Path:        "42.zip",
+		Message:     "zip: not a valid zip file",
+		Details: map[string]any{
+			"declared_format": "zip",
+			"detected_format": "zip",
+			"behavior":        "emit_opaque_record",
+		},
+		Retryable: false,
+	}}
+	return writeInspectDatasetRecords(t, dataset, []model.DatasetRecord{record})
+}
+
+func writeInspectDatasetRecords(t *testing.T, dataset model.Dataset, records []model.DatasetRecord) string {
+	t.Helper()
 	dir := t.TempDir()
 	prefix := filepath.Join(dir, "combined")
 	w, err := jsonl.CreateCompressed(prefix, jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
 	}
-	if err := w.WriteValue(inspectTestDataset()); err != nil {
+	if err := w.WriteValue(dataset); err != nil {
 		_ = w.Abort()
 		t.Fatalf("WriteValue(dataset) error = %v", err)
 	}
-	if err := w.WriteValue(inspectTestRecord()); err != nil {
-		_ = w.Abort()
-		t.Fatalf("WriteValue(record) error = %v", err)
+	for _, record := range records {
+		if err := w.WriteValue(record); err != nil {
+			_ = w.Abort()
+			t.Fatalf("WriteValue(record) error = %v", err)
+		}
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -224,13 +320,7 @@ func inspectTestDataset() model.Dataset {
 		Database: &model.DatasetDatabase{
 			ID:       "database",
 			DumpDate: "20260715",
-			INPX: &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
-				Key: "Васильев,Сергей,Александрович",
-				Authors: []model.INPXAmbiguousDBAuthor{
-					{ID: "19026", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"},
-					{ID: "77926", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"},
-				},
-			}}},
+			INPX:     inspectTestINPXMetadata(),
 		},
 		Archives: []model.DatasetArchive{{
 			ID:         "archive-0001",
@@ -245,6 +335,29 @@ func inspectTestDataset() model.Dataset {
 			FB2Coverage:            "description",
 			ArchiveContentChecksum: model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
 		},
+	}
+}
+
+func inspectTestINPXMetadata() *model.INPXMetadata {
+	vasiliev := []model.INPXAmbiguousDBAuthorGroup{{
+		Key: "Васильев,Сергей,Александрович",
+		Authors: []model.INPXAmbiguousDBAuthor{
+			{ID: "19026", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"},
+			{ID: "77926", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"},
+		},
+	}}
+	collective := []model.INPXAmbiguousDBAuthorGroup{{
+		Key: "Коллектив авторов,,",
+		Authors: []model.INPXAmbiguousDBAuthor{
+			{ID: "1", LastName: "Коллектив авторов"},
+			{ID: "337155", LastName: "Коллектив авторов", NickName: "Неизвестный"},
+		},
+	}}
+	return &model.INPXMetadata{
+		ScopedDBAuthorAmbiguity: true,
+		AmbiguousDBAuthors:      vasiliev,
+		AmbiguousDBAuthorsFB2:   vasiliev,
+		AmbiguousDBAuthorsUSR:   collective,
 	}
 }
 

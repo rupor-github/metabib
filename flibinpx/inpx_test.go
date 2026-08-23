@@ -105,6 +105,98 @@ func TestGenerateFLibraryINPX(t *testing.T) {
 	}
 }
 
+func TestGenerateFLibraryINPXIncludesNonFB2SidecarRecord(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "f.usr-0000000042-0000000042.zip")
+	prefix := filepath.Join(dir, "all")
+	index := 0
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     filepath.Base(archivePath),
+			PathHint: archivePath,
+			Entries:  1,
+		}},
+	}, flibNonFB2SidecarRecordWithDBFileType(index, "fb2"))
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "flibusta"),
+		ContentMode:     inpxutil.ContentAll,
+		SequenceMode:    SequenceAll,
+		FB2Preference:   PreferComplement,
+		FlattenMode:     FlattenAll,
+		DedupMode:       DedupCaseInsensitive,
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Files != 1 || stats.Records != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries := readZipEntries(t, stats.OutputPath)
+	lines := strings.Split(strings.TrimSuffix(entries["f.usr-0000000042-0000000042.inp"], "\r\n"), "\r\n")
+	if len(lines) != 1 {
+		t.Fatalf("line count = %d inp=%q", len(lines), entries["f.usr-0000000042-0000000042.inp"])
+	}
+	fields := strings.Split(lines[0], inpxutil.FieldSep)
+	if len(fields) != 17 {
+		t.Fatalf("field count = %d fields=%#v", len(fields), fields)
+	}
+	if fields[2] != "Sidecar PDF" || fields[5] != "42" || fields[9] != "pdf" || fields[11] != "ru" {
+		t.Fatalf("fields = %#v", fields)
+	}
+}
+
+func TestGenerateFLibraryINPXDefaultsToFB2Content(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "f.usr-0000000042-0000000042.zip")
+	prefix := filepath.Join(dir, "all")
+	index := 0
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives:     []model.DatasetArchive{{ID: "archive-0001", Name: filepath.Base(archivePath), PathHint: archivePath, Entries: 1}},
+	}, flibNonFB2SidecarRecordWithDBFileType(index, "fb2"))
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:     prefix,
+		OutputPrefix:    filepath.Join(dir, "flibusta"),
+		SequenceMode:    SequenceAll,
+		FB2Preference:   PreferComplement,
+		FlattenMode:     FlattenAll,
+		DedupMode:       DedupCaseInsensitive,
+		CommentTemplate: "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Records != 0 || stats.Files != 0 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries := readZipEntries(t, stats.OutputPath)
+	for name := range entries {
+		if strings.HasSuffix(name, ".inp") {
+			t.Fatalf("unexpected empty INP entry %q in %#v", name, entries)
+		}
+	}
+}
+
 func TestGenerateLogsEntryDiagnosticsSummary(t *testing.T) {
 	t.Parallel()
 
@@ -164,6 +256,55 @@ func TestGenerateLogsEntryDiagnosticsSummary(t *testing.T) {
 	if fields["disambiguated_author_books"] != int64(1) || fields["disambiguated_authors"] != int64(1) ||
 		fields["canonicalized_language_books"] != int64(1) {
 		t.Fatalf("entry log fields = %#v", fields)
+	}
+}
+
+func TestGenerateDisambiguatesAuthorsWithinSelectedContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	rec := flibRecord("archive-0001", 0, "1.fb2")
+	rec.Claims.Bibliographic.Authors = []model.Claim{{Observation: "db", Value: []model.PersonValue{{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "19026"}},
+		FirstName:  "Сергей",
+		MiddleName: "Александрович",
+		LastName:   "Васильев",
+		NickName:   "археолог",
+	}}}}
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database: &model.DatasetDatabase{
+			DumpDate: "20260603",
+			INPX: &model.INPXMetadata{
+				ScopedDBAuthorAmbiguity: true,
+				AmbiguousDBAuthors:      ambiguousAuthorMetadata().AmbiguousDBAuthors,
+			},
+		},
+		Archives: []model.DatasetArchive{{ID: "archive-0001", Name: "books.zip", PathHint: filepath.Join(dir, "books.zip"), Entries: 1}},
+	}, rec)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:         prefix,
+		OutputPrefix:        filepath.Join(dir, "flibusta"),
+		SequenceMode:        SequenceAll,
+		FB2Preference:       PreferComplement,
+		FlattenMode:         FlattenAll,
+		DedupMode:           DedupCaseInsensitive,
+		DisambiguateAuthors: true,
+		CommentTemplate:     "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:     "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	entries := readZipEntries(t, stats.OutputPath)
+	fields := strings.Split(strings.TrimSuffix(entries["books.inp"], inpxutil.FieldSep+"\r\n"), inpxutil.FieldSep)
+	if fields[0] != "Васильев,Сергей,Александрович:" {
+		t.Fatalf("authors = %q, want scoped FB2 author without all-scope suffix", fields[0])
 	}
 }
 
@@ -452,6 +593,51 @@ func TestGenerateFLibraryAdditionalAnnotations(t *testing.T) {
 	}
 }
 
+func TestGenerateFLibraryAdditionalUSRSidecarAnnotations(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	index := 0
+	rec := flibNonFB2SidecarRecord(index)
+	rec.Claims.Bibliographic.Annotation = []model.Claim{{Observation: "fbd", Value: "Sidecar annotation & notes"}}
+	writeFLibDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:      "archive-0001",
+			Name:    "usr.zip",
+			Entries: 1,
+		}},
+	}, rec)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:      prefix,
+		OutputPrefix:     filepath.Join(dir, "flibusta"),
+		ContentMode:      inpxutil.ContentUSR,
+		Additional:       true,
+		CommentTemplate:  "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:  "{{ .DumpDate }}\r\n",
+		SequenceMode:     SequenceAuthor,
+		FB2Preference:    PreferComplement,
+		FlattenMode:      FlattenAll,
+		DedupMode:        DedupCaseInsensitive,
+		FB2PathSeparator: " / ",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	entries := readZipEntries(t, stats.AdditionalOutputPath)
+	want := "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<folder name=\"usr.zip\">\n" +
+		"\t<file name=\"42.pdf\">\n\t\t<p>Sidecar annotation &amp; notes</p>\n\t</file>\n</folder>\n"
+	if entries["usr.zip"] != want {
+		t.Fatalf("annotation entry = %q", entries["usr.zip"])
+	}
+}
+
 func TestGenerateFLibraryAdditionalIgnoredForDatabaseOnly(t *testing.T) {
 	t.Parallel()
 
@@ -595,6 +781,43 @@ func flibRecord(source string, index int, entry string) model.DatasetRecord {
 			},
 		},
 	}
+}
+
+func flibNonFB2SidecarRecord(index int) model.DatasetRecord {
+	return model.DatasetRecord{
+		Schema: model.DatasetRecordSchemaV1,
+		Record: model.RecordDescriptor{
+			Library: "flibusta",
+			Locator: model.RecordLocator{Kind: "archive_entry", Source: "archive-0001", Index: &index},
+		},
+		Artifacts: []model.Artifact{{
+			Name:      "42.pdf",
+			MediaType: "application/pdf",
+			Occurrences: []model.Occurrence{{
+				Archive:          "archive-0001",
+				Entry:            "42.pdf",
+				Index:            index,
+				UncompressedSize: 456,
+				Modified:         "2026-06-03T00:00:00Z",
+			}},
+		}},
+		Observations: []model.Observation{{ID: "fbd", Source: "archive-0001", Kind: "fbd_description", Status: "present"}},
+		Claims: model.Claims{Bibliographic: &model.BibliographicClaims{
+			Title:    []model.Claim{{Observation: "fbd", Value: "Sidecar PDF"}},
+			Authors:  []model.Claim{{Observation: "fbd", Value: []model.PersonValue{{FirstName: "Pdf", LastName: "Author"}}}},
+			Genres:   []model.Claim{{Observation: "fbd", Value: []model.GenreValue{{Code: "ref"}}}},
+			Language: []model.Claim{{Observation: "fbd", Value: "ru"}},
+		}},
+	}
+}
+
+func flibNonFB2SidecarRecordWithDBFileType(index int, fileType string) model.DatasetRecord {
+	rec := flibNonFB2SidecarRecord(index)
+	rec.Observations = append(rec.Observations, model.Observation{ID: "db", Source: "database", Kind: "database_book", Status: "present"})
+	rec.Claims.Catalog = &model.CatalogClaims{
+		Status: []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: fileType}}},
+	}
+	return rec
 }
 
 func flibOnlineRecord(bookID int64) model.DatasetRecord {

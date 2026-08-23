@@ -213,11 +213,12 @@ func archiveMetadata(path string) (archiveLayout, error) {
 	}
 	var dummy []int
 	for idx, file := range zr.File {
-		if file.FileInfo().IsDir() || isBackup(file.Name) {
+		name := zipEntryName(file)
+		if file.FileInfo().IsDir() || isBackup(name) {
 			meta.Ignored = appendIndex(meta.Ignored, idx)
 			continue
 		}
-		if isFB2Entry(file.Name) {
+		if isFB2Entry(name) {
 			meta.FB2Entries++
 			continue
 		}

@@ -199,6 +199,54 @@ func TestLoadDatasetInputRejectsUnknownArchiveSource(t *testing.T) {
 	}
 }
 
+func TestRecordMatchesContentUsesNestedArchiveExtension(t *testing.T) {
+	t.Parallel()
+
+	index := 0
+	tests := []struct {
+		name    string
+		entry   string
+		mode    ContentMode
+		want    bool
+		wantExt string
+	}{
+		{name: "nested pdf excluded from fb2", entry: "1968.pdf.zip", mode: ContentFB2, wantExt: "pdf"},
+		{name: "nested pdf included in usr", entry: "1968.pdf.zip", mode: ContentUSR, want: true, wantExt: "pdf"},
+		{name: "nested fb2 included in fb2", entry: "1968.fb2.zip", mode: ContentFB2, want: true, wantExt: "fb2"},
+		{name: "nested fb2 excluded from usr", entry: "1968.fb2.zip", mode: ContentUSR, wantExt: "fb2"},
+		{name: "tar gz nested pdf", entry: "1968.pdf.tar.gz", mode: ContentUSR, want: true, wantExt: "pdf"},
+		{name: "logical artifact over physical container", entry: "logical.pdf", mode: ContentUSR, want: true, wantExt: "pdf"},
+		{name: "extensionless artifact uses occurrence container", entry: "opaque", mode: ContentUSR, want: true, wantExt: "zip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := testDatasetArchiveRecord("archive-0001", index, tt.entry)
+			rec.Artifacts[0].Occurrences = []model.Occurrence{{Archive: "archive-0001", Entry: tt.entry, Index: index}}
+			if tt.name == "logical artifact over physical container" {
+				rec.Artifacts[0].Occurrences[0].Entry = "logical.zip"
+			}
+			if tt.name == "extensionless artifact uses occurrence container" {
+				rec.Artifacts[0].Occurrences[0].Entry = "opaque.zip"
+			}
+			rec.Claims.Catalog = &model.CatalogClaims{
+				Status: []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "fb2"}}},
+			}
+			got, err := RecordMatchesContent(tt.mode, rec)
+			if err != nil {
+				t.Fatalf("RecordMatchesContent() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("RecordMatchesContent() = %v, want %v", got, tt.want)
+			}
+			if ext := ArchiveRecordExtension(rec); ext != tt.wantExt {
+				t.Fatalf("ArchiveRecordExtension() = %q, want %q", ext, tt.wantExt)
+			}
+		})
+	}
+}
+
 func TestCleanse(t *testing.T) {
 	t.Parallel()
 
@@ -448,6 +496,63 @@ func TestDBAuthorAmbiguityCollectorFallsBackToID(t *testing.T) {
 		LastName:   "Last",
 	}); got != "Last [#2]" {
 		t.Fatalf("LastName() = %q, want ID suffix", got)
+	}
+}
+
+func TestMetadataForContentSelectsScopedGroups(t *testing.T) {
+	t.Parallel()
+
+	metadata := &model.INPXMetadata{
+		ScopedDBAuthorAmbiguity: true,
+		AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+			Key:     "all",
+			Authors: []model.INPXAmbiguousDBAuthor{{ID: "1"}, {ID: "2"}},
+		}},
+		AmbiguousDBAuthorsFB2: []model.INPXAmbiguousDBAuthorGroup{{
+			Key:     "fb2",
+			Authors: []model.INPXAmbiguousDBAuthor{{ID: "3"}, {ID: "4"}},
+		}},
+		AmbiguousDBAuthorsUSR: []model.INPXAmbiguousDBAuthorGroup{{
+			Key:     "usr",
+			Authors: []model.INPXAmbiguousDBAuthor{{ID: "5"}, {ID: "6"}},
+		}},
+	}
+
+	if got := MetadataForContent(metadata, ContentFB2).AmbiguousDBAuthors[0].Key; got != "fb2" {
+		t.Fatalf("FB2 metadata key = %q", got)
+	}
+	if got := MetadataForContent(metadata, ContentUSR).AmbiguousDBAuthors[0].Key; got != "usr" {
+		t.Fatalf("USR metadata key = %q", got)
+	}
+	if got := MetadataForContent(metadata, ContentAll).AmbiguousDBAuthors[0].Key; got != "all" {
+		t.Fatalf("all metadata key = %q", got)
+	}
+}
+
+func TestMetadataForContentKeepsEmptyScopedGroupsEmpty(t *testing.T) {
+	t.Parallel()
+
+	metadata := &model.INPXMetadata{
+		ScopedDBAuthorAmbiguity: true,
+		AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+			Key:     "all",
+			Authors: []model.INPXAmbiguousDBAuthor{{ID: "1"}, {ID: "2"}},
+		}},
+	}
+	if got := MetadataForContent(metadata, ContentFB2); got != nil {
+		t.Fatalf("FB2 metadata = %#v, want nil", got)
+	}
+}
+
+func TestMetadataForContentFallsBackToLegacyGroups(t *testing.T) {
+	t.Parallel()
+
+	metadata := &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+		Key:     "legacy",
+		Authors: []model.INPXAmbiguousDBAuthor{{ID: "1"}, {ID: "2"}},
+	}}}
+	if got := MetadataForContent(metadata, ContentFB2).AmbiguousDBAuthors[0].Key; got != "legacy" {
+		t.Fatalf("legacy metadata key = %q", got)
 	}
 }
 

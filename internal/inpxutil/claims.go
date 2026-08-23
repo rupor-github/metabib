@@ -21,6 +21,7 @@ type DatasetRecordView struct {
 	Artifact            DatasetArtifactView
 	HasDatabase         bool
 	HasFB2              bool
+	HasSidecar          bool
 }
 
 func DatasetBookID(rec model.DatasetRecord) string {
@@ -85,6 +86,7 @@ func DatasetRecordClaims(rec model.DatasetRecord) (DatasetRecordView, error) {
 	view := DatasetRecordView{
 		HasDatabase: hasObservation(rec.Observations, "db"),
 		HasFB2:      hasObservation(rec.Observations, "fb2"),
+		HasSidecar:  hasObservation(rec.Observations, "fbd"),
 	}
 	if rec.Claims.Bibliographic != nil {
 		var err error
@@ -96,12 +98,24 @@ func DatasetRecordClaims(rec model.DatasetRecord) (DatasetRecordView, error) {
 		if err != nil {
 			return DatasetRecordView{}, err
 		}
+		if isEmptyBibliographicView(view.FB2) {
+			view.FB2, err = bibliographicView(*rec.Claims.Bibliographic, "fbd")
+			if err != nil {
+				return DatasetRecordView{}, err
+			}
+		}
 	}
 	if rec.Claims.Original != nil {
 		var err error
 		view.Original, err = bibliographicView(*rec.Claims.Original, "fb2")
 		if err != nil {
 			return DatasetRecordView{}, err
+		}
+		if isEmptyBibliographicView(view.Original) {
+			view.Original, err = bibliographicView(*rec.Claims.Original, "fbd")
+			if err != nil {
+				return DatasetRecordView{}, err
+			}
 		}
 	}
 	if rec.Claims.Publication != nil {
@@ -114,6 +128,12 @@ func DatasetRecordClaims(rec model.DatasetRecord) (DatasetRecordView, error) {
 		if err != nil {
 			return DatasetRecordView{}, err
 		}
+		if isEmptyPublicationView(view.FB2Publication) {
+			view.FB2Publication, err = publicationView(*rec.Claims.Publication, "fbd")
+			if err != nil {
+				return DatasetRecordView{}, err
+			}
+		}
 	}
 	if rec.Claims.Catalog != nil {
 		var err error
@@ -124,6 +144,15 @@ func DatasetRecordClaims(rec model.DatasetRecord) (DatasetRecordView, error) {
 	}
 	view.Artifact = artifactView(rec.Artifacts)
 	return view, nil
+}
+
+func isEmptyBibliographicView(view DatasetBibliographicView) bool {
+	return view.Title == "" && len(view.Authors) == 0 && len(view.Translators) == 0 && len(view.Genres) == 0 &&
+		len(view.Sequences) == 0 && view.Language == "" && view.SourceLanguage == "" && view.Keywords == ""
+}
+
+func isEmptyPublicationView(view DatasetPublicationView) bool {
+	return view.BookName == "" && view.Publisher == "" && view.City == "" && view.Year == "" && view.ISBN == "" && len(view.Sequences) == 0
 }
 
 func bibliographicView(claims model.BibliographicClaims, observation string) (DatasetBibliographicView, error) {

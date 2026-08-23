@@ -1,8 +1,10 @@
 package fb2
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -12,6 +14,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/net/html/charset"
+	unicodeenc "golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 
 	"metabib/model"
 )
@@ -58,10 +62,82 @@ func ParseWithOptions(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
 	return parseWithBodyFingerprints(r, opts)
 }
 
-func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
+func newXMLDecoder(r io.Reader) (*xml.Decoder, error) {
+	r, unicodeBOM, err := bomAwareReader(r)
+	if err != nil {
+		return nil, err
+	}
 	dec := xml.NewDecoder(r)
-	dec.CharsetReader = charset.NewReaderLabel
+	dec.CharsetReader = func(label string, input io.Reader) (io.Reader, error) {
+		if unicodeBOM {
+			return input, nil
+		}
+		return charset.NewReaderLabel(label, input)
+	}
 	dec.Strict = false
+	return dec, nil
+}
+
+func bomAwareReader(r io.Reader) (io.Reader, bool, error) {
+	buf := make([]byte, 4)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, false, fmt.Errorf("read XML BOM: %w", err)
+	}
+	restored := io.MultiReader(bytes.NewReader(buf[:n]), r)
+	switch {
+	case bytes.HasPrefix(buf[:n], []byte{0x00, 0x00, 0xFE, 0xFF}):
+		return transform.NewReader(
+			io.MultiReader(bytes.NewReader(buf[4:n]), r),
+			utf32Decoder{order: binary.BigEndian},
+		), true, nil
+	case bytes.HasPrefix(buf[:n], []byte{0xFF, 0xFE, 0x00, 0x00}):
+		return transform.NewReader(
+			io.MultiReader(bytes.NewReader(buf[4:n]), r),
+			utf32Decoder{order: binary.LittleEndian},
+		), true, nil
+	case bytes.HasPrefix(buf[:n], []byte{0xEF, 0xBB, 0xBF}):
+		return transform.NewReader(restored, unicodeenc.BOMOverride(unicodeenc.UTF8.NewDecoder())), false, nil
+	case bytes.HasPrefix(buf[:n], []byte{0xFE, 0xFF}):
+		return transform.NewReader(restored, unicodeenc.UTF16(unicodeenc.BigEndian, unicodeenc.ExpectBOM).NewDecoder()), true, nil
+	case bytes.HasPrefix(buf[:n], []byte{0xFF, 0xFE}):
+		return transform.NewReader(restored, unicodeenc.UTF16(unicodeenc.LittleEndian, unicodeenc.ExpectBOM).NewDecoder()), true, nil
+	default:
+		return restored, false, nil
+	}
+}
+
+type utf32Decoder struct {
+	order binary.ByteOrder
+}
+
+func (d utf32Decoder) Reset() {}
+
+func (d utf32Decoder) Transform(dst []byte, src []byte, atEOF bool) (int, int, error) {
+	var nDst, nSrc int
+	for len(src)-nSrc >= 4 {
+		r := rune(d.order.Uint32(src[nSrc : nSrc+4]))
+		if !utf8.ValidRune(r) {
+			r = utf8.RuneError
+		}
+		width := utf8.RuneLen(r)
+		if len(dst)-nDst < width {
+			return nDst, nSrc, transform.ErrShortDst
+		}
+		nDst += utf8.EncodeRune(dst[nDst:], r)
+		nSrc += 4
+	}
+	if nSrc < len(src) && !atEOF {
+		return nDst, nSrc, transform.ErrShortSrc
+	}
+	return nDst, nSrc, nil
+}
+
+func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
+	dec, err := newXMLDecoder(r)
+	if err != nil {
+		return model.FB2Source{}, err
+	}
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -88,9 +164,10 @@ func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, 
 }
 
 func parseWithBodyFingerprints(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
-	dec := xml.NewDecoder(r)
-	dec.CharsetReader = charset.NewReaderLabel
-	dec.Strict = false
+	dec, err := newXMLDecoder(r)
+	if err != nil {
+		return model.FB2Source{}, err
+	}
 	state := &parseState{}
 	fingerprints := newBodyFingerprintBuilder()
 	var description *model.FB2Description

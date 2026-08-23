@@ -1,12 +1,19 @@
 package library
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bufio"
+	"bytes"
+	"compress/bzip2"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
+	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,7 +21,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
+	"github.com/bodgit/sevenzip"
+	"github.com/klauspost/compress/zstd"
+	rardecode "github.com/nwaples/rardecode/v2"
+	"github.com/ulikunitz/xz"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -30,6 +42,11 @@ const recordSchema = "metabib.record/1"
 
 const progressInterval = 3000
 
+const (
+	nestedInspectionStage    = "nested_archive_inspection"
+	nestedInspectionBehavior = "emit_opaque_record"
+)
+
 func resultWindow(workers int) int {
 	return max(workers*2, 1)
 }
@@ -40,26 +57,45 @@ type dbBatch struct {
 }
 
 type dbBatchResult struct {
-	Index                 int
-	Records               []model.Record
-	ReadyAt               time.Time
-	DBLoadElapsed         time.Duration
-	FB2ParseElapsed       time.Duration
-	MD5Elapsed            time.Duration
-	FallbackLookupElapsed time.Duration
+	Index                   int
+	Records                 []model.Record
+	ReadyAt                 time.Time
+	DBLoadElapsed           time.Duration
+	FB2ParseElapsed         time.Duration
+	MD5Elapsed              time.Duration
+	NestedInspectionElapsed time.Duration
+	FallbackLookupElapsed   time.Duration
+	IgnoredUSRFB2Entries    int
+	IgnoredFB2NonFB2Entries int
 }
 
 type entryTiming struct {
-	FB2ParseElapsed       time.Duration
-	MD5Elapsed            time.Duration
-	FallbackLookupElapsed time.Duration
+	FB2ParseElapsed         time.Duration
+	MD5Elapsed              time.Duration
+	NestedInspectionElapsed time.Duration
+	FallbackLookupElapsed   time.Duration
+	IgnoredUSRFB2Entries    int
+	IgnoredFB2NonFB2Entries int
+}
+
+type archiveEntryStats struct {
+	IgnoredUSRFB2Entries    int
+	IgnoredFB2NonFB2Entries int
 }
 
 type archiveEntry struct {
-	Index  int
-	File   *zip.File
-	BookID int64
-	Ext    string
+	Index                    int
+	File                     *zip.File
+	Name                     string
+	BookID                   int64
+	FileName                 string
+	Ext                      string
+	ContainerExt             string
+	NestedVolumeContinuation bool
+	NestedVolumeFormat       string
+	NestedVolumeEntries      []string
+	NestedVolumeIndexes      []int
+	Sidecars                 []*zip.File
 }
 
 type archiveRepository interface {
@@ -146,10 +182,20 @@ func BuildArchiveManifests(ctx context.Context, cfg *config.Config, log *zap.Log
 	return nil
 }
 
-func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Config, out *jsonl.Writer, log *zap.Logger, verbose bool, manifest DatabaseManifestDecision) error {
+func ProcessDatabase(
+	ctx context.Context,
+	repo *db.Repository,
+	cfg *config.Config,
+	out *jsonl.Writer,
+	log *zap.Logger,
+	verbose bool,
+	manifest DatabaseManifestDecision,
+) error {
 	start := time.Now()
 	var manifestOut *manifestWriter
-	var authorCollector *inpxutil.DBAuthorAmbiguityCollector
+	var allAuthorCollector *inpxutil.DBAuthorAmbiguityCollector
+	var fb2AuthorCollector *inpxutil.DBAuthorAmbiguityCollector
+	var usrAuthorCollector *inpxutil.DBAuthorAmbiguityCollector
 	if manifest.Create {
 		format, err := repo.DetectFormat(ctx)
 		if err != nil {
@@ -167,7 +213,9 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		if err != nil {
 			return err
 		}
-		authorCollector = inpxutil.NewDBAuthorAmbiguityCollector()
+		allAuthorCollector = inpxutil.NewDBAuthorAmbiguityCollector()
+		fb2AuthorCollector = inpxutil.NewDBAuthorAmbiguityCollector()
+		usrAuthorCollector = inpxutil.NewDBAuthorAmbiguityCollector()
 		defer manifestOut.Abort()
 		if verbose && log != nil {
 			log.Info("Database manifest creation started", zap.String("manifest", manifest.ManifestPath))
@@ -178,7 +226,7 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		return err
 	}
 	if log != nil {
-		log.Info("Database FB2 book list prepared", zap.Int("books", len(ids)), zap.Duration("elapsed", time.Since(start)))
+		log.Info("Database book list prepared", zap.Int("books", len(ids)), zap.Duration("elapsed", time.Since(start)))
 	}
 	workers := max(cfg.Processing.DatabaseWorkers, 1)
 	if workers > len(ids) && len(ids) > 0 {
@@ -314,9 +362,14 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 				}
 			}
 			if manifestOut != nil {
-				if authorCollector != nil {
+				if allAuthorCollector != nil {
 					for _, author := range rec.Source.Database.Authors {
-						authorCollector.AddContributor(author)
+						allAuthorCollector.AddContributor(author)
+						if strings.EqualFold(rec.Source.Database.Book.FileType, "fb2") {
+							fb2AuthorCollector.AddContributor(author)
+						} else {
+							usrAuthorCollector.AddContributor(author)
+						}
 					}
 				}
 				if err := manifestOut.Write(rec); err != nil {
@@ -385,8 +438,8 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 	}
 	if manifestOut != nil {
 		manifestStart := time.Now()
-		if authorCollector != nil {
-			manifest.INPX = authorCollector.Metadata()
+		if allAuthorCollector != nil {
+			manifest.INPX = databaseINPXMetadata(allAuthorCollector, fb2AuthorCollector, usrAuthorCollector)
 		}
 		header := databaseManifestHeaderFor(cfg, manifest, processed)
 		if err := manifestOut.Close(header); err != nil {
@@ -405,7 +458,14 @@ func ProcessDatabase(ctx context.Context, repo *db.Repository, cfg *config.Confi
 		}
 	}
 	if log != nil {
-		log.Info("Database processed", zap.Int64("records", processed), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
+		log.Info(
+			"Database processed",
+			zap.Int64("records", processed),
+			zap.Duration("elapsed", time.Since(start)),
+			zap.Duration("db_load_elapsed", dbLoadElapsed),
+			zap.Duration("output_wait_elapsed", outputWaitElapsed),
+			zap.Duration("jsonl_write_elapsed", writeElapsed),
+		)
 	}
 	return nil
 }
@@ -425,6 +485,23 @@ func dumpManifestSourcesFromImportProvenance(dumps []db.ImportDumpProvenance) []
 	return sources
 }
 
+func databaseINPXMetadata(
+	all *inpxutil.DBAuthorAmbiguityCollector,
+	fb2 *inpxutil.DBAuthorAmbiguityCollector,
+	usr *inpxutil.DBAuthorAmbiguityCollector,
+) *model.INPXMetadata {
+	metadata := &model.INPXMetadata{
+		ScopedDBAuthorAmbiguity: true,
+		AmbiguousDBAuthors:      all.Groups(),
+		AmbiguousDBAuthorsFB2:   fb2.Groups(),
+		AmbiguousDBAuthorsUSR:   usr.Groups(),
+	}
+	if len(metadata.AmbiguousDBAuthors) == 0 && len(metadata.AmbiguousDBAuthorsFB2) == 0 && len(metadata.AmbiguousDBAuthorsUSR) == 0 {
+		return nil
+	}
+	return metadata
+}
+
 func processArchive(
 	ctx context.Context,
 	repo *db.Repository,
@@ -436,6 +513,14 @@ func processArchive(
 ) (int64, error) {
 	start := time.Now()
 	path := decision.ArchivePath
+	archiveMD5Elapsed := decision.ArchiveMD5Elapsed
+	if decision.Scope == "" {
+		scope, err := classifyArchiveScope(path, log, verbose)
+		if err != nil {
+			return 0, err
+		}
+		decision.Scope = scope
+	}
 	var manifestOut *manifestWriter
 	if decision.Create {
 		var err error
@@ -450,11 +535,12 @@ func processArchive(
 		if decision.ArchiveMD5 == "" {
 			md5Start := time.Now()
 			decision.ArchiveMD5, err = fileMD5(ctx, path)
+			archiveMD5Elapsed = time.Since(md5Start)
 			if err != nil {
 				return 0, err
 			}
 			if verbose && log != nil {
-				log.Info("Archive checksum calculated", zap.String("archive", path), zap.Duration("elapsed", time.Since(md5Start)))
+				log.Info("Archive checksum calculated", zap.String("archive", path), zap.Duration("elapsed", archiveMD5Elapsed))
 			}
 		}
 	}
@@ -466,16 +552,9 @@ func processArchive(
 	openElapsed := time.Since(start)
 
 	entryListStart := time.Now()
-	entries := make([]archiveEntry, 0, len(zr.File))
-	for idx, file := range zr.File {
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		if file.FileInfo().IsDir() || isBackup(file.Name) || !isFB2Entry(file.Name) {
-			continue
-		}
-		bookID, ext := entryIdentity(file.Name)
-		entries = append(entries, archiveEntry{Index: idx, File: file, BookID: bookID, Ext: ext})
+	entries, entryStats, err := archiveEntries(ctx, path, zr.File, decision.Scope, log, verbose)
+	if err != nil {
+		return 0, err
 	}
 	entryListElapsed := time.Since(entryListStart)
 	workers := max(cfg.Processing.ArchiveWorkers, 1)
@@ -523,7 +602,7 @@ func processArchive(
 				case <-workerCtx.Done():
 					return workerCtx.Err()
 				}
-				records, timing, err := processArchiveBatch(workerCtx, archiveRepo, cfg, path, batch.Entries)
+				records, timing, err := processArchiveBatch(workerCtx, archiveRepo, cfg, path, batch.Entries, log)
 				if err != nil {
 					return err
 				}
@@ -597,14 +676,19 @@ func processArchive(
 
 	nextBatch := 0
 	pending := make(map[int]dbBatchResult)
-	var dbLoadElapsed, fb2ParseElapsed, md5Elapsed, fallbackLookupElapsed, outputWaitElapsed, writeElapsed time.Duration
+	var dbLoadElapsed, fb2ParseElapsed, md5Elapsed, nestedInspectionElapsed, fallbackLookupElapsed, outputWaitElapsed, writeElapsed time.Duration
+	ignoredUSRFB2Entries := entryStats.IgnoredUSRFB2Entries
+	ignoredFB2NonFB2Entries := entryStats.IgnoredFB2NonFB2Entries
 	progressStart := time.Now()
 	writeBatch := func(batch dbBatchResult) error {
 		outputWaitElapsed += time.Since(batch.ReadyAt)
 		dbLoadElapsed += batch.DBLoadElapsed
 		fb2ParseElapsed += batch.FB2ParseElapsed
 		md5Elapsed += batch.MD5Elapsed
+		nestedInspectionElapsed += batch.NestedInspectionElapsed
 		fallbackLookupElapsed += batch.FallbackLookupElapsed
+		ignoredUSRFB2Entries += batch.IgnoredUSRFB2Entries
+		ignoredFB2NonFB2Entries += batch.IgnoredFB2NonFB2Entries
 		for _, rec := range batch.Records {
 			if err := processCtx.Err(); err != nil {
 				return err
@@ -698,18 +782,49 @@ func processArchive(
 				zap.String("archive", path),
 				zap.String("manifest", decision.ManifestPath),
 				zap.Int64("records", records),
+				zap.Int("usr_fb2_entries_ignored", ignoredUSRFB2Entries),
+				zap.Int("fb2_non_fb2_entries_ignored", ignoredFB2NonFB2Entries),
 				zap.Duration("elapsed", time.Since(start)),
+				zap.Duration("archive_md5_elapsed", archiveMD5Elapsed),
+				zap.Duration("nested_inspection_elapsed", nestedInspectionElapsed),
 				zap.Duration("manifest_write_elapsed", manifestWriteElapsed),
 			)
 		}
 	}
 	if verbose && log != nil {
-		log.Info("Archive processed", zap.String("archive", path), zap.Int64("records", records), zap.Int("entries", len(zr.File)), zap.Duration("elapsed", time.Since(start)), zap.Duration("db_load_elapsed", dbLoadElapsed), zap.Duration("fb2_parse_elapsed", fb2ParseElapsed), zap.Duration("md5_elapsed", md5Elapsed), zap.Duration("fallback_lookup_elapsed", fallbackLookupElapsed), zap.Duration("output_wait_elapsed", outputWaitElapsed), zap.Duration("jsonl_write_elapsed", writeElapsed))
+		log.Info(
+			"Archive processed",
+			zap.String("archive", path),
+			zap.Int64("records", records),
+			zap.Int("entries", len(zr.File)),
+			zap.Int("usr_fb2_entries_ignored", ignoredUSRFB2Entries),
+			zap.Int("fb2_non_fb2_entries_ignored", ignoredFB2NonFB2Entries),
+			zap.Duration("elapsed", time.Since(start)),
+			zap.Duration("archive_md5_elapsed", archiveMD5Elapsed),
+			zap.Duration("db_load_elapsed", dbLoadElapsed),
+			zap.Duration("fb2_parse_elapsed", fb2ParseElapsed),
+			zap.Duration("md5_elapsed", md5Elapsed),
+			zap.Duration("nested_inspection_elapsed", nestedInspectionElapsed),
+			zap.Duration("fallback_lookup_elapsed", fallbackLookupElapsed),
+			zap.Duration("output_wait_elapsed", outputWaitElapsed),
+			zap.Duration("jsonl_write_elapsed", writeElapsed),
+		)
 	}
 	return records, nil
 }
 
-func processArchiveBatch(ctx context.Context, repo archiveRepository, cfg *config.Config, archive string, entries []archiveEntry) ([]model.Record, dbBatchResult, error) {
+func processArchiveBatch(
+	ctx context.Context,
+	repo archiveRepository,
+	cfg *config.Config,
+	archive string,
+	entries []archiveEntry,
+	logs ...*zap.Logger,
+) ([]model.Record, dbBatchResult, error) {
+	var log *zap.Logger
+	if len(logs) > 0 {
+		log = logs[0]
+	}
 	var timing dbBatchResult
 	if err := ctx.Err(); err != nil {
 		return nil, timing, err
@@ -735,32 +850,52 @@ func processArchiveBatch(ctx context.Context, repo archiveRepository, cfg *confi
 		if err := ctx.Err(); err != nil {
 			return nil, timing, err
 		}
-		rec, et, err := processEntryWithSource(ctx, repo, cfg, archive, entry.File, entry.Index, entry.BookID, entry.Ext, sources[entry.BookID])
+		rec, et, keep, err := processEntryWithSource(ctx, repo, cfg, archive, entry, sources[entry.BookID], log)
 		if err != nil {
 			return nil, timing, err
 		}
 		timing.FB2ParseElapsed += et.FB2ParseElapsed
 		timing.MD5Elapsed += et.MD5Elapsed
+		timing.NestedInspectionElapsed += et.NestedInspectionElapsed
 		timing.FallbackLookupElapsed += et.FallbackLookupElapsed
+		timing.IgnoredUSRFB2Entries += et.IgnoredUSRFB2Entries
+		timing.IgnoredFB2NonFB2Entries += et.IgnoredFB2NonFB2Entries
+		if !keep {
+			continue
+		}
 		records = append(records, rec)
 	}
 	return records, timing, nil
 }
 
-func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *config.Config, archive string, file *zip.File, index int, bookID int64, ext string, dbSource model.DatabaseSource) (rec model.Record, timing entryTiming, err error) {
+func processEntryWithSource(
+	ctx context.Context,
+	repo archiveRepository,
+	cfg *config.Config,
+	archive string,
+	entry archiveEntry,
+	dbSource model.DatabaseSource,
+	log *zap.Logger,
+) (rec model.Record, timing entryTiming, keep bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return model.Record{}, timing, err
+		return model.Record{}, timing, false, err
 	}
+	file := entry.File
+	bookID := entry.BookID
+	ext := entry.Ext
+	index := entry.Index
+	entryName := archiveEntryName(entry)
 	rec = model.Record{
 		Schema: recordSchema,
 		ID: model.RecordID{
-			Library:   cfg.Database.Name,
-			BookID:    bookID,
-			FileName:  strings.TrimSuffix(filepath.Base(file.Name), filepath.Ext(file.Name)),
-			Extension: ext,
+			Library:            cfg.Database.Name,
+			BookID:             bookID,
+			FileName:           validUTF8(entry.FileName),
+			Extension:          validUTF8(ext),
+			ContainerExtension: validUTF8(entry.ContainerExt),
 			Archive: &model.ArchiveInfo{
 				Path:             archive,
-				Entry:            file.Name,
+				Entry:            entryName,
 				Index:            index,
 				CompressedSize:   file.CompressedSize64,
 				UncompressedSize: file.UncompressedSize64,
@@ -768,13 +903,135 @@ func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *co
 			},
 		},
 	}
+	if entry.ContainerExt != "" && cfg.Processing.NestedArchiveInspection.Enabled {
+		maxCompressedBytes := cfg.Processing.NestedArchiveInspection.MaxCompressedBytes()
+		if maxCompressedBytes > 0 && int64(file.CompressedSize64) > maxCompressedBytes {
+			rec.Issues = append(rec.Issues, nestedArchiveInspectionIssue(
+				entryName,
+				"nested_archive_over_cap",
+				"nested archive inspection skipped because entry is over size cap",
+				entry.ContainerExt,
+				entry.ContainerExt,
+				map[string]any{
+					"compressed_size": file.CompressedSize64,
+					"cap_mib":         cfg.Processing.NestedArchiveInspection.MaxCompressedSizeMiB,
+					"cap_bytes":       maxCompressedBytes,
+				},
+			))
+			if log != nil {
+				log.Warn(
+					"Nested archive inspection skipped because entry is over size cap",
+					zap.String("archive", archive),
+					zap.String("entry", entryName),
+					zap.Int("index", index),
+					zap.Uint64("compressed_size", file.CompressedSize64),
+					zap.Int64("cap_mib", cfg.Processing.NestedArchiveInspection.MaxCompressedSizeMiB),
+					zap.Int64("cap_bytes", maxCompressedBytes),
+					zap.String("behavior", "emit_opaque_record"),
+				)
+			}
+		} else {
+			inspectStart := time.Now()
+			sidecar, inferredExt, nestedFormat, inspectedContentMD5, inspectErr := inspectNestedArchiveSidecar(
+				ctx,
+				cfg,
+				file,
+				entry.ContainerExt,
+				cfg.Processing.ArchiveContentMD5,
+			)
+			timing.NestedInspectionElapsed += time.Since(inspectStart)
+			if inspectedContentMD5 != "" {
+				rec.ID.Archive.ContentMD5 = inspectedContentMD5
+			}
+			if nestedFormat == "" {
+				nestedFormat = entry.ContainerExt
+			}
+			if inspectErr != nil {
+				issueCode := nestedArchiveInspectionErrorCode(
+					inspectErr,
+					entry.NestedVolumeContinuation,
+					len(entry.NestedVolumeEntries) > 0,
+				)
+				var issueDetails map[string]any
+				if issueCode == "nested_archive_multivolume" {
+					issueDetails = map[string]any{
+						"multivolume":   true,
+						"volume_format": entry.NestedVolumeFormat,
+					}
+					if entry.NestedVolumeContinuation {
+						issueDetails["volume_continuation"] = true
+					}
+					if len(entry.NestedVolumeEntries) > 0 {
+						issueDetails["volume_count"] = len(entry.NestedVolumeEntries) + 1
+						issueDetails["volume_entries"] = append([]string{entryName}, entry.NestedVolumeEntries...)
+						issueDetails["volume_indexes"] = append([]int{index}, entry.NestedVolumeIndexes...)
+					}
+				}
+				rec.Issues = append(rec.Issues, nestedArchiveInspectionIssue(
+					entryName,
+					issueCode,
+					inspectErr.Error(),
+					entry.ContainerExt,
+					nestedFormat,
+					issueDetails,
+				))
+				if log != nil {
+					fields := []zap.Field{
+						zap.String("archive", archive),
+						zap.String("entry", entryName),
+						zap.Int("index", index),
+						zap.String("nested_format", nestedFormat),
+						zap.Error(inspectErr),
+						zap.String("behavior", "emit_opaque_record"),
+					}
+					if issueCode == "nested_archive_multivolume" {
+						log.Debug("Nested multi-volume RAR inspection skipped", fields...)
+					} else {
+						log.Warn("Nested archive inspection failed", fields...)
+					}
+				}
+			} else {
+				if strings.EqualFold(inferredExt, "fb2") {
+					timing.IgnoredUSRFB2Entries++
+					if log != nil {
+						log.Warn(
+							"FB2 archive entry ignored in USR scope",
+							zap.String("archive", archive),
+							zap.String("entry", entryName),
+							zap.Int("index", index),
+							zap.String("extension", "fb2"),
+							zap.String("container_extension", entry.ContainerExt),
+							zap.Bool("nested_inspected", true),
+							zap.String("behavior", "ignore"),
+						)
+					}
+					return model.Record{}, timing, false, nil
+				}
+				if rec.ID.Extension == "" && inferredExt != "" {
+					rec.ID.Extension = validUTF8(inferredExt)
+				}
+				if sidecar != nil {
+					rec.Source.Sidecars = append(rec.Source.Sidecars, *sidecar)
+					if len(entry.Sidecars) > 0 && log != nil {
+						log.Warn(
+							"Outer FBD sidecar ignored because nested FBD sidecar wins",
+							zap.String("archive", archive),
+							zap.String("entry", entryName),
+							zap.Int("index", index),
+							zap.String("sidecar_entry", zipEntryName(entry.Sidecars[0])),
+						)
+					}
+				}
+			}
+		}
+	}
 	rec.Source.Database = dbSource
-	if shouldLookupArchiveFilename(repo, rec.Source.Database, rec.ID.BookID, ext) {
+	if shouldLookupArchiveFilename(repo, rec.Source.Database, rec.ID.BookID, rec.ID.Extension) {
 		lookupStart := time.Now()
-		id, err := repo.BookIDByFilename(ctx, filepath.Base(file.Name))
+		id, err := repo.BookIDByFilename(ctx, filepath.Base(entryName))
 		timing.FallbackLookupElapsed += time.Since(lookupStart)
 		if err != nil {
-			return rec, timing, err
+			return rec, timing, false, err
 		}
 		if id > 0 {
 			rec.ID.BookID = id
@@ -782,9 +1039,18 @@ func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *co
 			dbSource, err := repo.BookByID(ctx, id)
 			timing.FallbackLookupElapsed += time.Since(lookupStart)
 			if err != nil {
-				return rec, timing, err
+				return rec, timing, false, err
 			}
 			rec.Source.Database = dbSource
+		}
+	}
+	if len(rec.Source.Sidecars) == 0 {
+		for _, sidecar := range entry.Sidecars {
+			parsed, elapsed, ok := parseFBDSidecar(ctx, cfg, sidecar, archive, entryName, index, log)
+			timing.FB2ParseElapsed += elapsed
+			if ok {
+				rec.Source.Sidecars = append(rec.Source.Sidecars, parsed)
+			}
 		}
 	}
 	if cfg.Processing.ParseFB2 && strings.EqualFold(ext, "fb2") {
@@ -824,7 +1090,7 @@ func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *co
 				rec.Source.FB2 = fb2Source
 			}
 		}
-	} else if cfg.Processing.ArchiveContentMD5 {
+	} else if cfg.Processing.ArchiveContentMD5 && rec.ID.Archive.ContentMD5 == "" {
 		md5Start := time.Now()
 		md5sum, err := archiveEntryMD5(ctx, file, cfg.Processing.ArchiveReadBuffer)
 		timing.MD5Elapsed += time.Since(md5Start)
@@ -834,7 +1100,7 @@ func processEntryWithSource(ctx context.Context, repo archiveRepository, cfg *co
 			rec.ID.Archive.ContentMD5 = md5sum
 		}
 	}
-	return rec, timing, nil
+	return rec, timing, true, nil
 }
 
 func shouldLookupArchiveFilename(repo archiveRepository, dbSource model.DatabaseSource, bookID int64, ext string) bool {
@@ -895,6 +1161,777 @@ func (r *fb2LimitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+func archiveEntries(
+	ctx context.Context,
+	archive string,
+	files []*zip.File,
+	scope string,
+	log *zap.Logger,
+	verbose bool,
+) ([]archiveEntry, archiveEntryStats, error) {
+	stats := archiveEntryStats{}
+	entries := make([]archiveEntry, 0, len(files))
+	entryByPairKey := make(map[string]int, len(files))
+	sidecars := make(map[string][]*zip.File)
+	for idx, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, stats, err
+		}
+		name := zipEntryName(file)
+		if file.FileInfo().IsDir() || isIgnoredArchiveEntry(name) {
+			continue
+		}
+		if isFBDEntry(name) {
+			if scope != archiveScopeUSR {
+				if log != nil {
+					log.Warn(
+						"FBD sidecar ignored outside USR scope",
+						zap.String("archive", archive),
+						zap.String("entry", name),
+						zap.Int("index", idx),
+						zap.String("scope", scope),
+						zap.String("behavior", "ignore"),
+					)
+				}
+				continue
+			}
+			sidecars[filePairKey(name)] = append(sidecars[filePairKey(name)], file)
+			continue
+		}
+		if scope == archiveScopeFB2 && !isFB2Entry(name) {
+			stats.IgnoredFB2NonFB2Entries++
+			if log != nil {
+				log.Warn(
+					"Non-FB2 archive entry ignored in FB2 scope",
+					zap.String("archive", archive),
+					zap.String("entry", name),
+					zap.Int("index", idx),
+					zap.String("extension", strings.TrimPrefix(filepath.Ext(name), ".")),
+					zap.String("scope", scope),
+					zap.String("behavior", "ignore"),
+				)
+			}
+			continue
+		}
+		if scope == archiveScopeUSR && isUSRFB2Entry(name) {
+			stats.IgnoredUSRFB2Entries++
+			if log != nil {
+				log.Warn(
+					"FB2 archive entry ignored in USR scope",
+					zap.String("archive", archive),
+					zap.String("entry", name),
+					zap.Int("index", idx),
+					zap.String("extension", "fb2"),
+					zap.String("scope", scope),
+					zap.String("behavior", "ignore"),
+				)
+			}
+			continue
+		}
+		bookID, fileName, ext, containerExt := entryIdentityParts(name)
+		entries = append(entries, archiveEntry{
+			Index:        idx,
+			File:         file,
+			Name:         name,
+			BookID:       bookID,
+			FileName:     fileName,
+			Ext:          ext,
+			ContainerExt: containerExt,
+		})
+		entryByPairKey[filePairKey(name)] = len(entries) - 1
+		if verbose && log != nil {
+			log.Debug(
+				"Archive entry classified",
+				zap.String("archive", archive),
+				zap.String("entry", name),
+				zap.Int("index", idx),
+				zap.String("extension", ext),
+				zap.String("container_extension", containerExt),
+				zap.String("scope", scope),
+			)
+		}
+	}
+	if scope != archiveScopeUSR {
+		entries = coalesceNestedVolumes(entries, archive, log)
+		return entries, stats, nil
+	}
+	for key, matchedSidecars := range sidecars {
+		entryIndex, ok := entryByPairKey[key]
+		if !ok {
+			if log != nil {
+				for _, sidecar := range matchedSidecars {
+					log.Warn(
+						"Unpaired FBD sidecar ignored",
+						zap.String("archive", archive),
+						zap.String("sidecar_entry", zipEntryName(sidecar)),
+						zap.String("behavior", "ignore"),
+					)
+				}
+			}
+			continue
+		}
+		if len(matchedSidecars) > 1 {
+			if log != nil {
+				log.Warn(
+					"Multiple FBD sidecars ignored",
+					zap.String("archive", archive),
+					zap.String("entry", archiveEntryName(entries[entryIndex])),
+					zap.Int("sidecars", len(matchedSidecars)),
+					zap.String("behavior", "ignore"),
+				)
+			}
+			continue
+		}
+		entries[entryIndex].Sidecars = matchedSidecars
+		if log != nil {
+			log.Debug(
+				"FBD sidecar paired",
+				zap.String("archive", archive),
+				zap.String("entry", archiveEntryName(entries[entryIndex])),
+				zap.String("sidecar_entry", zipEntryName(matchedSidecars[0])),
+			)
+		}
+	}
+	entries = coalesceNestedVolumes(entries, archive, log)
+	return entries, stats, nil
+}
+
+func parseFBDSidecar(
+	ctx context.Context,
+	cfg *config.Config,
+	sidecar *zip.File,
+	archive string,
+	bookEntry string,
+	bookIndex int,
+	log *zap.Logger,
+) (model.SidecarSource, time.Duration, bool) {
+	if err := ctx.Err(); err != nil {
+		return model.SidecarSource{}, 0, false
+	}
+	r, err := sidecar.Open()
+	if err != nil {
+		logFBDParseWarning(log, archive, bookEntry, bookIndex, zipEntryName(sidecar), err)
+		return model.SidecarSource{}, 0, false
+	}
+	defer r.Close()
+	return parseFBDReader(ctx, cfg, r, zipEntryName(sidecar), archive, bookEntry, bookIndex, log)
+}
+
+func parseFBDReader(
+	ctx context.Context,
+	cfg *config.Config,
+	r io.Reader,
+	sidecarEntry string,
+	archive string,
+	bookEntry string,
+	bookIndex int,
+	log *zap.Logger,
+) (model.SidecarSource, time.Duration, bool) {
+	reader := bufferedContextReader(ctx, &fb2LimitReader{reader: r, remaining: fb2.MaxDecompressedBytes}, cfg.Processing.ArchiveReadBuffer)
+	start := time.Now()
+	source, err := fb2.ParseWithOptions(reader, fb2.ParseOptions{
+		PreserveDescription: cfg.Processing.FB2DescriptionTree,
+		BodyFingerprints:    false,
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		logFBDParseWarning(log, archive, bookEntry, bookIndex, sidecarEntry, err)
+		return model.SidecarSource{}, elapsed, false
+	}
+	return model.SidecarSource{
+		Present:     true,
+		Kind:        "fbd",
+		Format:      "fictionbook-description",
+		Entry:       sidecarEntry,
+		Description: source.Description,
+	}, elapsed, true
+}
+
+func logFBDParseWarning(log *zap.Logger, archive string, bookEntry string, bookIndex int, sidecarEntry string, err error) {
+	if log == nil {
+		return
+	}
+	log.Warn(
+		"FBD sidecar parse failed",
+		zap.String("archive", archive),
+		zap.String("entry", bookEntry),
+		zap.Int("index", bookIndex),
+		zap.String("sidecar_entry", sidecarEntry),
+		zap.Error(err),
+		zap.String("behavior", "ignore_sidecar"),
+	)
+}
+
+func inspectNestedArchiveSidecar(
+	ctx context.Context,
+	cfg *config.Config,
+	file *zip.File,
+	containerExt string,
+	hashContent bool,
+) (*model.SidecarSource, string, string, string, error) {
+	r, err := file.Open()
+	if err != nil {
+		return nil, "", "", "", fmt.Errorf("open nested archive entry: %w", err)
+	}
+	defer r.Close()
+	var reader io.Reader = &contextReader{ctx: ctx, reader: r}
+	var hash hashWriter
+	if hashContent {
+		hash = md5.New()
+		reader = io.TeeReader(reader, hash)
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, "", "", "", fmt.Errorf("read nested archive entry: %w", err)
+	}
+	contentMD5 := ""
+	if hashContent {
+		contentMD5 = hex.EncodeToString(hash.Sum(nil))
+	}
+	entryName := zipEntryName(file)
+	format := strings.ToLower(containerExt)
+	if detected := detectNestedArchiveFormat(data); detected != "" && detected != format {
+		format = detected
+	}
+	switch format {
+	case "zip":
+		sidecar, inferredExt, err := inspectNestedZipSidecar(ctx, cfg, entryName, data)
+		return sidecar, inferredExt, format, contentMD5, err
+	case "rar":
+		sidecar, inferredExt, err := inspectNestedRARSidecar(ctx, cfg, entryName, data)
+		return sidecar, inferredExt, format, contentMD5, err
+	case "7z":
+		sidecar, inferredExt, err := inspectNestedSevenZipSidecar(ctx, cfg, entryName, data)
+		return sidecar, inferredExt, format, contentMD5, err
+	case "tar", "tar.gz", "tgz", "tar.bz2", "tbz", "tbz2", "tar.xz", "txz", "tar.zst", "tzst":
+		sidecar, inferredExt, err := inspectNestedTarSidecar(ctx, cfg, entryName, format, data)
+		return sidecar, inferredExt, format, contentMD5, err
+	default:
+		return nil, "", format, contentMD5, fmt.Errorf("unsupported nested archive format %q", format)
+	}
+}
+
+func nestedArchiveInspectionIssue(
+	path string,
+	code string,
+	message string,
+	declaredFormat string,
+	detectedFormat string,
+	details map[string]any,
+) model.Issue {
+	issueDetails := map[string]any{
+		"declared_format": validUTF8(declaredFormat),
+		"detected_format": validUTF8(detectedFormat),
+		"behavior":        nestedInspectionBehavior,
+	}
+	for key, value := range details {
+		issueDetails[key] = value
+	}
+	return model.Issue{
+		Observation: "archive",
+		Stage:       nestedInspectionStage,
+		Code:        code,
+		Path:        validUTF8(path),
+		Message:     validUTF8(message),
+		Details:     issueDetails,
+		Retryable:   false,
+	}
+}
+
+func nestedArchiveInspectionErrorCode(err error, likelyNestedVolumeContinuation bool, hasNestedVolumeGroup bool) string {
+	if hasNestedVolumeGroup || likelyNestedVolumeContinuation && errors.Is(err, rardecode.ErrInvalidFileBlock) {
+		return "nested_archive_multivolume"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "multi-volume"):
+		return "nested_archive_invalid"
+	case strings.Contains(msg, "encrypted") || strings.Contains(msg, "password"):
+		return "nested_archive_encrypted"
+	case strings.Contains(msg, "unsupported"):
+		return "nested_archive_unsupported"
+	case strings.Contains(msg, "not a valid") || strings.Contains(msg, "signature not found"):
+		return "nested_archive_invalid"
+	default:
+		return "nested_archive_inspection_failed"
+	}
+}
+
+type nestedVolumeNumberedEntry struct {
+	format string
+	index  int
+	number int
+	digits int
+}
+
+func coalesceNestedVolumes(entries []archiveEntry, archive string, log *zap.Logger) []archiveEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+	nameIndexes := make(map[string]int, len(entries))
+	nameSet := make(map[string]bool, len(entries))
+	numbered := make(map[string][]nestedVolumeNumberedEntry)
+	for i, entry := range entries {
+		if !strings.EqualFold(entry.ContainerExt, "rar") && !strings.EqualFold(entry.ContainerExt, "7z") {
+			continue
+		}
+		entryName := archiveEntryName(entry)
+		name := normalizedArchiveName(entryName)
+		nameIndexes[name] = i
+		nameSet[name] = true
+		group, number, digits, format, ok := nestedVolumeNumber(entryName)
+		if ok {
+			numbered[group] = append(
+				numbered[group],
+				nestedVolumeNumberedEntry{format: format, index: i, number: number, digits: digits},
+			)
+		}
+	}
+	skipped := make([]bool, len(entries))
+	for i, entry := range entries {
+		rootName, ok := nestedRARVolumeRootName(archiveEntryName(entry), nameSet)
+		if !ok {
+			continue
+		}
+		root, ok := nameIndexes[rootName]
+		if ok {
+			addNestedVolumeContinuation(entries, skipped, root, i, "rar", archive, log)
+		}
+	}
+	for _, groupEntries := range numbered {
+		if len(groupEntries) < 2 {
+			continue
+		}
+		sort.Slice(groupEntries, func(i, j int) bool {
+			if groupEntries[i].number == groupEntries[j].number {
+				return groupEntries[i].digits < groupEntries[j].digits
+			}
+			return groupEntries[i].number < groupEntries[j].number
+		})
+		if groupEntries[0].number > 1 || !consecutiveRARVolumeNumbers(groupEntries) {
+			continue
+		}
+		root := groupEntries[0].index
+		for _, entry := range groupEntries[1:] {
+			addNestedVolumeContinuation(entries, skipped, root, entry.index, entry.format, archive, log)
+		}
+	}
+	out := entries[:0]
+	for i := range entries {
+		if skipped[i] {
+			continue
+		}
+		out = append(out, entries[i])
+	}
+	return out
+}
+
+func addNestedVolumeContinuation(
+	entries []archiveEntry,
+	skipped []bool,
+	root int,
+	continuation int,
+	format string,
+	archive string,
+	log *zap.Logger,
+) {
+	if root == continuation || skipped[continuation] {
+		return
+	}
+	skipped[continuation] = true
+	entries[continuation].NestedVolumeContinuation = true
+	entries[continuation].NestedVolumeFormat = format
+	entries[root].NestedVolumeFormat = format
+	entries[root].NestedVolumeEntries = append(
+		entries[root].NestedVolumeEntries,
+		archiveEntryName(entries[continuation]),
+	)
+	entries[root].NestedVolumeIndexes = append(entries[root].NestedVolumeIndexes, entries[continuation].Index)
+	if log != nil {
+		log.Debug(
+			"Nested archive volume continuation skipped",
+			zap.String("archive", archive),
+			zap.String("entry", archiveEntryName(entries[continuation])),
+			zap.Int("index", entries[continuation].Index),
+			zap.String("volume_format", format),
+			zap.String("root_entry", archiveEntryName(entries[root])),
+			zap.Int("root_index", entries[root].Index),
+			zap.String("behavior", "emit_root_opaque_record"),
+		)
+	}
+}
+
+func consecutiveRARVolumeNumbers(entries []nestedVolumeNumberedEntry) bool {
+	for i := 1; i < len(entries); i++ {
+		if entries[i].number != entries[i-1].number+1 {
+			return false
+		}
+	}
+	return true
+}
+
+func likelyRARVolumeContinuation(name string, names map[string]bool) bool {
+	dir, base := archiveNameDirBase(normalizedArchiveName(name))
+	if !strings.HasSuffix(base, ".rar") {
+		return false
+	}
+	stem := strings.TrimSuffix(base, ".rar")
+	prefix, digits, suffix, ok := splitRARVolumeNumberToken(stem)
+	if !ok || prefix == "" {
+		return false
+	}
+	if names[dir+prefix+suffix+".rar"] {
+		return true
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n <= 0 {
+		return false
+	}
+	previous := fmt.Sprintf("%s%s%0*d%s.rar", dir, prefix, len(digits), n-1, suffix)
+	return names[previous]
+}
+
+func nestedRARVolumeRootName(name string, names map[string]bool) (string, bool) {
+	dir, base := archiveNameDirBase(normalizedArchiveName(name))
+	if !strings.HasSuffix(base, ".rar") {
+		return "", false
+	}
+	stem := strings.TrimSuffix(base, ".rar")
+	prefix, _, suffix, ok := splitRARVolumeNumberToken(stem)
+	if !ok || prefix == "" {
+		return "", false
+	}
+	root := dir + prefix + suffix + ".rar"
+	if !names[root] {
+		return "", false
+	}
+	return root, true
+}
+
+func nestedVolumeNumber(name string) (string, int, int, string, bool) {
+	if group, number, digits, ok := nestedSevenZipVolumeNumber(name); ok {
+		return group, number, digits, "7z", true
+	}
+	group, number, digits, ok := nestedRARVolumeNumber(name)
+	if ok {
+		return group, number, digits, "rar", true
+	}
+	return "", 0, 0, "", false
+}
+
+func nestedRARVolumeNumber(name string) (string, int, int, bool) {
+	dir, base := archiveNameDirBase(normalizedArchiveName(name))
+	if !strings.HasSuffix(base, ".rar") {
+		return "", 0, 0, false
+	}
+	stem := strings.TrimSuffix(base, ".rar")
+	prefix, digits, suffix, ok := splitRARVolumeNumberToken(stem)
+	if !ok || prefix == "" {
+		return "", 0, 0, false
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return "", 0, 0, false
+	}
+	return dir + prefix + suffix, n, len(digits), true
+}
+
+func nestedSevenZipVolumeNumber(name string) (string, int, int, bool) {
+	dir, base := archiveNameDirBase(normalizedArchiveName(name))
+	stem, digits, ok := splitSevenZipVolumeName(base)
+	if !ok {
+		return "", 0, 0, false
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return "", 0, 0, false
+	}
+	return dir + stem, n, len(digits), true
+}
+
+func archiveNameDirBase(name string) (string, string) {
+	idx := strings.LastIndex(name, "/")
+	if idx < 0 {
+		return "", name
+	}
+	return name[:idx+1], name[idx+1:]
+}
+
+func normalizedArchiveName(name string) string {
+	return strings.ToLower(strings.ReplaceAll(name, "\\", "/"))
+}
+
+func splitRARVolumeNumberToken(value string) (string, string, string, bool) {
+	end := len(value)
+	digitEnd := end
+	for digitEnd > 0 && isRARVolumeNumberSuffix(value[digitEnd-1]) {
+		digitEnd--
+	}
+	digitStart := digitEnd
+	for digitStart > 0 && value[digitStart-1] >= '0' && value[digitStart-1] <= '9' {
+		digitStart--
+	}
+	if digitStart == digitEnd {
+		return "", "", "", false
+	}
+	return value[:digitStart], value[digitStart:digitEnd], value[digitEnd:end], true
+}
+
+func isRARVolumeNumberSuffix(b byte) bool {
+	return b == '_' || b == '-' || b == '.' || b == ' '
+}
+
+func splitSevenZipVolumeName(base string) (string, string, bool) {
+	lower := strings.ToLower(base)
+	dot := strings.LastIndex(lower, ".7z.")
+	if dot < 0 || dot+4 >= len(base) {
+		return "", "", false
+	}
+	digits := base[dot+4:]
+	for i := range len(digits) {
+		if digits[i] < '0' || digits[i] > '9' {
+			return "", "", false
+		}
+	}
+	return base[:dot], digits, true
+}
+
+func detectNestedArchiveFormat(data []byte) string {
+	if len(data) >= 4 {
+		sig := string(data[:4])
+		switch sig {
+		case "PK\x03\x04", "PK\x05\x06", "PK\x07\x08":
+			return "zip"
+		}
+	}
+	if len(data) >= 6 && bytes.Equal(data[:6], []byte{'7', 'z', 0xbc, 0xaf, 0x27, 0x1c}) {
+		return "7z"
+	}
+	if len(data) >= 7 && bytes.Equal(data[:7], []byte{'R', 'a', 'r', '!', 0x1a, 0x07, 0x00}) {
+		return "rar"
+	}
+	if len(data) >= 8 && bytes.Equal(data[:8], []byte{'R', 'a', 'r', '!', 0x1a, 0x07, 0x01, 0x00}) {
+		return "rar"
+	}
+	if len(data) >= 262 && string(data[257:262]) == "ustar" {
+		return "tar"
+	}
+	return ""
+}
+
+func inspectNestedZipSidecar(ctx context.Context, cfg *config.Config, entryName string, data []byte) (*model.SidecarSource, string, error) {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, "", fmt.Errorf("open nested zip: %w", err)
+	}
+	var sidecar *model.SidecarSource
+	fbdFiles := 0
+	inferredExt := ""
+	for _, nested := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return nil, inferredExt, err
+		}
+		name := zipEntryName(nested)
+		if nested.FileInfo().IsDir() || isIgnoredArchiveEntry(name) {
+			continue
+		}
+		if isFBDEntry(name) {
+			fbdFiles++
+			if fbdFiles == 1 {
+				r, err := nested.Open()
+				if err != nil {
+					return nil, inferredExt, fmt.Errorf("open nested FBD sidecar %q: %w", name, err)
+				}
+				parsed, _, ok := parseFBDReader(ctx, cfg, r, entryName, entryName, entryName, 0, nil)
+				closeErr := r.Close()
+				if closeErr != nil {
+					return nil, inferredExt, fmt.Errorf("close nested FBD sidecar %q: %w", name, closeErr)
+				}
+				if !ok {
+					return nil, inferredExt, fmt.Errorf("parse nested FBD sidecar %q failed", name)
+				}
+				sidecar = &parsed
+			}
+			continue
+		}
+		if inferredExt == "" {
+			_, _, ext, _ := entryIdentityParts(name)
+			inferredExt = ext
+		}
+	}
+	if fbdFiles == 0 {
+		return nil, inferredExt, nil
+	}
+	if fbdFiles > 1 {
+		return nil, inferredExt, fmt.Errorf("multiple nested FBD sidecars found")
+	}
+	return sidecar, inferredExt, nil
+}
+
+func inspectNestedSevenZipSidecar(ctx context.Context, cfg *config.Config, entryName string, data []byte) (*model.SidecarSource, string, error) {
+	zr, err := sevenzip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, "", fmt.Errorf("open nested 7z: %w", err)
+	}
+	var sidecar *model.SidecarSource
+	fbdFiles := 0
+	inferredExt := ""
+	for _, nested := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return nil, inferredExt, err
+		}
+		name := validUTF8(nested.Name)
+		if nested.FileInfo().IsDir() || isIgnoredArchiveEntry(name) {
+			continue
+		}
+		if isFBDEntry(name) {
+			fbdFiles++
+			if fbdFiles == 1 {
+				r, err := nested.Open()
+				if err != nil {
+					return nil, inferredExt, fmt.Errorf("open nested FBD sidecar %q: %w", name, err)
+				}
+				parsed, _, ok := parseFBDReader(ctx, cfg, r, entryName, entryName, entryName, 0, nil)
+				closeErr := r.Close()
+				if closeErr != nil {
+					return nil, inferredExt, fmt.Errorf("close nested FBD sidecar %q: %w", name, closeErr)
+				}
+				if !ok {
+					return nil, inferredExt, fmt.Errorf("parse nested FBD sidecar %q failed", name)
+				}
+				sidecar = &parsed
+			}
+			continue
+		}
+		if inferredExt == "" {
+			_, _, ext, _ := entryIdentityParts(name)
+			inferredExt = ext
+		}
+	}
+	if fbdFiles == 0 {
+		return nil, inferredExt, nil
+	}
+	if fbdFiles > 1 {
+		return nil, inferredExt, fmt.Errorf("multiple nested FBD sidecars found")
+	}
+	return sidecar, inferredExt, nil
+}
+
+func inspectNestedRARSidecar(ctx context.Context, cfg *config.Config, entryName string, data []byte) (*model.SidecarSource, string, error) {
+	rr, err := rardecode.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, "", fmt.Errorf("open nested rar: %w", err)
+	}
+	return inspectStreamingNestedArchive(ctx, cfg, entryName, func() (string, bool, io.Reader, error) {
+		header, err := rr.Next()
+		if err != nil {
+			return "", false, nil, err
+		}
+		return header.Name, header.IsDir, rr, nil
+	})
+}
+
+func inspectNestedTarSidecar(
+	ctx context.Context,
+	cfg *config.Config,
+	entryName string,
+	containerExt string,
+	data []byte,
+) (*model.SidecarSource, string, error) {
+	r, closeReader, err := nestedTarReader(containerExt, bytes.NewReader(data))
+	if err != nil {
+		return nil, "", err
+	}
+	if closeReader != nil {
+		defer closeReader()
+	}
+	tr := tar.NewReader(r)
+	return inspectStreamingNestedArchive(ctx, cfg, entryName, func() (string, bool, io.Reader, error) {
+		header, err := tr.Next()
+		if err != nil {
+			return "", false, nil, err
+		}
+		return header.Name, header.FileInfo().IsDir(), tr, nil
+	})
+}
+
+func inspectStreamingNestedArchive(
+	ctx context.Context,
+	cfg *config.Config,
+	entryName string,
+	next func() (string, bool, io.Reader, error),
+) (*model.SidecarSource, string, error) {
+	var sidecar *model.SidecarSource
+	fbdFiles := 0
+	inferredExt := ""
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, inferredExt, err
+		}
+		name, isDir, r, err := next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, inferredExt, err
+		}
+		if isDir || isIgnoredArchiveEntry(name) {
+			continue
+		}
+		if isFBDEntry(name) {
+			fbdFiles++
+			if fbdFiles == 1 {
+				parsed, _, ok := parseFBDReader(ctx, cfg, r, entryName, entryName, entryName, 0, nil)
+				if !ok {
+					return nil, inferredExt, fmt.Errorf("parse nested FBD sidecar %q failed", name)
+				}
+				sidecar = &parsed
+			}
+			continue
+		}
+		if inferredExt == "" {
+			_, _, ext, _ := entryIdentityParts(name)
+			inferredExt = ext
+		}
+	}
+	if fbdFiles == 0 {
+		return nil, inferredExt, nil
+	}
+	if fbdFiles > 1 {
+		return nil, inferredExt, fmt.Errorf("multiple nested FBD sidecars found")
+	}
+	return sidecar, inferredExt, nil
+}
+
+func nestedTarReader(containerExt string, r io.Reader) (io.Reader, func(), error) {
+	switch strings.ToLower(containerExt) {
+	case "tar":
+		return r, nil, nil
+	case "tar.gz", "tgz":
+		gr, err := gzip.NewReader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open nested tar gzip: %w", err)
+		}
+		return gr, func() { _ = gr.Close() }, nil
+	case "tar.bz2", "tbz", "tbz2":
+		return bzip2.NewReader(r), nil, nil
+	case "tar.xz", "txz":
+		xr, err := xz.NewReader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open nested tar xz: %w", err)
+		}
+		return xr, nil, nil
+	case "tar.zst", "tzst":
+		zr, err := zstd.NewReader(r)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open nested tar zstd: %w", err)
+		}
+		return zr, zr.Close, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported nested tar format %q", containerExt)
+	}
+}
+
 func archiveEntryMD5(ctx context.Context, file *zip.File, bufferSize int) (string, error) {
 	r, err := file.Open()
 	if err != nil {
@@ -949,14 +1986,148 @@ func isFB2Entry(name string) bool {
 	return strings.EqualFold(filepath.Ext(name), ".fb2")
 }
 
+func isUSRFB2Entry(name string) bool {
+	return isFB2Entry(name) || isNestedFB2Entry(name)
+}
+
+func isNestedFB2Entry(name string) bool {
+	_, _, ext, containerExt := entryIdentityParts(name)
+	return containerExt != "" && strings.EqualFold(ext, "fb2")
+}
+
+func isFBDEntry(name string) bool {
+	return strings.EqualFold(filepath.Ext(name), ".fbd")
+}
+
 func isBackup(name string) bool {
 	return strings.EqualFold(filepath.Ext(name), ".org")
 }
 
+func isIgnoredArchiveEntry(name string) bool {
+	if isBackup(name) {
+		return true
+	}
+	for _, component := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if component == "" {
+			continue
+		}
+		if strings.HasPrefix(component, ".") || strings.EqualFold(component, "__MACOSX") {
+			return true
+		}
+	}
+	return false
+}
+
 func entryIdentity(name string) (int64, string) {
+	id, _, ext, _ := entryIdentityParts(name)
+	return id, ext
+}
+
+func entryIdentityParts(name string) (int64, string, string, string) {
 	base := filepath.Base(name)
+	if stem, _, ok := splitSevenZipVolumeName(base); ok {
+		nestedExt := strings.TrimPrefix(filepath.Ext(stem), ".")
+		ext := ""
+		if nestedExt != "" {
+			ext = nestedExt
+			stem = strings.TrimSuffix(stem, filepath.Ext(stem))
+		}
+		id, _ := strconv.ParseInt(stem, 10, 64)
+		return id, stem, ext, "7z"
+	}
+	containerExt := nestedArchiveContainerExtension(base)
+	if containerExt != "" {
+		stem := strings.TrimSuffix(base, "."+containerExt)
+		if strings.EqualFold(containerExt, "tgz") || strings.EqualFold(containerExt, "tbz") || strings.EqualFold(containerExt, "tbz2") ||
+			strings.EqualFold(containerExt, "txz") || strings.EqualFold(containerExt, "tzst") {
+			stem = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		nestedExt := strings.TrimPrefix(filepath.Ext(stem), ".")
+		ext := ""
+		if nestedExt != "" {
+			ext = nestedExt
+			stem = strings.TrimSuffix(stem, filepath.Ext(stem))
+		}
+		id, _ := strconv.ParseInt(stem, 10, 64)
+		return id, stem, ext, containerExt
+	}
 	ext := strings.TrimPrefix(filepath.Ext(base), ".")
 	stem := strings.TrimSuffix(base, filepath.Ext(base))
 	id, _ := strconv.ParseInt(stem, 10, 64)
-	return id, ext
+	return id, stem, ext, containerExt
+}
+
+func nestedArchiveContainerExtension(name string) string {
+	lower := strings.ToLower(filepath.Base(name))
+	if _, _, ok := splitSevenZipVolumeName(lower); ok {
+		return "7z"
+	}
+	for _, ext := range knownNestedArchiveExtensions() {
+		if strings.HasSuffix(lower, "."+ext) {
+			return ext
+		}
+	}
+	return ""
+}
+
+func knownNestedArchiveExtensions() []string {
+	return []string{"tar.bz2", "tar.zst", "tar.gz", "tar.xz", "tbz2", "tgz", "tbz", "txz", "tzst", "zip", "rar", "7z", "tar"}
+}
+
+func archiveEntryName(entry archiveEntry) string {
+	if entry.Name != "" {
+		return entry.Name
+	}
+	return zipEntryName(entry.File)
+}
+
+func zipEntryName(file *zip.File) string {
+	if file == nil {
+		return ""
+	}
+	if !file.NonUTF8 && utf8.ValidString(file.Name) {
+		return file.Name
+	}
+	if name, ok := unicodePathExtraName(file.Name, file.Extra); ok {
+		return name
+	}
+	return validUTF8(file.Name)
+}
+
+func unicodePathExtraName(rawName string, extra []byte) (string, bool) {
+	for len(extra) >= 4 {
+		tag := binary.LittleEndian.Uint16(extra[0:2])
+		size := int(binary.LittleEndian.Uint16(extra[2:4]))
+		extra = extra[4:]
+		if size > len(extra) {
+			return "", false
+		}
+		body := extra[:size]
+		extra = extra[size:]
+		if tag != 0x7075 {
+			continue
+		}
+		if len(body) < 5 || body[0] != 1 {
+			return "", false
+		}
+		if crc32.ChecksumIEEE([]byte(rawName)) != binary.LittleEndian.Uint32(body[1:5]) {
+			return "", false
+		}
+		name := string(body[5:])
+		if !utf8.ValidString(name) {
+			return "", false
+		}
+		return name, true
+	}
+	return "", false
+}
+
+func filePairKey(name string) string {
+	base := filepath.Base(name)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	return strings.ToLower(stem)
+}
+
+func validUTF8(value string) string {
+	return strings.ToValidUTF8(value, "\uFFFD")
 }

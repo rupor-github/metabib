@@ -12,15 +12,16 @@
 ## metabib
 [![GitHub Release](https://img.shields.io/github/release/rupor-github/metabib.svg)](https://github.com/rupor-github/metabib/releases)
 
-`metabib` extracts metadata from Flibusta/Librusec SQL dumps and FB2 archives into
-JSON Lines. It first builds cache manifests for database dumps and/or archives,
-then merges those cached artifacts into final JSONL.
+`metabib` extracts metadata from Flibusta/Librusec SQL dumps and book archives
+into JSON Lines. It first builds cache manifests for database dumps and/or
+archives, then merges those cached artifacts into final JSONL.
 
-`metabib` is intentionally focused on current FB2 metadata workflows. Unsupported
-areas include:
+`metabib` is intentionally focused on current Flibusta/Librusec metadata
+workflows: SQL dump metadata, main archive sets, supplemental `usr` archive sets,
+and non-FB2 archive entries that should be carried through the same catalog
+dataset. FB2-specific parsing and enrichment are applied when FB2 descriptions
+are present. Unsupported areas include:
 
-- library content formats other than FB2;
-- non-FB2 Librusec update archives such as PDF updates;
 - dump schemas outside the current supported schemas;
 - reader-specific INPX quirks that are not part of the generated formats;
 - INPX daily updates.
@@ -46,6 +47,34 @@ Schema definitions are maintained in [`docs/`](docs/):
 - archive cache manifests: [`metabib-archive-manifest.schema.json`](docs/metabib-archive-manifest.schema.json);
 - database cache manifests: [`metabib-database-manifest.schema.json`](docs/metabib-database-manifest.schema.json).
 
+Current schema versions:
+
+- merged datasets use a `metabib.dataset/1` header and `metabib.dataset_record/1`
+  rows;
+- manifest payload records use `metabib.record/1`;
+- legacy FB2-only archive manifest headers may use `metabib.archive_manifest/1`,
+  which remains accepted so existing manifests do not need costly rebuilds;
+- generated archive manifest headers use `metabib.archive_manifest/2`; this adds
+  the `scope` field and records `fb2` or `usr` archive scope;
+- database manifest headers use `metabib.database_manifest/2`.
+
+## Table of Contents
+
+- [What It Does](#what-it-does)
+- [MariaDB Binaries](#mariadb-binaries)
+- [Usage](#usage)
+  - [Fetch Remote Updates](#fetch-remote-updates)
+  - [Roll Up Daily Archives](#roll-up-daily-archives)
+  - [Build Cache Manifests](#build-cache-manifests)
+  - [Merge Dataset](#merge-dataset)
+  - [Inspect Dataset](#inspect-dataset)
+  - [INPX Generation](#inpx-generation)
+    - [`mhl-inpx`](#mhl-inpx)
+    - [`flib-inpx`](#flib-inpx)
+    - [`inpx`](#inpx)
+  - [Configuration](#configuration)
+  - [Flibusta Script](#flibusta-script)
+
 ## What It Does
 
 `metabib` is organized around reusable processing passes:
@@ -62,11 +91,15 @@ Schema definitions are maintained in [`docs/`](docs/):
 - `inspect` summarizes and validates merged dataset JSONL or locates individual
   records without producing another artifact;
 - `mhl-inpx` consumes the merged dataset JSONL to produce a MyHomeLib-compatible
-  FB2 INPX without coupling the main extraction pipeline to INPX output
-  constraints;
+  INPX without coupling the main extraction pipeline to INPX output constraints;
 - `flib-inpx` consumes the same merged dataset JSONL to produce a
-  FLibrary-compatible FB2 INPX with extended fields and multiple flat series
-  links.
+  FLibrary-compatible INPX with extended fields and multiple flat series links;
+- `inpx` consumes the merged dataset JSONL to produce archive-backed INPX output
+  for accepted archive entries with `FOLDER` and `INSNO` locators, supports
+  Go-template filters through `--where`, can split accepted rows into multiple
+  `.inp` members through `--split-by`, and can write FLibrary-compatible
+  additional artifacts when FB2-derived source data is available for the accepted
+  book set.
 
 Both current Flibusta and current Librusec SQL dump schemas are supported. The
 database cache pass autodetects the dump schema and records it in the database
@@ -134,88 +167,6 @@ database:
 ```
 
 ## Usage
-
-### Flibusta Script
-
-`scripts/fb2_flibusta.sh` automates the common Flibusta FB2 workflow. The
-`metabib` executable is expected to be in the same directory as the script; if
-`metabib.yaml` exists there, it is passed to every `metabib` invocation.
-
-Run the full update workflow:
-
-```sh
-scripts/fb2_flibusta.sh /volume4/backup/library full mhl
-scripts/fb2_flibusta.sh /volume4/backup/library full flib
-scripts/fb2_flibusta.sh /volume4/backup/library full both
-```
-
-Run indexing only from existing local archives and the latest existing SQL dump
-directory matching `<library-root>/flibusta_*`:
-
-```sh
-scripts/fb2_flibusta.sh /volume4/backup/library reindex both
-```
-
-Both modes accept an optional user account whose home directory should be used as
-the working directory. This is useful for Synology Task Scheduler setups:
-
-```sh
-scripts/fb2_flibusta.sh /volume4/backup/library full both myuser
-```
-
-The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and the selected INPX
-exporter. It exits early when no new daily archives are downloaded or when rollup
-does not finalize a new archive. The `reindex` mode skips download and rollup and
-reruns `cache`, `merge`, and the selected INPX exporter from already available
-data.
-
-The script writes generated INPX files with non-overlapping output prefixes:
-
-- `mhl` mode writes `inpx/flibusta_mhl_<dump-date>.inpx`.
-- `flib` mode writes `inpx/flibusta_flib_<dump-date>.inpx` and passes
-  `--source-lib flibusta --additional` so FLibrary receives the original source
-  library name and additional artifacts are generated next to the INPX.
-- `both` mode writes both files from the same merged JSONL input.
-
-In `flib` and `both` modes, additional FLibrary outputs use the same prefix as
-the INPX: `flibusta_flib_<dump-date>-annotations.zip` is written when annotation
-data is available, and `flibusta_flib_<dump-date>-compilations.zip` is written
-when FB2 body fingerprints detect compilations.
-
-After FLibrary additional artifacts are written, the script updates stable links
-under `inpx/flib-etc/`: `annotations.zip` points to the current annotations ZIP,
-and `compilations.zip` points to the current compilations ZIP when one was
-generated. Stale symlinks are removed when an optional artifact is absent.
-
-After a successful download, `full` mode keeps the five newest SQL dump
-directories and also keeps the newest SQL dump directory that already contains
-`database.manifest.zst`, so reindexing can reuse the latest database cache even
-when it is older than the newest downloads.
-
-Expected library layout under `<library-root>`:
-
-- `flibusta/`: finalized local FB2 archives and active `.merging` archive.
-- `upd_flibusta/`: downloaded daily update archives.
-- `flibusta_<timestamp>/`: downloaded SQL dumps.
-- `inpx/`: generated INPX files and merged dataset JSONL artifacts.
-
-The script writes a console log next to itself named like
-`flibusta_full_mhl_20260622_103000.log` or
-`flibusta_reindex_both_20260622_103000.log`.
-For a single combined script and `metabib` debug log, configure logging in the
-same-directory `metabib.yaml` like this:
-
-```yaml
-logging:
-  console:
-    level: debug
-  file:
-    level: none
-```
-
-With that configuration, the script log includes phase separators, `metabib`
-debug messages, and MariaDB process/client output. The script leaves application
-file logging to `metabib` logging configuration.
 
 ### Fetch Remote Updates
 
@@ -351,6 +302,42 @@ kept as provenance, but manifest matching uses archive or dump file names,
 recorded metadata, processing settings, timestamps for freshness, and optional
 MD5 checksums when `--check-md5` is enabled.
 
+Archive manifest scope is selected before an archive manifest is validated or
+built:
+
+- directories, backup entries such as `.org`, and `.fbd` sidecar entries are
+  ignored while classifying scope;
+- archive paths that look like USR input force `usr` scope: the archive basename
+  contains `.usr-` or `.usr.`, starts with `usr-`, or any parent directory
+  component is `usr`, ends with `_usr`, or ends with `-usr`;
+- otherwise, an archive with at least one `.fb2` book entry is `fb2` scope;
+- otherwise, an archive with no `.fb2` book entries is `usr` scope;
+- if an archive forced to `usr` scope also contains `.fb2` book entries, those
+  FB2 entries are ignored and a warning is logged;
+- if an archive selected as `fb2` scope also contains non-FB2 book entries, those
+  non-FB2 entries are ignored and a warning is logged.
+
+New archive manifests are written as `metabib.archive_manifest/2` with `scope`
+set to `fb2` or `usr`. Existing `metabib.archive_manifest/1` files are treated as
+legacy FB2 manifests and remain reusable when all other freshness checks pass.
+When an archive manifest is rebuilt, the final `Archive manifest created` log
+entry includes post-processing ignore counts: `usr_fb2_entries_ignored` for FB2
+entries ignored in USR scope and `fb2_non_fb2_entries_ignored` for non-FB2 book
+entries ignored in FB2 scope. The USR count includes both filename-detected
+entries such as `.fb2.zip` and nested-inspection detections inside opaque
+containers. Default logs have one final aggregate count per rebuilt archive.
+
+Nested multi-volume archives in USR scope are not extracted across volumes. When
+`cache` detects a complete nested multi-volume set, it emits one opaque record for
+the root volume and skips continuation parts. The root record carries a
+`nested_archive_multivolume` issue with `volume_format`, `volume_count`,
+`volume_entries`, and `volume_indexes` details. Incomplete starts and orphan
+continuations remain ordinary bad nested archive issues and are logged as
+warnings. Supported detection patterns include RAR sets such as `book.rar` plus
+`book1.rar`, `book.part1.rar` plus `book.part2.rar`, and
+`book_partiya_1_.rar` plus `book_partiya_2_.rar`; 7z sets use the standard
+`book.7z.001`, `book.7z.002`, ... scheme.
+
 Set `processing.fb2_body_fingerprints: true` to calculate compact FB2 body and
 section fingerprints while archive manifests are built. This requires
 `processing.parse_fb2: true`. Archive manifests built with different fingerprint
@@ -364,6 +351,12 @@ is omitted.
 For current Librusec dumps, only the tables required for FB2 metadata are
 imported. Unsupported or unrelated dump files in the SQL directory are ignored by
 the importer.
+
+Database manifests also carry INPX-oriented author ambiguity metadata. Since the
+database cache pass now covers both FB2 and non-FB2 catalog rows, this metadata is
+stored in three scopes: all database books, FB2 books only, and USR/non-FB2 books
+only. INPX generators select the scope that matches their `--content` mode so PDF
+or other USR-only author collisions do not change FB2 INPX author names.
 
 ### Merge Dataset
 
@@ -387,8 +380,23 @@ metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/flibusta -
 
 `merge` never starts MariaDB and never reads archives directly. It fails when a
 selected manifest is missing, invalid, or stale. Use `--check-md5` for full
-source checksum verification, or `--allow-stale` to warn and continue with stale
-manifests.
+source checksum verification, `--allow-stale` to warn and continue with stale
+manifests, or `--allow-missing` to skip selected sources whose manifests do not
+exist yet.
+
+```sh
+metabib merge \
+  --allow-missing \
+  --database-dumps /path/to/sql-dumps \
+  --archives /path/to/flibusta \
+  --archives /path/to/flibusta_usr \
+  --output combined
+```
+
+`--allow-missing` omits missing sources from the dataset header and merged output.
+It is mostly useful for debugging partial cache state; normal production runs
+should build missing manifests with `cache` first. If every selected source
+manifest is missing, merge still fails.
 
 Archive-only merge does not require a database manifest. A database manifest is
 required only when `--database-dumps` is selected, whether that is for
@@ -406,6 +414,11 @@ dump date, archive entry layout, processing options, and declared ordering. Ever
 following value is a dataset record (`metabib.dataset_record/1`). INPX generation
 requires this dataset shape and rejects `metabib.record/1` input.
 
+When a database manifest contains scoped INPX author ambiguity metadata, `merge`
+copies it into the dataset header. Regenerate the database manifest and run
+`merge` again after changes to author disambiguation logic; regenerating INPX from
+an old merged JSONL cannot see new scoped metadata.
+
 When archive manifests contain FB2 body fingerprints, merge records dataset-level
 fingerprint coverage as `none`, `partial`, or `complete` and copies compact
 per-book section fingerprints onto the FB2 artifact as `fp`. The value is a
@@ -416,10 +429,13 @@ omitted to keep manifests small.
 Archive records are anchored by dataset archive ordinal and ZIP entry index.
 Physical record order is never inferred from entry filenames or database book IDs.
 When database enrichment is enabled, merge first treats a positive numeric entry
-stem as matching evidence, then tries a unique database filename alias if no
-numeric database row exists. The selected database observation records the match
-method, and conflicting numeric/filename evidence is retained as a structured
-issue instead of changing the physical record locator.
+stem as matching evidence. If an exact filename alias with extension points at a
+different database book, that alias wins because it describes the physical file
+more precisely; merge keeps the numeric stem as an inferred archive catalog
+identity and records a `catalog_id_conflict` issue. Otherwise merge uses the
+numeric row, then tries a unique database filename alias when no numeric database
+row exists. The selected database observation records the match method, and
+conflicting evidence never changes the physical record locator.
 
 Examples:
 
@@ -428,8 +444,38 @@ Examples:
   remains the ZIP entry position.
 - `Some.Book.fb2` can match a unique database filename alias; the database book ID
   becomes a catalog identity claim, not the physical record position.
-- `notes.fb2` with no database match remains a valid archive/FB2-only record and
-  has no invented catalog identity.
+- `notes.fb2` with no database match remains a valid archive-only record and has
+  no invented catalog identity.
+- `1968.pdf` can infer numeric archive catalog identity `1968`, but an exact
+  `1968.pdf` database alias for another book wins the database match.
+
+Database filename aliases are normalized with surrounding whitespace removed and
+case folded before they are used for matching. Exact filenames with extensions are
+kept as aliases. Bare nonnumeric stems are not indexed when an extension is known,
+because title-like stems such as `Megan_Lindholm_The_Wizard_of_the_Pigeons` can
+refer to several formats. Bare numeric stems are indexed only when the stem equals
+the database book ID; `1968.pdf` remains an exact alias, but bare `1968` is not an
+alias for some other book whose title or filename happens to be `1968`.
+
+If several normalized aliases still point at different database books, merge tries
+to resolve the collision with database lifecycle metadata before declaring the
+alias ambiguous. The index still stores the database book that owns the alias;
+joined metadata is only tie-break evidence and is preserved as a relation.
+
+- an active (`deleted=0`) book wins over a deleted one;
+- if both candidates have the same deleted state, an alias owner with joined-book
+  resolution wins over an otherwise unlinked alias owner;
+- otherwise the alias is removed from the filename index and a debug log reports
+  `Ambiguous database filename ignored`.
+
+Ambiguous or conflicting filename evidence never creates, removes, or reorders
+archive entries. If archive entry `844654.pdf` numerically matches database book
+`844654`, but an exact filename alias points to book `844910`, merge keeps one
+physical `844654.pdf` archive-entry record, matches it to `844910`, and records a
+`catalog_id_conflict` issue preserving the numeric stem evidence. If `844910.pdf`
+is also present as another archive entry, it is emitted separately as its own
+record. INPX output therefore preserves both physical files unless later filters
+explicitly drop one.
 
 ### Inspect Dataset
 
@@ -439,6 +485,7 @@ Use `inspect` for quick checks and debugging of merged dataset JSONL artifacts:
 metabib inspect --input combined
 metabib inspect --input combined --archives
 metabib inspect --input combined --validate
+metabib inspect --input combined --issues
 metabib inspect --input combined --book-id 12345
 metabib inspect --input combined --archive archive-0001 --index 42
 metabib inspect --input combined --file 12345.fb2 --json
@@ -456,6 +503,11 @@ Inspect summary output includes FB2 body fingerprint coverage when present. Reco
 lookup output includes the optional artifact `fp` payload in both text and JSON
 modes.
 
+Inspect summary output also includes INPX author ambiguity counts. Use `--verbose`
+to print the actual ambiguous DB author maps for all, FB2-only, and USR-only
+scopes. This is the quickest way to explain why an INPX author got a suffix such
+as `[#17376]` or `[писатель]`.
+
 Available modes and options:
 
 - `--archives`: list archive source IDs, ordinals, entry counts, names, and path
@@ -463,7 +515,10 @@ Available modes and options:
 - `--validate`: stream the full dataset and validate ordering, schemas,
   provenance references, source declarations, and archive indexes without
   writing any derived artifact. Successful output includes the number of records
-  read.
+  read plus issue totals by stage and code.
+- `--issues`: stream the full dataset and list records with `issues`, including
+  record number, locator, artifact names, and structured issue payloads. Use
+  `--json` for machine-readable issue records.
 - `--book-id ID`: return the first record matching a primary locator, Flibusta
   catalog identity, or database observation with that book ID.
 - `--archive ID --index INDEX`: return the record at the zero-based entry index
@@ -475,25 +530,27 @@ Available modes and options:
 - `--json`: emit the selected summary, archive list, validation result, or record
   as machine-readable JSON.
 
-Only one of `--archives`, `--book-id`, `--archive`/`--index`, and `--file` may be
-used at a time. `--validate` cannot be combined with any of those modes, while
-`--json` can be used with every mode. A lookup that finds no matching record exits
-with status `4`; other failures use status `1`.
+Only one of `--archives`, `--issues`, `--book-id`, `--archive`/`--index`, and
+`--file` may be used at a time. `--validate` cannot be combined with any of those
+modes, while `--json` can be used with every mode. A lookup that finds no matching
+record exits with status `4`; other failures use status `1`.
 
 Archive source IDs are local to one merged dataset. Use archive names, path hints,
 and checksums for long-term correlation across regenerated datasets.
 
 ### INPX Generation
 
-Build a MyHomeLib-compatible "historical" FB2 INPX from merged dataset JSONL:
+#### `mhl-inpx`
+
+Build a MyHomeLib-compatible "historical" INPX from merged dataset JSONL:
 
 ```sh
 metabib mhl-inpx --input all --output flibusta
 ```
 
-`mhl-inpx` is intentionally FB2-only. It consumes the merged dataset JSONL; it
-does not read SQL dumps, start MariaDB, or parse FB2 archives directly. Database
-and FB2 metadata are read from normalized v2 claims.
+`mhl-inpx` consumes the merged dataset JSONL; it does not read SQL dumps, start
+MariaDB, or parse archives directly. Database metadata, FB2 metadata, and
+sidecar-derived metadata are read from normalized claims when present.
 
 When the merge input is database-only and has no archives, `mhl-inpx` writes the
 records into `online.inp`. When archive metadata is present, `online.inp` is not
@@ -507,6 +564,15 @@ Available `mhl-inpx` arguments:
 - `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date from the
   dataset header is appended automatically, so `--output flibusta` writes a file
   named like `flibusta_20260603.inpx`.
+- `--content MODE`: content selection. Supported values are `fb2`, `usr`, and
+  `all`. Default is `fb2`. Archive records are classified by their logical
+  artifact name first; physical archive member names stay in occurrence entries.
+  For example, an opaque `.zip` entry inspected as PDF has artifact name `.pdf`
+  and occurrence entry `.zip`, so it is not selected as FB2 even when matched
+  database metadata says `file_type=fb2`. If nested archive inspection is
+  disabled, opaque containers keep their container extension, such as `.zip`, and
+  still do not fall back to database `file_type` for archive content selection.
+  Database `file_type` remains the fallback for database-only records.
 - `--format MODE`: INPX record layout. Supported values are `2x` and `ruks`.
   Default is `2x`. `ruks` appends MD5 and replacement fields when available.
 - `--sequence MODE`: database sequence selection. Supported values are `author`,
@@ -517,16 +583,17 @@ Available `mhl-inpx` arguments:
   preferred when present, and FB2 metadata fills missing values. Use `replace`
   when FB2 author order should win.
 
-Build a FLibrary-compatible FB2 INPX from the same merged dataset JSONL:
+#### `flib-inpx`
+
+Build a FLibrary-compatible INPX from the same merged dataset JSONL:
 
 ```sh
 metabib flib-inpx --input all --output flibusta
 ```
 
-`flib-inpx` is also FB2-only and consumes only merged dataset JSONL. It does not
-read SQL dumps or archives directly. Unlike `mhl-inpx`, it emits no dummy records
-and always writes `structure.info` with FLibrary extensions such as `FOLDER`,
-`YEAR`, and `SOURCELIB`.
+`flib-inpx` consumes only merged dataset JSONL. It does not read SQL dumps or
+archives directly, emits no dummy records, and always writes `structure.info` with
+FLibrary extensions such as `FOLDER`, `YEAR`, and `SOURCELIB`.
 
 Database-only FLibrary INPX generation follows the same `online.inp` rule as
 `mhl-inpx`: it is created only when the dataset header contains no archives.
@@ -542,6 +609,15 @@ Available `flib-inpx` arguments:
 - `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date is
   appended automatically, so `--output flibusta` writes a file named like
   `flibusta_20260603.inpx`.
+- `--content MODE`: content selection. Supported values are `fb2`, `usr`, and
+  `all`. Default is `fb2`. Archive records are classified by their logical
+  artifact name first; physical archive member names stay in occurrence entries.
+  For example, an opaque `.zip` entry inspected as PDF has artifact name `.pdf`
+  and occurrence entry `.zip`, so it is not selected as FB2 even when matched
+  database metadata says `file_type=fb2`. If nested archive inspection is
+  disabled, opaque containers keep their container extension, such as `.zip`, and
+  still do not fall back to database `file_type` for archive content selection.
+  Database `file_type` remains the fallback for database-only records.
 - `--prefer-fb2 MODE`: sequence source preference. Supported values are
   `ignore`, `merge`, `complement`, and `replace`. Default is `complement`.
 - `--sequence MODE`: selected sequence class. Supported values are `author`,
@@ -554,8 +630,11 @@ Available `flib-inpx` arguments:
   INPX output. Database-only inputs have no archive-derived additional source
   data, so this flag is ignored with a warning for those datasets.
 
-With `--additional`, `flib-inpx` writes `prefix-annotations.zip`. When the input
-dataset has FB2 body fingerprints and compilations are detected, it also writes
+With `--additional`, `flib-inpx` writes `prefix-annotations.zip` from FB2
+annotations and FBD sidecar annotations for accepted archive records, including
+USR records selected by `--content usr` or `--content all`. FB2 annotations are
+preferred when both FB2 and FBD claims are present. When the input dataset has FB2
+body fingerprints and compilations are detected, it also writes
 `prefix-compilations.zip` containing compact `compilations.json`. Partial
 fingerprint coverage is accepted with a warning; datasets without fingerprints
 skip the compilations artifact.
@@ -573,6 +652,8 @@ inpx:
 `sequence_dedup` supports `case-insensitive` and `case-sensitive`.
 `fb2_path_separator` is used by `--fb2-flatten path` and `path-leaf`.
 
+#### `inpx`
+
 Build an archive-backed filtered/split INPX from the same merged dataset JSONL:
 
 ```sh
@@ -584,12 +665,19 @@ explicit `FOLDER` and `INSNO` fields to point at source archive entries. When
 archive metadata is present, archive-less records are skipped. Filtered records
 are omitted entirely, and no dummy records are emitted.
 
-Filtering happens after INPX normalization. Templates see final output fields,
-including canonicalized language values such as `ru`, not raw source values such
-as `RU` or `russian`. Canonicalization only normalizes existing language values;
-it does not infer language when both database and FB2 language claims are absent.
-Use `{{ne .Lang ""}}` to exclude missing-language records, or `{{default
-"unknown" .Lang}}` to route them into an explicit split bucket.
+Content selection happens before template filtering. The `inpx` default is
+`--content all`, while `--content fb2` keeps only FB2 records and `--content usr`
+keeps non-FB2 records. Archive records are classified by logical artifact name
+before database `file_type`; physical archive member names stay in occurrence
+entries. If nested archive inspection is disabled, opaque containers keep their
+container extension for content selection. Database `file_type` is still used for
+database-only records.
+Filtering then happens after INPX normalization. Templates see final output
+fields, including canonicalized language values such as `ru`, not raw source
+values such as `RU` or `russian`. Canonicalization only normalizes existing
+language values; it does not infer language when both database and FB2 language
+claims are absent. Use `{{ne .Lang ""}}` to exclude missing-language records, or
+`{{default "unknown" .Lang}}` to route them into an explicit split bucket.
 
 Available `inpx` arguments:
 
@@ -598,6 +686,8 @@ Available `inpx` arguments:
 - `--output PREFIX`, `-o PREFIX`: required output prefix. The dump date is
   appended automatically, so `--output flibusta` writes a file named like
   `flibusta_20260603.inpx`.
+- `--content MODE`: content selection. Supported values are `fb2`, `usr`, and
+  `all`. Default is `all`.
 - `--where TEMPLATE`: keep rows when the Go template renders `true`, `1`, `yes`,
   or `on`; drop rows when it renders empty output, `false`, `0`, `no`, or `off`.
 - `--where-file FILE`: load the filter template from a file. Mutually exclusive
@@ -609,7 +699,8 @@ Available `inpx` arguments:
 - `--prefer-fb2 MODE`, `--sequence MODE`, and `--fb2-flatten MODE`: same
   sequence-source and FB2 flattening semantics as `flib-inpx`.
 - `--additional`: write FLibrary-compatible additional artifacts for accepted
-  books only.
+  books only. Annotation artifacts use FB2 annotations first, then FBD sidecar
+  annotations for USR records.
 
 Filter and split templates use Go `text/template` with slim-sprig functions plus
 `oneOf`, `containsValue`, and `rangeName` helpers:
@@ -725,9 +816,48 @@ at the start of `collection.info`.
 INPX generators apply database author disambiguation when
 `inpx.disambiguate_authors` is enabled. Database cache manifest creation records
 DB authors whose cleansed, non-truncated `LastName,FirstName,MiddleName` value
-collides with a different database contributor ID. INPX generation uses that
-metadata to append a stable suffix to the exported last-name field for both
-Flibusta and Librusec datasets. FB2-only authors are not changed.
+collides with a different database contributor ID. The manifest stores collision
+groups for all database books, FB2 books only, and USR/non-FB2 books only. INPX
+generation selects the matching group set by `--content`: `fb2` uses only FB2
+collisions, `usr` uses only USR collisions, and `all` uses all collisions.
+
+When a selected DB author belongs to an ambiguous group, the exported INPX
+last-name field receives a stable suffix. A unique database nickname becomes the
+preferred suffix, for example `Новиков [писатель],Александр,Васильевич:`. If no
+unique nickname is available, the suffix falls back to the Flibusta person ID,
+for example `Абрамов [#17376],Александр,Иванович:`. Only DB authors with catalog
+person identities are disambiguated; FB2-only authors are not changed because they
+do not have reliable database contributor IDs.
+
+Scoped disambiguation prevents non-FB2 catalog rows from changing default FB2
+INPX output. For example, if `Коллектив авторов` is ambiguous only because a PDF
+row introduces another DB contributor ID, `flib-inpx --content fb2` keeps FB2 rows
+as `Коллектив авторов,,:`. `flib-inpx --content all` can still suffix that author
+because the all-content INPX needs unique names across both FB2 and USR records.
+
+To inspect author ambiguity metadata in a merged dataset, run:
+
+```sh
+metabib inspect --input all --verbose
+```
+
+If author disambiguation metadata changes, rebuild the database manifest before
+regenerating merged JSONL and INPX output:
+
+```sh
+metabib cache --database-dumps /path/to/sql-dumps --rebuild
+metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/flibusta --output all
+metabib flib-inpx --input all --output flibusta
+```
+
+All INPX generators sanitize author name components before joining them into the
+rendered INPX `AUTHOR` field. Internal ASCII commas and colons are replaced with
+fullwidth characters (`，` and `：`) so they cannot be confused with INPX author
+delimiters; leading and trailing spaces, commas, and colons are trimmed,
+whitespace is collapsed, and invalid replacement characters make that component
+empty. Generic `inpx` template fields such as `.Author` use this rendered value;
+structured `.Authors[]` values exposed to templates remain the raw selected
+author claims.
 
 INPX generators canonicalize language values at generation time by default.
 Raw merged dataset JSONL remains unchanged. Database language has priority over
@@ -800,3 +930,85 @@ metabib --config metabib.yaml cache \
   --database-dumps /path/to/sql-dumps \
   --archives /path/to/flibusta
 ```
+
+### Flibusta Script
+
+`scripts/fb2_flibusta.sh` automates the common Flibusta FB2 workflow. The
+`metabib` executable is expected to be in the same directory as the script; if
+`metabib.yaml` exists there, it is passed to every `metabib` invocation.
+
+Run the full update workflow:
+
+```sh
+scripts/fb2_flibusta.sh /volume4/backup/library full mhl
+scripts/fb2_flibusta.sh /volume4/backup/library full flib
+scripts/fb2_flibusta.sh /volume4/backup/library full both
+```
+
+Run indexing only from existing local archives and the latest existing SQL dump
+directory matching `<library-root>/flibusta_*`:
+
+```sh
+scripts/fb2_flibusta.sh /volume4/backup/library reindex both
+```
+
+Both modes accept an optional user account whose home directory should be used as
+the working directory. This is useful for Synology Task Scheduler setups:
+
+```sh
+scripts/fb2_flibusta.sh /volume4/backup/library full both myuser
+```
+
+The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and the selected INPX
+exporter. It exits early when no new daily archives are downloaded or when rollup
+does not finalize a new archive. The `reindex` mode skips download and rollup and
+reruns `cache`, `merge`, and the selected INPX exporter from already available
+data.
+
+The script writes generated INPX files with non-overlapping output prefixes:
+
+- `mhl` mode writes `inpx/flibusta_mhl_<dump-date>.inpx`.
+- `flib` mode writes `inpx/flibusta_flib_<dump-date>.inpx` and passes
+  `--source-lib flibusta --additional` so FLibrary receives the original source
+  library name and additional artifacts are generated next to the INPX.
+- `both` mode writes both files from the same merged JSONL input.
+
+In `flib` and `both` modes, additional FLibrary outputs use the same prefix as
+the INPX: `flibusta_flib_<dump-date>-annotations.zip` is written when annotation
+data is available, and `flibusta_flib_<dump-date>-compilations.zip` is written
+when FB2 body fingerprints detect compilations.
+
+After FLibrary additional artifacts are written, the script updates stable links
+under `inpx/flib-etc/`: `annotations.zip` points to the current annotations ZIP,
+and `compilations.zip` points to the current compilations ZIP when one was
+generated. Stale symlinks are removed when an optional artifact is absent.
+
+After a successful download, `full` mode keeps the five newest SQL dump
+directories and also keeps the newest SQL dump directory that already contains
+`database.manifest.zst`, so reindexing can reuse the latest database cache even
+when it is older than the newest downloads.
+
+Expected library layout under `<library-root>`:
+
+- `flibusta/`: finalized local FB2 archives and active `.merging` archive.
+- `upd_flibusta/`: downloaded daily update archives.
+- `flibusta_<timestamp>/`: downloaded SQL dumps.
+- `inpx/`: generated INPX files and merged dataset JSONL artifacts.
+
+The script writes a console log next to itself named like
+`flibusta_full_mhl_20260622_103000.log` or
+`flibusta_reindex_both_20260622_103000.log`.
+For a single combined script and `metabib` debug log, configure logging in the
+same-directory `metabib.yaml` like this:
+
+```yaml
+logging:
+  console:
+    level: debug
+  file:
+    level: none
+```
+
+With that configuration, the script log includes phase separators, `metabib`
+debug messages, and MariaDB process/client output. The script leaves application
+file logging to `metabib` logging configuration.

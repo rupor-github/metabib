@@ -5,14 +5,16 @@ type Record struct {
 	ID     RecordID      `json:"id"`
 	Source RecordSources `json:"sources"`
 	Errors []string      `json:"errors,omitempty"`
+	Issues []Issue       `json:"issues,omitempty"`
 }
 
 type RecordID struct {
-	Library   string       `json:"library"`
-	BookID    int64        `json:"book_id,omitempty"`
-	FileName  string       `json:"file_name,omitempty"`
-	Extension string       `json:"extension,omitempty"`
-	Archive   *ArchiveInfo `json:"archive,omitempty"`
+	Library            string       `json:"library"`
+	BookID             int64        `json:"book_id,omitempty"`
+	FileName           string       `json:"file_name,omitempty"`
+	Extension          string       `json:"extension,omitempty"`
+	ContainerExtension string       `json:"container_extension,omitempty"`
+	Archive            *ArchiveInfo `json:"archive,omitempty"`
 }
 
 type ArchiveInfo struct {
@@ -31,8 +33,17 @@ type IndexRange struct {
 }
 
 type RecordSources struct {
-	Database DatabaseSource `json:"database"`
-	FB2      FB2Source      `json:"fb2"`
+	Database DatabaseSource  `json:"database"`
+	FB2      FB2Source       `json:"fb2"`
+	Sidecars []SidecarSource `json:"sidecars,omitempty"`
+}
+
+type SidecarSource struct {
+	Present     bool            `json:"present"`
+	Kind        string          `json:"kind"`
+	Format      string          `json:"format"`
+	Entry       string          `json:"entry"`
+	Description *FB2Description `json:"description,omitempty"`
 }
 
 type DatabaseSource struct {

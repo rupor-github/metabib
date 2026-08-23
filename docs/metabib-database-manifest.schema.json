@@ -11,7 +11,7 @@
       "type": "object",
       "required": ["schema", "source", "processing", "created", "records"],
       "properties": {
-        "schema": {"const": "metabib.database_manifest/1"},
+        "schema": {"const": "metabib.database_manifest/2"},
         "source": {
           "type": "object",
           "required": ["dump_dir", "dumps"],
@@ -60,7 +60,16 @@
     "inpx": {
       "type": "object",
       "properties": {
+        "scoped_db_author_ambiguity": {"type": "boolean"},
         "ambiguous_db_authors": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ambiguous_db_author_group"}
+        },
+        "ambiguous_db_authors_fb2": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ambiguous_db_author_group"}
+        },
+        "ambiguous_db_authors_usr": {
           "type": "array",
           "items": {"$ref": "#/$defs/ambiguous_db_author_group"}
         }

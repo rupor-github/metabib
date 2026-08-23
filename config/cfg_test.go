@@ -40,6 +40,10 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Processing.Manifests.ArchiveDir != "" {
 		t.Fatalf("ArchiveDir = %q, want empty", cfg.Processing.Manifests.ArchiveDir)
 	}
+	if cfg.Processing.NestedArchiveInspection.MaxCompressedSizeMiB != 498 ||
+		cfg.Processing.NestedArchiveInspection.MaxCompressedBytes() != 498*1024*1024 {
+		t.Fatalf("NestedArchiveInspection = %#v", cfg.Processing.NestedArchiveInspection)
+	}
 	if _, ok := cfg.Fetch.FindLibrary("flibusta"); !ok {
 		t.Fatal("default flibusta fetch profile is missing")
 	}

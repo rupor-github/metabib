@@ -214,6 +214,7 @@ func inpxCommand() *cli.Command {
 			&cli.StringFlag{Name: "where-file", Usage: "filter rows with Go template from `FILE`"},
 			&cli.StringFlag{Name: "split-by", Usage: "split rows into INP entries with Go template `TEMPLATE`"},
 			&cli.StringFlag{Name: "split-by-file", Usage: "split rows into INP entries with Go template from `FILE`"},
+			&cli.StringFlag{Name: "content", Value: string(inpxutil.ContentAll), Usage: "content selection `MODE` (fb2, usr, all)"},
 			&cli.StringFlag{
 				Name:  "sequence",
 				Value: string(sliceinpx.SequenceAuthor),
@@ -253,6 +254,7 @@ func mhlINPXCommand() *cli.Command {
 				Required: true,
 			},
 			&cli.StringFlag{Name: "format", Value: string(mhlinpx.Format2X), Usage: "INPX format `MODE` (2x, ruks)"},
+			&cli.StringFlag{Name: "content", Value: string(inpxutil.ContentFB2), Usage: "content selection `MODE` (fb2, usr, all)"},
 			&cli.StringFlag{
 				Name:  "sequence",
 				Value: string(mhlinpx.SequenceAuthor),
@@ -290,6 +292,7 @@ func flibINPXCommand() *cli.Command {
 				Value: string(flibinpx.SequenceAuthor),
 				Usage: "sequence selection `MODE` (author, publisher, all, ignore)",
 			},
+			&cli.StringFlag{Name: "content", Value: string(inpxutil.ContentFB2), Usage: "content selection `MODE` (fb2, usr, all)"},
 			&cli.StringFlag{
 				Name:  "prefer-fb2",
 				Value: string(flibinpx.PreferComplement),
@@ -337,6 +340,7 @@ func mergeCommand() *cli.Command {
 			&cli.StringFlag{Name: "output-compression", Value: string(jsonl.CompressionZstd), Usage: "compress JSONL output as `MODE` (zstd, gz, zip, none)"},
 			&cli.BoolFlag{Name: "check-md5", Usage: "verify source MD5 checksums recorded in manifests"},
 			&cli.BoolFlag{Name: "allow-stale", Usage: "warn but continue when manifests are stale"},
+			&cli.BoolFlag{Name: "allow-missing", Usage: "warn but skip missing manifests"},
 		},
 		Action: runMerge,
 	}
@@ -580,7 +584,12 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		if err != nil {
 			return err
 		}
-		reports = append(reports, report)
+		if cmd.Bool("allow-missing") && report.Missing {
+			selectedDatabase = false
+			databaseManifest = library.DatabaseManifestDecision{}
+		} else {
+			reports = append(reports, report)
+		}
 	}
 
 	var archivePlan []library.ArchiveManifestDecision
@@ -591,7 +600,14 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 		if err != nil {
 			return err
 		}
+		if cmd.Bool("allow-missing") {
+			archivePlan, archiveReports = filterMissingArchiveManifests(archivePlan, archiveReports, env.Log)
+		}
 		reports = append(reports, archiveReports...)
+		selectedArchives = len(archivePlan) > 0
+	}
+	if !selectedDatabase && !selectedArchives {
+		return errors.New("nothing to merge: all selected manifests are missing")
 	}
 	if err := failIfReportsNotReady(reports, allowStale); err != nil {
 		return err
@@ -661,6 +677,10 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	content, err := inpxutil.ParseContentMode(cmd.String("content"), inpxutil.ContentAll)
+	if err != nil {
+		return err
+	}
 	where, err := templateOption(cmd, "where", "where-file")
 	if err != nil {
 		return err
@@ -676,6 +696,7 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 	stats, err := sliceinpx.Generate(ctx, sliceinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
+		ContentMode:         content,
 		Additional:          cmd.Bool("additional"),
 		SequenceMode:        sequence,
 		FB2Preference:       preference,
@@ -749,6 +770,10 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	content, err := inpxutil.ParseContentMode(cmd.String("content"), inpxutil.ContentFB2)
+	if err != nil {
+		return err
+	}
 	limits := mhlinpx.Limits{
 		AuthorName:   cfg.INPX.Limits.AuthorName,
 		AuthorMiddle: cfg.INPX.Limits.AuthorMiddle,
@@ -764,6 +789,7 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 	stats, err := mhlinpx.Generate(ctx, mhlinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
+		ContentMode:         content,
 		Format:              format,
 		SequenceMode:        sequence,
 		FB2Preference:       preference,
@@ -816,6 +842,10 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	content, err := inpxutil.ParseContentMode(cmd.String("content"), inpxutil.ContentFB2)
+	if err != nil {
+		return err
+	}
 	language, err := inpxLanguageResolver(cfg, env)
 	if err != nil {
 		return err
@@ -823,6 +853,7 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	stats, err := flibinpx.Generate(ctx, flibinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
+		ContentMode:         content,
 		Additional:          cmd.Bool("additional"),
 		SequenceMode:        sequence,
 		FB2Preference:       preference,
@@ -944,6 +975,12 @@ func loadDatabaseIndex(ctx context.Context, manifestPath string, log *zap.Logger
 		if rec.ID.BookID > 0 && rec.Source.Database.Present {
 			index.byID[rec.ID.BookID] = rec.Source.Database
 		}
+		return nil
+	})
+	if err != nil {
+		return databaseIndex{}, err
+	}
+	_, err = library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
 		for _, key := range recordFileKeys(rec) {
 			if rec.Source.Database.Present {
 				index.addDatabaseFile(key, rec.Source.Database, log)
@@ -983,6 +1020,10 @@ func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSour
 		if existingBookID == bookID {
 			return
 		}
+		if winner, ok := index.resolveDatabaseFileCollision(existingBookID, bookID); ok {
+			index.byFile[key] = winner
+			return
+		}
 		delete(index.byFile, key)
 		index.ambiguousFiles[key] = struct{}{}
 		if log != nil {
@@ -996,6 +1037,47 @@ func (index databaseIndex) addDatabaseFile(key string, source model.DatabaseSour
 		return
 	}
 	index.byFile[key] = bookID
+}
+
+func (index databaseIndex) resolveDatabaseFileCollision(existingBookID int64, duplicateBookID int64) (int64, bool) {
+	existingDeleted := index.databaseBookDeleted(existingBookID)
+	duplicateDeleted := index.databaseBookDeleted(duplicateBookID)
+	if existingDeleted && !duplicateDeleted {
+		return duplicateBookID, true
+	}
+	if !existingDeleted && duplicateDeleted {
+		return existingBookID, true
+	}
+	existingJoined := index.databaseBookHasJoinedResolution(existingBookID)
+	duplicateJoined := index.databaseBookHasJoinedResolution(duplicateBookID)
+	if !existingJoined && duplicateJoined {
+		return duplicateBookID, true
+	}
+	if existingJoined && !duplicateJoined {
+		return existingBookID, true
+	}
+	return 0, false
+}
+
+func (index databaseIndex) databaseBookDeleted(bookID int64) bool {
+	source, ok := index.byID[bookID]
+	if !ok || source.Book == nil {
+		return false
+	}
+	return deletionValue(source.Book.Deleted).State == "deleted"
+}
+
+func (index databaseIndex) databaseBookHasJoinedResolution(bookID int64) bool {
+	source, ok := index.byID[bookID]
+	if !ok {
+		return false
+	}
+	for _, joined := range source.JoinedBooks {
+		if joined.RealID > 0 && (joined.BadID == bookID || joined.GoodID == bookID || joined.RealID == bookID) {
+			return true
+		}
+	}
+	return false
 }
 
 func datasetArchiveSources(dataset model.Dataset) map[string]string {
@@ -1057,6 +1139,28 @@ func conflictingFilenameIssue(rec model.Record, dbIndex databaseIndex, matchedBo
 		)
 	}
 	return nil
+}
+
+func preferredConflictingFilenameAlias(
+	rec model.Record,
+	dbIndex databaseIndex,
+	numericBookID int64,
+) (recordFileCandidate, model.DatabaseSource, int64, bool) {
+	for _, candidate := range recordFileCandidates(rec) {
+		if candidate.input == rec.ID.FileName {
+			continue
+		}
+		aliasBookID, ok := dbIndex.byFile[candidate.key]
+		if !ok || aliasBookID <= 0 || aliasBookID == numericBookID {
+			continue
+		}
+		source, ok := dbIndex.byID[aliasBookID]
+		if !ok {
+			continue
+		}
+		return candidate, source, aliasBookID, true
+	}
+	return recordFileCandidate{}, model.DatabaseSource{}, 0, false
 }
 
 func catalogIDConflictIssue(inferredBookID int64, matchedBookID int64, path string) *model.Issue {
@@ -1124,11 +1228,14 @@ func mergeArchiveManifests(
 ) (int64, error) {
 	start := time.Now()
 	var records int64
+	var totalStats mergeMatchStats
 	for _, decision := range archivePlan {
 		if err := ctx.Err(); err != nil {
 			return records, err
 		}
+		archiveStats := mergeMatchStats{}
 		count, err := library.ForEachManifestRecord(ctx, decision.ManifestPath, func(rec model.Record) error {
+			archiveStats.Records++
 			if rec.ID.Archive != nil {
 				rec.ID.Archive.Path = decision.ArchivePath
 			}
@@ -1138,11 +1245,27 @@ func mergeArchiveManifests(
 			rec.Source.Database = model.DatabaseSource{}
 			if rec.ID.BookID > 0 {
 				if source, ok := dbIndex.byID[rec.ID.BookID]; ok {
-					rec.Source.Database = source
-					databaseMatch = databaseNumericMatch(rec, source)
-					matchedBookID := databaseSourceBookID(source, rec.ID.BookID)
-					if issue := conflictingFilenameIssue(rec, dbIndex, matchedBookID); issue != nil {
-						matchIssues = append(matchIssues, *issue)
+					candidate, aliasSource, aliasBookID, aliasOK := preferredConflictingFilenameAlias(rec, dbIndex, rec.ID.BookID)
+					if aliasOK {
+						rec.Source.Database = aliasSource
+						databaseMatch = databaseFilenameMatch(candidate, aliasSource)
+						archiveStats.FilenameMatches++
+						if issue := catalogIDConflictIssue(inferredBookID, aliasBookID, candidate.input); issue != nil {
+							matchIssues = append(matchIssues, *issue)
+							archiveStats.ConflictingMatchEvidence++
+						}
+						if aliasSource.Book != nil {
+							rec.ID.BookID = aliasSource.Book.BookID
+						}
+					} else {
+						rec.Source.Database = source
+						databaseMatch = databaseNumericMatch(rec, source)
+						archiveStats.NumericMatches++
+						matchedBookID := databaseSourceBookID(source, rec.ID.BookID)
+						if issue := conflictingFilenameIssue(rec, dbIndex, matchedBookID); issue != nil {
+							matchIssues = append(matchIssues, *issue)
+							archiveStats.ConflictingMatchEvidence++
+						}
 					}
 				}
 			}
@@ -1155,9 +1278,11 @@ func mergeArchiveManifests(
 						}
 						rec.Source.Database = source
 						databaseMatch = databaseFilenameMatch(candidate, source)
+						archiveStats.FilenameMatches++
 						matchedBookID := databaseSourceBookID(source, 0)
 						if issue := catalogIDConflictIssue(inferredBookID, matchedBookID, candidate.input); issue != nil {
 							matchIssues = append(matchIssues, *issue)
+							archiveStats.ConflictingMatchEvidence++
 						}
 						if source.Book != nil {
 							rec.ID.BookID = source.Book.BookID
@@ -1165,6 +1290,14 @@ func mergeArchiveManifests(
 						break
 					}
 				}
+			}
+			if rec.Source.Database.Present {
+				archiveStats.DBPresent++
+				if rec.ID.Extension == "" && rec.Source.Database.Book != nil {
+					rec.ID.Extension = rec.Source.Database.Book.FileType
+				}
+			} else {
+				archiveStats.DBAbsent++
 			}
 			converted, err := datasetRecordFromRecordWithMatch(
 				rec,
@@ -1183,16 +1316,52 @@ func mergeArchiveManifests(
 			return records, err
 		}
 		records += count
+		totalStats.Add(archiveStats)
+		if log != nil {
+			log.Info(
+				"Archive manifest DB matches",
+				zap.String("archive", decision.ArchivePath),
+				zap.Int64("records", archiveStats.Records),
+				zap.Int64("db_present", archiveStats.DBPresent),
+				zap.Int64("db_absent", archiveStats.DBAbsent),
+				zap.Int64("numeric_matches", archiveStats.NumericMatches),
+				zap.Int64("filename_matches", archiveStats.FilenameMatches),
+				zap.Int64("conflicting_match_evidence", archiveStats.ConflictingMatchEvidence),
+			)
+		}
 	}
 	if log != nil {
 		log.Info(
 			"Archive manifests merged",
 			zap.Int("manifests", len(archivePlan)),
 			zap.Int64("records", records),
+			zap.Int64("db_present", totalStats.DBPresent),
+			zap.Int64("db_absent", totalStats.DBAbsent),
+			zap.Int64("numeric_matches", totalStats.NumericMatches),
+			zap.Int64("filename_matches", totalStats.FilenameMatches),
+			zap.Int64("conflicting_match_evidence", totalStats.ConflictingMatchEvidence),
 			zap.Duration("elapsed", time.Since(start)),
 		)
 	}
 	return records, nil
+}
+
+type mergeMatchStats struct {
+	Records                  int64
+	DBPresent                int64
+	DBAbsent                 int64
+	NumericMatches           int64
+	FilenameMatches          int64
+	ConflictingMatchEvidence int64
+}
+
+func (s *mergeMatchStats) Add(other mergeMatchStats) {
+	s.Records += other.Records
+	s.DBPresent += other.DBPresent
+	s.DBAbsent += other.DBAbsent
+	s.NumericMatches += other.NumericMatches
+	s.FilenameMatches += other.FilenameMatches
+	s.ConflictingMatchEvidence += other.ConflictingMatchEvidence
 }
 
 func failIfReportsNotReady(reports []library.ManifestReport, allowStale bool) error {
@@ -1202,6 +1371,35 @@ func failIfReportsNotReady(reports []library.ManifestReport, allowStale bool) er
 		}
 	}
 	return nil
+}
+
+func filterMissingArchiveManifests(
+	plan []library.ArchiveManifestDecision,
+	reports []library.ManifestReport,
+	log *zap.Logger,
+) ([]library.ArchiveManifestDecision, []library.ManifestReport) {
+	if len(plan) != len(reports) {
+		return plan, reports
+	}
+	filteredPlan := make([]library.ArchiveManifestDecision, 0, len(plan))
+	filteredReports := make([]library.ManifestReport, 0, len(reports))
+	var skipped int
+	for idx, report := range reports {
+		if report.Missing {
+			skipped++
+			continue
+		}
+		filteredPlan = append(filteredPlan, plan[idx])
+		filteredReports = append(filteredReports, report)
+	}
+	if skipped > 0 && log != nil {
+		log.Warn(
+			"Missing archive manifests skipped",
+			zap.Int("skipped", skipped),
+			zap.Int("remaining", len(filteredPlan)),
+		)
+	}
+	return filteredPlan, filteredReports
 }
 
 func applyCacheOverrides(cfg *config.Config, cmd *cli.Command) {

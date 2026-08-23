@@ -39,7 +39,10 @@ type DatasetDatabase struct {
 }
 
 type INPXMetadata struct {
-	AmbiguousDBAuthors []INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_authors,omitempty"`
+	ScopedDBAuthorAmbiguity bool                         `json:"scoped_db_author_ambiguity,omitempty"`
+	AmbiguousDBAuthors      []INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_authors,omitempty"`
+	AmbiguousDBAuthorsFB2   []INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_authors_fb2,omitempty"`
+	AmbiguousDBAuthorsUSR   []INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_authors_usr,omitempty"`
 }
 
 type INPXAmbiguousDBAuthorGroup struct {
@@ -339,10 +342,11 @@ type IdentityTarget struct {
 }
 
 type Issue struct {
-	Observation string `json:"observation,omitempty"`
-	Stage       string `json:"stage"`
-	Code        string `json:"code"`
-	Path        string `json:"path,omitempty"`
-	Message     string `json:"message,omitempty"`
-	Retryable   bool   `json:"retryable"`
+	Observation string         `json:"observation,omitempty"`
+	Stage       string         `json:"stage"`
+	Code        string         `json:"code"`
+	Path        string         `json:"path,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Details     map[string]any `json:"details,omitempty"`
+	Retryable   bool           `json:"retryable"`
 }

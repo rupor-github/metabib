@@ -60,17 +60,34 @@ type DatabaseConfig struct {
 }
 
 type ProcessingConfig struct {
-	ParseFB2            bool           `yaml:"parse_fb2"`
-	FB2DescriptionTree  bool           `yaml:"fb2_description_tree"`
-	FB2BodyFingerprints bool           `yaml:"fb2_body_fingerprints"`
-	ArchiveContentMD5   bool           `yaml:"archive_content_md5"`
-	Manifests           ManifestConfig `yaml:"manifests"`
-	DatabaseWorkers     int            `yaml:"database_workers" validate:"min=0"`
-	DatabaseBatchSize   int            `yaml:"database_batch_size" validate:"min=1"`
-	ArchiveWorkers      int            `yaml:"archive_workers" validate:"min=0"`
-	ArchiveBatchSize    int            `yaml:"archive_batch_size" validate:"min=1"`
-	ArchiveReadBuffer   int            `yaml:"archive_read_buffer_size" validate:"min=0"`
-	Rebuild             bool           `yaml:"-"`
+	ParseFB2                bool                          `yaml:"parse_fb2"`
+	FB2DescriptionTree      bool                          `yaml:"fb2_description_tree"`
+	FB2BodyFingerprints     bool                          `yaml:"fb2_body_fingerprints"`
+	ArchiveContentMD5       bool                          `yaml:"archive_content_md5"`
+	NestedArchiveInspection NestedArchiveInspectionConfig `yaml:"nested_archive_inspection"`
+	Manifests               ManifestConfig                `yaml:"manifests"`
+	DatabaseWorkers         int                           `yaml:"database_workers" validate:"min=0"`
+	DatabaseBatchSize       int                           `yaml:"database_batch_size" validate:"min=1"`
+	ArchiveWorkers          int                           `yaml:"archive_workers" validate:"min=0"`
+	ArchiveBatchSize        int                           `yaml:"archive_batch_size" validate:"min=1"`
+	ArchiveReadBuffer       int                           `yaml:"archive_read_buffer_size" validate:"min=0"`
+	Rebuild                 bool                          `yaml:"-"`
+}
+
+type NestedArchiveInspectionConfig struct {
+	Enabled              bool  `yaml:"enabled"`
+	MaxCompressedSizeMiB int64 `yaml:"max_compressed_size_mib" validate:"min=0"`
+}
+
+func (c NestedArchiveInspectionConfig) MaxCompressedBytes() int64 {
+	if c.MaxCompressedSizeMiB <= 0 {
+		return c.MaxCompressedSizeMiB
+	}
+	const mib = int64(1024 * 1024)
+	if c.MaxCompressedSizeMiB > (1<<63-1)/mib {
+		return 1<<63 - 1
+	}
+	return c.MaxCompressedSizeMiB * mib
 }
 
 type FetchConfig struct {

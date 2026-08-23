@@ -93,6 +93,12 @@ processing:
   # the parser stream, but still has to drain the whole entry after description.
   archive_content_md5: true
 
+  # Inspect nested book archives in USR archives to find FictionBook description
+  # sidecars. Entries above max_compressed_size_mib are emitted as opaque artifacts.
+  nested_archive_inspection:
+    enabled: true
+    max_compressed_size_mib: 498
+
   manifests:
     # Empty keeps compressed archive manifests next to archives and replaces the
     # extension: /path/lib.zip -> /path/lib.manifest.zst. When set, manifests are
@@ -193,6 +199,8 @@ inpx:
       ukrian: uk
       urkain: uk
       xx: ru
+      rl: ru
+      us: ru
       Человеческое, слишком человеческое: ru
 
     # Fallback display-name locales used after the record context language does

@@ -62,7 +62,7 @@
       "properties": {
         "id": {"type": "string"},
         "source": {"type": "string"},
-        "kind": {"enum": ["archive_entry", "database_book", "fb2_description"]},
+        "kind": {"enum": ["archive_entry", "database_book", "fb2_description", "fictionbook-description"]},
         "status": {"enum": ["present", "absent", "not_collected", "error", "unknown"]},
         "locator": {"$ref": "#/$defs/observation_locator"},
         "coverage": {"type": "string"},
@@ -353,10 +353,11 @@
       "required": ["stage", "code", "retryable"],
       "properties": {
         "observation": {"type": "string"},
-        "stage": {"enum": ["match", "open", "read", "parse", "normalize", "validate"]},
+        "stage": {"enum": ["match", "open", "read", "parse", "normalize", "validate", "nested_archive_inspection"]},
         "code": {"type": "string"},
         "path": {"type": "string"},
         "message": {"type": "string"},
+        "details": {"type": "object"},
         "retryable": {"type": "boolean"}
       },
       "additionalProperties": false

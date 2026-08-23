@@ -276,6 +276,108 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 	}
 }
 
+func TestDatasetRecordFromArchiveRecordPopulatesFBDSidecarClaims(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			BookID:    42,
+			FileName:  "42",
+			Extension: "pdf",
+			Archive: &model.ArchiveInfo{
+				Path:             "/archives/usr.zip",
+				Entry:            "42.pdf",
+				Index:            5,
+				CompressedSize:   123,
+				UncompressedSize: 456,
+			},
+		},
+		Source: model.RecordSources{Sidecars: []model.SidecarSource{{
+			Present: true,
+			Kind:    "fbd",
+			Format:  "fictionbook-description",
+			Entry:   "42.fbd",
+			Description: &model.FB2Description{TitleInfo: &model.FB2TitleInfo{
+				Title:    "FBD title",
+				Language: "ru",
+				Authors:  []model.FB2Person{{FirstName: "Side", LastName: "Author"}},
+			}},
+		}}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/usr.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Observations) != 3 || converted.Observations[2].ID != "fbd" || converted.Observations[2].Locator.Entry != "42.fbd" {
+		t.Fatalf("observations = %#v", converted.Observations)
+	}
+	if got := converted.Claims.Bibliographic.Title[0]; got.Observation != "fbd" || got.Value != "FBD title" {
+		t.Fatalf("title claim = %#v", got)
+	}
+	if converted.Claims.Bibliographic.Language[0].Observation != "fbd" {
+		t.Fatalf("language claims = %#v", converted.Claims.Bibliographic.Language)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordUsesLogicalArtifactName(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:            "flibusta",
+			FileName:           "Olie_Ostavlyaya_sled_na_Zemle",
+			Extension:          "pdf",
+			ContainerExtension: "zip",
+			Archive: &model.ArchiveInfo{
+				Path:  "/archives/usr.zip",
+				Entry: "Olie_Ostavlyaya_sled_na_Zemle.zip",
+				Index: 5,
+			},
+		},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/usr.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Artifacts) != 1 || converted.Artifacts[0].Name != "Olie_Ostavlyaya_sled_na_Zemle.pdf" {
+		t.Fatalf("artifact name = %#v, want logical pdf name", converted.Artifacts)
+	}
+	if len(converted.Artifacts[0].Occurrences) != 1 || converted.Artifacts[0].Occurrences[0].Entry != "Olie_Ostavlyaya_sled_na_Zemle.zip" {
+		t.Fatalf("occurrences = %#v, want physical zip entry", converted.Artifacts[0].Occurrences)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordUsesPhysicalNameForOpaqueContainer(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:            "flibusta",
+			FileName:           "OpaqueBook",
+			ContainerExtension: "zip",
+			Archive: &model.ArchiveInfo{
+				Path:  "/archives/usr.zip",
+				Entry: "OpaqueBook.zip",
+				Index: 5,
+			},
+		},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/usr.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Artifacts) != 1 || converted.Artifacts[0].Name != "OpaqueBook.zip" {
+		t.Fatalf("artifact name = %#v, want physical container name", converted.Artifacts)
+	}
+}
+
 func TestDatasetRecordFromArchiveRecordRecordsAbsentDatabase(t *testing.T) {
 	t.Parallel()
 
@@ -450,5 +552,41 @@ func TestDatasetRecordFromArchiveRecordRecordsTitleInfoCoverage(t *testing.T) {
 	}
 	if len(converted.Observations) != 3 || converted.Observations[2].Coverage != "title_info" {
 		t.Fatalf("observations = %#v, want title_info FB2 coverage", converted.Observations)
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordPreservesStructuredIssues(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library: "flibusta",
+			Archive: &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "book.zip", Index: 5},
+		},
+		Issues: []model.Issue{{
+			Observation: "archive",
+			Stage:       "nested_archive_inspection",
+			Code:        "nested_archive_invalid",
+			Path:        "book.zip",
+			Message:     "zip: not a valid zip file",
+			Details: map[string]any{
+				"declared_format": "zip",
+				"detected_format": "zip",
+				"behavior":        "emit_opaque_record",
+			},
+			Retryable: false,
+		}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if len(converted.Issues) != 1 || converted.Issues[0].Code != "nested_archive_invalid" {
+		t.Fatalf("issues = %#v", converted.Issues)
+	}
+	if converted.Issues[0].Details["behavior"] != "emit_opaque_record" {
+		t.Fatalf("issue details = %#v", converted.Issues[0].Details)
 	}
 }

@@ -201,6 +201,24 @@ func TestPlanArchiveManifestMissingAndValidation(t *testing.T) {
 	}
 }
 
+func TestPlanArchiveManifestClassifiesUsrArchiveWithStrayFB2AsUSR(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "f.usr-285623-290406.zip")
+	writeZip(t, archive, map[string]string{"285623.pdf": "book", "285624.fb2": `<FictionBook/>`})
+	cfg := manifestTestConfig()
+
+	plan, _, err := PlanArchives(ctx, cfg, []string{archive}, false, nil, false)
+	if err != nil {
+		t.Fatalf("PlanArchives() error = %v", err)
+	}
+	if len(plan) != 1 || plan[0].Scope != archiveScopeUSR {
+		t.Fatalf("plan = %#v, want USR scope", plan)
+	}
+}
+
 func TestArchiveManifestReadyLogsRequireVerbose(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +339,22 @@ func TestArchiveManifestIgnoresAbsoluteSourcePath(t *testing.T) {
 	}
 }
 
+func TestArchiveManifestMatchesWindowsSourcePathOnUnix(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	header := archiveManifestHeader{
+		Schema:     archiveManifestSchema,
+		Scope:      archiveScopeUSR,
+		Source:     ArchiveManifestSource{Path: `C:\syno\backup\library\flibusta_usr\usr-123536-125161.zip`},
+		Processing: archiveProcessingManifest(cfg, archiveScopeUSR),
+	}
+	archive := filepath.Join(string(os.PathSeparator), "mnt", "grumpy", "library", "flibusta_usr", "usr-123536-125161.zip")
+	if !archiveManifestLightMatchesForScope(header, cfg, archive, archiveScopeUSR, time.Time{}, false) {
+		t.Fatal("archiveManifestLightMatchesForScope() = false for Windows manifest source path and Unix archive path")
+	}
+}
+
 func TestArchiveManifestPathsQualifyOnlyCollisionsInArchiveDir(t *testing.T) {
 	t.Parallel()
 
@@ -342,7 +376,8 @@ func TestArchiveManifestPathsQualifyOnlyCollisionsInArchiveDir(t *testing.T) {
 	if filepath.Base(paths[rightArchive]) == "books.manifest.zst" {
 		t.Fatalf("second manifest path = %q, want source-qualified basename", paths[rightArchive])
 	}
-	if filepath.Dir(paths[leftArchive]) != cfg.Processing.Manifests.ArchiveDir || filepath.Dir(paths[rightArchive]) != cfg.Processing.Manifests.ArchiveDir {
+	if filepath.Dir(paths[leftArchive]) != cfg.Processing.Manifests.ArchiveDir ||
+		filepath.Dir(paths[rightArchive]) != cfg.Processing.Manifests.ArchiveDir {
 		t.Fatalf("manifest paths are not in archive_dir: %#v", paths)
 	}
 }
@@ -450,12 +485,57 @@ func TestArchiveManifestToleratesSubMicrosecondMTimeDrift(t *testing.T) {
 	}
 }
 
+func TestUSRArchiveManifestMatchesNestedInspectionConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	cfg.Processing.NestedArchiveInspection.Enabled = true
+	cfg.Processing.NestedArchiveInspection.MaxCompressedSizeMiB = 1
+	header := archiveManifestHeader{
+		Schema:     archiveManifestSchema,
+		Scope:      archiveScopeUSR,
+		Source:     ArchiveManifestSource{Path: "/source/usr.zip"},
+		Processing: archiveProcessingManifest(cfg, archiveScopeUSR),
+	}
+	if !archiveManifestLightMatchesForScope(header, cfg, "/target/usr.zip", archiveScopeUSR, time.Time{}, false) {
+		t.Fatal("archiveManifestLightMatchesForScope() = false for matching nested inspection config")
+	}
+
+	changed := manifestTestConfig()
+	changed.Processing.NestedArchiveInspection.Enabled = false
+	changed.Processing.NestedArchiveInspection.MaxCompressedSizeMiB = 1
+	if archiveManifestLightMatchesForScope(header, changed, "/target/usr.zip", archiveScopeUSR, time.Time{}, false) {
+		t.Fatal("archiveManifestLightMatchesForScope() = true for changed nested inspection config")
+	}
+}
+
+func TestFB2ArchiveManifestIgnoresNestedInspectionConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := manifestTestConfig()
+	cfg.Processing.NestedArchiveInspection.Enabled = true
+	cfg.Processing.NestedArchiveInspection.MaxCompressedSizeMiB = 1
+	header := archiveManifestHeader{
+		Schema:     archiveManifestSchema,
+		Scope:      archiveScopeFB2,
+		Source:     ArchiveManifestSource{Path: "/source/books.zip"},
+		Processing: archiveProcessingManifest(cfg, archiveScopeFB2),
+	}
+	changed := manifestTestConfig()
+	changed.Processing.NestedArchiveInspection.Enabled = false
+	changed.Processing.NestedArchiveInspection.MaxCompressedSizeMiB = 99
+	if !archiveManifestLightMatchesForScope(header, changed, "/target/books.zip", archiveScopeFB2, time.Time{}, false) {
+		t.Fatal("archiveManifestLightMatchesForScope() = false for FB2 manifest after nested inspection config change")
+	}
+}
+
 func TestDatabaseManifestToleratesSubMicrosecondMTimeDrift(t *testing.T) {
 	t.Parallel()
 
 	cfg := manifestTestConfig()
 	stored := time.Date(2026, 7, 12, 8, 0, 13, 374015409, time.FixedZone("test", -4*60*60))
 	header := databaseManifestHeader{
+		Schema: databaseManifestSchema,
 		Source: DatabaseManifestSource{
 			DumpDate: "2026-07-12",
 			Dumps: []DumpManifestSource{{
@@ -486,12 +566,17 @@ func TestDatabaseManifestFormatCompatibility(t *testing.T) {
 	t.Parallel()
 
 	cfg := manifestTestConfig()
-	header := databaseManifestHeader{Source: DatabaseManifestSource{DumpDate: "2026-07-12"}, Processing: processingManifest(cfg)}
+	header := databaseManifestHeader{Schema: databaseManifestSchema, Source: DatabaseManifestSource{DumpDate: "2026-07-12"}, Processing: processingManifest(cfg)}
 	if !databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatFlibustaCurrent, nil, false) {
-		t.Fatal("legacy database manifest without format should match flibusta-current")
+		t.Fatal("database manifest without format should match flibusta-current")
 	}
+	header.INPX = &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{Key: "legacy"}}}
+	if databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatFlibustaCurrent, nil, false) {
+		t.Fatal("legacy unscoped INPX metadata matched current metadata")
+	}
+	header.INPX = &model.INPXMetadata{ScopedDBAuthorAmbiguity: true}
 	if databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatLibrusecCurrent, nil, false) {
-		t.Fatal("legacy database manifest without format matched librusec-current")
+		t.Fatal("database manifest without format matched librusec-current")
 	}
 	header.Source.Format = db.FormatLibrusecCurrent
 	if !databaseManifestLightMatches(header, cfg, "2026-07-12", db.FormatLibrusecCurrent, nil, false) {

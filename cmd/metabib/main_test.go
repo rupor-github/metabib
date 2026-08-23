@@ -41,6 +41,17 @@ func TestMergeCommandHasNoOutputPartSizeFlag(t *testing.T) {
 	}
 }
 
+func TestMergeCommandHasAllowMissingFlag(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range mergeCommand().Flags {
+		if slices.Contains(flag.Names(), "allow-missing") {
+			return
+		}
+	}
+	t.Fatal("merge command does not expose --allow-missing")
+}
+
 func TestRecordFileKeys(t *testing.T) {
 	t.Parallel()
 
@@ -49,10 +60,210 @@ func TestRecordFileKeys(t *testing.T) {
 		Source: model.RecordSources{Database: model.DatabaseSource{Filenames: []string{"Other.FB2"}}},
 	}
 	keys := recordFileKeys(rec)
-	for _, want := range []string{"book", "book.fb2", "other.fb2"} {
+	if containsString(keys, "book") {
+		t.Fatalf("recordFileKeys() = %#v, should skip nonnumeric extensionless stem", keys)
+	}
+	for _, want := range []string{"book.fb2", "other.fb2"} {
 		if !containsString(keys, want) {
 			t.Fatalf("recordFileKeys() = %#v, missing %q", keys, want)
 		}
+	}
+}
+
+func TestRecordFileKeysKeepsNumericStem(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{ID: model.RecordID{BookID: 42, FileName: "42", Extension: "fb2"}}
+	keys := recordFileKeys(rec)
+	for _, want := range []string{"42", "42.fb2"} {
+		if !containsString(keys, want) {
+			t.Fatalf("recordFileKeys() = %#v, missing %q", keys, want)
+		}
+	}
+}
+
+func TestRecordFileKeysSkipsNumericStemForDifferentBookID(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{ID: model.RecordID{BookID: 200130, FileName: "1968", Extension: "pdf"}}
+	keys := recordFileKeys(rec)
+	if containsString(keys, "1968") {
+		t.Fatalf("recordFileKeys() = %#v, should skip numeric stem for different book ID", keys)
+	}
+	if !containsString(keys, "1968.pdf") {
+		t.Fatalf("recordFileKeys() = %#v, missing exact filename", keys)
+	}
+}
+
+func TestDatabaseIndexUsesExactAliasesForNonnumericStems(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "database.manifest.zst")
+	stem := "Megan_Lindholm_The_Wizard_of_the_Pigeons"
+	writeTestManifest(
+		t,
+		manifestPath,
+		model.Record{
+			Schema: "metabib.record/1",
+			ID:     model.RecordID{Library: "flibusta", BookID: 135445, FileName: stem, Extension: "pdf"},
+			Source: model.RecordSources{Database: model.DatabaseSource{
+				Present:   true,
+				Book:      &model.DBBook{BookID: 135445},
+				Filenames: []string{stem + ".pdf"},
+			}},
+		},
+		model.Record{
+			Schema: "metabib.record/1",
+			ID:     model.RecordID{Library: "flibusta", BookID: 135446, FileName: stem, Extension: "rar"},
+			Source: model.RecordSources{Database: model.DatabaseSource{
+				Present:   true,
+				Book:      &model.DBBook{BookID: 135446},
+				Filenames: []string{stem + ".rar"},
+			}},
+		},
+	)
+	core, logs := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+
+	index, err := loadDatabaseIndex(ctx, manifestPath, logger)
+	if err != nil {
+		t.Fatalf("loadDatabaseIndex() error = %v", err)
+	}
+	key := strings.ToLower(stem)
+	if _, ok := index.byFile[key]; ok {
+		t.Fatalf("extensionless stem stayed indexed: %#v", index.byFile)
+	}
+	if _, ok := index.ambiguousFiles[key]; ok {
+		t.Fatalf("extensionless stem marked ambiguous: %#v", index.ambiguousFiles)
+	}
+	if got := index.byFile[key+".pdf"]; got != 135445 {
+		t.Fatalf("pdf alias book ID = %d, want 135445", got)
+	}
+	if got := index.byFile[key+".rar"]; got != 135446 {
+		t.Fatalf("rar alias book ID = %d, want 135446", got)
+	}
+	if logs.FilterMessage("Ambiguous database filename ignored").Len() != 0 {
+		t.Fatalf("logs = %#v, want no ambiguous filename debug log", logs.AllUntimed())
+	}
+}
+
+func TestDatabaseIndexPrefersActiveFilenameCollision(t *testing.T) {
+	t.Parallel()
+
+	key := "eu-ukraine association agenda ( soglashenie ob associacii s ukrainoy).pdf"
+	deleted := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 350843, Deleted: "1"}}
+	active := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 350852, Deleted: "0"}}
+	index := databaseIndex{
+		byID: map[int64]model.DatabaseSource{
+			350843: deleted,
+			350852: active,
+		},
+		byFile:         make(map[string]int64),
+		ambiguousFiles: make(map[string]struct{}),
+	}
+	core, logs := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+
+	index.addDatabaseFile(key, deleted, logger)
+	index.addDatabaseFile(key, active, logger)
+
+	if got := index.byFile[key]; got != 350852 {
+		t.Fatalf("indexed book ID = %d, want active 350852", got)
+	}
+	if _, ok := index.ambiguousFiles[key]; ok {
+		t.Fatalf("filename marked ambiguous: %#v", index.ambiguousFiles)
+	}
+	if logs.FilterMessage("Ambiguous database filename ignored").Len() != 0 {
+		t.Fatalf("logs = %#v, want no ambiguous filename debug log", logs.AllUntimed())
+	}
+}
+
+func TestDatabaseIndexPrefersJoinedOwnerFilenameCollision(t *testing.T) {
+	t.Parallel()
+
+	key := "serzhantiha.doc"
+	olderDeleted := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 318346, Deleted: "1"}}
+	joinedDeleted := model.DatabaseSource{
+		Present:     true,
+		Book:        &model.DBBook{BookID: 437115, Deleted: "1"},
+		JoinedBooks: []model.DBJoinedBook{{BadID: 437115, GoodID: 438203, RealID: 481401}},
+	}
+	index := databaseIndex{
+		byID: map[int64]model.DatabaseSource{
+			318346: olderDeleted,
+			437115: joinedDeleted,
+		},
+		byFile:         make(map[string]int64),
+		ambiguousFiles: make(map[string]struct{}),
+	}
+	core, logs := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+
+	index.addDatabaseFile(key, olderDeleted, logger)
+	index.addDatabaseFile(key, joinedDeleted, logger)
+
+	if got := index.byFile[key]; got != 437115 {
+		t.Fatalf("indexed book ID = %d, want joined alias owner 437115", got)
+	}
+	if _, ok := index.ambiguousFiles[key]; ok {
+		t.Fatalf("filename marked ambiguous: %#v", index.ambiguousFiles)
+	}
+	if logs.FilterMessage("Ambiguous database filename ignored").Len() != 0 {
+		t.Fatalf("logs = %#v, want no ambiguous filename debug log", logs.AllUntimed())
+	}
+}
+
+func TestDatabaseIndexStoresJoinedAliasOwner(t *testing.T) {
+	t.Parallel()
+
+	key := "a._gyul-_nazaryants_plenniki_barsova_uschelya.rar"
+	joinedDeleted := model.DatabaseSource{
+		Present:     true,
+		Book:        &model.DBBook{BookID: 176497, Deleted: "1"},
+		JoinedBooks: []model.DBJoinedBook{{BadID: 176497, GoodID: 184249, RealID: 184249}},
+	}
+	index := databaseIndex{
+		byID:           map[int64]model.DatabaseSource{176497: joinedDeleted},
+		byFile:         make(map[string]int64),
+		ambiguousFiles: make(map[string]struct{}),
+	}
+
+	index.addDatabaseFile(key, joinedDeleted, nil)
+
+	if got := index.byFile[key]; got != 176497 {
+		t.Fatalf("indexed book ID = %d, want joined alias owner 176497", got)
+	}
+}
+
+func TestDatabaseIndexPrefersJoinedRealIDFilenameCollisionTie(t *testing.T) {
+	t.Parallel()
+
+	key := "same.fb2"
+	otherActive := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 42, Deleted: "0"}}
+	realActive := model.DatabaseSource{
+		Present:     true,
+		Book:        &model.DBBook{BookID: 44, Deleted: "0"},
+		JoinedBooks: []model.DBJoinedBook{{BadID: 43, GoodID: 44, RealID: 44}},
+	}
+	index := databaseIndex{
+		byID: map[int64]model.DatabaseSource{
+			42: otherActive,
+			44: realActive,
+		},
+		byFile:         make(map[string]int64),
+		ambiguousFiles: make(map[string]struct{}),
+	}
+
+	index.addDatabaseFile(key, otherActive, nil)
+	index.addDatabaseFile(key, realActive, nil)
+
+	if got := index.byFile[key]; got != 44 {
+		t.Fatalf("indexed book ID = %d, want joined real 44", got)
+	}
+	if _, ok := index.ambiguousFiles[key]; ok {
+		t.Fatalf("filename marked ambiguous: %#v", index.ambiguousFiles)
 	}
 }
 
@@ -343,6 +554,86 @@ func TestMergeArchiveManifestsRecordsFilenameMatch(t *testing.T) {
 	}
 }
 
+func TestMergeArchiveManifestsRecordsJoinedFilenameAliasOwner(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "books.manifest.zst")
+	archivePath := filepath.Join(dir, "books.zip")
+	entry := "A._Gyul-_Nazaryants_Plenniki_Barsova_uschelya.rar"
+	writeTestManifest(t, manifestPath, model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			FileName:  "A._Gyul-_Nazaryants_Plenniki_Barsova_uschelya",
+			Extension: "rar",
+			Archive:   &model.ArchiveInfo{Path: archivePath, Entry: entry},
+		},
+	})
+	joinedAliasOwner := model.DatabaseSource{
+		Present: true,
+		Book: &model.DBBook{
+			BookID:   176497,
+			Title:    "Пленники Барсова ущелья",
+			FileType: "rtf",
+			Deleted:  "1",
+		},
+		JoinedBooks: []model.DBJoinedBook{{BadID: 176497, GoodID: 184249, RealID: 184249}},
+	}
+	realFB2 := model.DatabaseSource{
+		Present: true,
+		Book: &model.DBBook{
+			BookID:   184249,
+			Title:    "Пленники Барсова ущелья",
+			FileType: "fb2",
+		},
+	}
+	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if _, err := mergeArchiveManifests(
+		ctx,
+		[]library.ArchiveManifestDecision{{ArchivePath: archivePath, ManifestPath: manifestPath}},
+		databaseIndex{
+			byID: map[int64]model.DatabaseSource{
+				176497: joinedAliasOwner,
+				184249: realFB2,
+			},
+			byFile: map[string]int64{strings.ToLower(entry): 176497},
+		},
+		map[string]string{archivePath: "archive-0001"},
+		false,
+		out,
+		nil,
+	); err != nil {
+		t.Fatalf("mergeArchiveManifests() error = %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("Close output error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{
+		`"method":"filename_alias"`,
+		`"locator":{"book_id":176497}`,
+		`"file_type":"rtf"`,
+		`"bad":"176497"`,
+		`"real":"184249"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("merged output = %s, missing %s", data, want)
+		}
+	}
+	if strings.Contains(string(data), `"locator":{"book_id":184249}`) ||
+		strings.Contains(string(data), `"file_type":"fb2"`) {
+		t.Fatalf("merged output = %s, should not use joined real book as filename match", data)
+	}
+}
+
 func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 	t.Parallel()
 
@@ -392,6 +683,88 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("merged output = %s, missing %s", data, want)
+		}
+	}
+}
+
+func TestMergeArchiveManifestsPrefersConflictingFilenameAliasOverNumericStem(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	manifestPath := filepath.Join(dir, "books.manifest.zst")
+	archivePath := filepath.Join(dir, "f.usr-198702-200863.zip")
+	writeTestManifest(t, manifestPath, model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			BookID:    1968,
+			FileName:  "1968",
+			Extension: "pdf",
+			Archive:   &model.ArchiveInfo{Path: archivePath, Entry: "1968.pdf"},
+		},
+	})
+	numericSource := model.DatabaseSource{
+		Present: true,
+		Book:    &model.DBBook{BookID: 1968, Title: "Numeric FB2", FileType: "fb2"},
+	}
+	aliasSource := model.DatabaseSource{
+		Present: true,
+		Book:    &model.DBBook{BookID: 200130, Title: "Exact PDF", FileType: "pdf"},
+		Filenames: []string{
+			"1968.pdf",
+		},
+	}
+	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), jsonl.CompressionNone)
+	if err != nil {
+		t.Fatalf("CreateCompressed() error = %v", err)
+	}
+	if _, err := mergeArchiveManifests(
+		ctx,
+		[]library.ArchiveManifestDecision{{ArchivePath: archivePath, ManifestPath: manifestPath}},
+		databaseIndex{
+			byID: map[int64]model.DatabaseSource{
+				1968:   numericSource,
+				200130: aliasSource,
+			},
+			byFile: map[string]int64{
+				"1968":     1968,
+				"1968.pdf": 200130,
+			},
+		},
+		map[string]string{archivePath: "archive-0001"},
+		false,
+		out,
+		nil,
+	); err != nil {
+		t.Fatalf("mergeArchiveManifests() error = %v", err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatalf("Close output error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "out.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{
+		`"method":"filename_alias"`,
+		`"input":"1968.pdf"`,
+		`"book_id":200130`,
+		`"file_type":"pdf"`,
+		`"code":"catalog_id_conflict"`,
+		`"observation":"archive","basis":"numeric_entry_stem"`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("merged output = %s, missing %s", data, want)
+		}
+	}
+	for _, unwanted := range []string{
+		`"method":"numeric_entry_stem"`,
+		`"locator":{"book_id":1968}`,
+		`"title":[{"observation":"db","value":"Numeric FB2"}]`,
+	} {
+		if strings.Contains(string(data), unwanted) {
+			t.Fatalf("merged output = %s, should not contain %s", data, unwanted)
 		}
 	}
 }
@@ -452,6 +825,27 @@ func TestFailIfReportsNotReady(t *testing.T) {
 	}
 	if err := failIfReportsNotReady([]library.ManifestReport{{Valid: true, Fresh: false}}, true); err != nil {
 		t.Fatalf("failIfReportsNotReady(stale allowed) error = %v", err)
+	}
+}
+
+func TestFilterMissingArchiveManifests(t *testing.T) {
+	t.Parallel()
+
+	plan := []library.ArchiveManifestDecision{
+		{ArchivePath: "missing.zip", ManifestPath: "missing.manifest.zst"},
+		{ArchivePath: "ready.zip", ManifestPath: "ready.manifest.zst"},
+	}
+	reports := []library.ManifestReport{
+		{Kind: "archive", SourcePath: "missing.zip", Missing: true},
+		{Kind: "archive", SourcePath: "ready.zip", Valid: true, Fresh: true},
+	}
+
+	filteredPlan, filteredReports := filterMissingArchiveManifests(plan, reports, nil)
+	if len(filteredPlan) != 1 || filteredPlan[0].ArchivePath != "ready.zip" {
+		t.Fatalf("filteredPlan = %#v", filteredPlan)
+	}
+	if len(filteredReports) != 1 || filteredReports[0].SourcePath != "ready.zip" {
+		t.Fatalf("filteredReports = %#v", filteredReports)
 	}
 }
 

@@ -64,6 +64,14 @@ func (c *DBAuthorAmbiguityCollector) AddContributor(contributor model.Contributo
 }
 
 func (c *DBAuthorAmbiguityCollector) Metadata() *model.INPXMetadata {
+	groups := c.Groups()
+	if len(groups) == 0 {
+		return nil
+	}
+	return &model.INPXMetadata{AmbiguousDBAuthors: groups}
+}
+
+func (c *DBAuthorAmbiguityCollector) Groups() []model.INPXAmbiguousDBAuthorGroup {
 	if c == nil || len(c.groups) == 0 {
 		return nil
 	}
@@ -72,18 +80,37 @@ func (c *DBAuthorAmbiguityCollector) Metadata() *model.INPXMetadata {
 		keys = append(keys, key)
 	}
 	slices.Sort(keys)
-	metadata := &model.INPXMetadata{}
+	groups := make([]model.INPXAmbiguousDBAuthorGroup, 0, len(keys))
 	for _, key := range keys {
 		group := c.groups[key]
 		if len(group.authors) < 2 {
 			continue
 		}
-		metadata.AmbiguousDBAuthors = append(metadata.AmbiguousDBAuthors, metadataGroup(group))
+		groups = append(groups, metadataGroup(group))
 	}
-	if len(metadata.AmbiguousDBAuthors) == 0 {
+	return groups
+}
+
+func MetadataForContent(metadata *model.INPXMetadata, mode ContentMode) *model.INPXMetadata {
+	if metadata == nil {
 		return nil
 	}
-	return metadata
+	var groups []model.INPXAmbiguousDBAuthorGroup
+	switch mode {
+	case ContentFB2:
+		groups = metadata.AmbiguousDBAuthorsFB2
+	case ContentUSR:
+		groups = metadata.AmbiguousDBAuthorsUSR
+	case ContentAll:
+		groups = metadata.AmbiguousDBAuthors
+	}
+	if len(groups) == 0 && !metadata.ScopedDBAuthorAmbiguity {
+		groups = metadata.AmbiguousDBAuthors
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	return &model.INPXMetadata{AmbiguousDBAuthors: groups}
 }
 
 func NewAuthorDisambiguator(metadata *model.INPXMetadata, log *zap.Logger, verbose bool) *AuthorDisambiguator {

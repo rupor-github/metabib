@@ -60,6 +60,7 @@ const (
 type Options struct {
 	InputPrefix         string
 	OutputPrefix        string
+	ContentMode         inpxutil.ContentMode
 	Additional          bool
 	SequenceMode        SequenceMode
 	FB2Preference       FB2Preference
@@ -186,6 +187,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if opts.FB2PathSeparator == "" {
 		opts.FB2PathSeparator = " / "
 	}
+	contentMode, err := inpxutil.ParseContentMode(string(opts.ContentMode), inpxutil.ContentFB2)
+	if err != nil {
+		return stats, err
+	}
+	opts.ContentMode = contentMode
 	var stream *streamINPXWriter
 	var tmpPath string
 	var annotationsTmpPath string
@@ -205,7 +211,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	}()
 
 	var meta inpxutil.Metadata
-	_, _, err := inpxutil.StreamDatasetInput(
+	_, _, err = inpxutil.StreamDatasetInput(
 		ctx,
 		opts.InputPrefix,
 		opts.Log,
@@ -216,7 +222,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 				opts.SourceLib = dataset.Library
 			}
 			if opts.DisambiguateAuthors && dataset.Database != nil {
-				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(dataset.Database.INPX, opts.Log, opts.Verbose)
+				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(
+					inpxutil.MetadataForContent(dataset.Database.INPX, opts.ContentMode),
+					opts.Log,
+					opts.Verbose,
+				)
 			}
 			stats.DumpDate = meta.DumpDate
 			outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
@@ -415,6 +425,13 @@ func newStreamINPXWriter(
 }
 
 func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
+	keep, err := inpxutil.RecordMatchesContent(w.opts.ContentMode, rec)
+	if err != nil {
+		return err
+	}
+	if !keep {
+		return nil
+	}
 	target, index, ok, err := w.recordTarget(rec)
 	if err != nil || !ok {
 		return err
@@ -430,12 +447,15 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 	if err != nil || !ok {
 		return err
 	}
+	if err := w.ensureActiveWriter(); err != nil {
+		return err
+	}
 	if w.annotations != nil {
 		name := fields.File
 		if fields.Ext != "" {
 			name += "." + fields.Ext
 		}
-		if err := w.annotations.WriteRecord(name, fb2Annotation(rec)); err != nil {
+		if err := w.annotations.WriteRecord(name, recordAnnotation(rec)); err != nil {
 			return err
 		}
 	}
@@ -509,7 +529,19 @@ func (w *streamINPXWriter) openNext() error {
 	if w.nextArchive >= len(w.archives) {
 		return errors.New("FLibrary INPX record references archive past declared list")
 	}
-	archive := w.archives[w.nextArchive]
+	w.active = w.nextArchive
+	w.activeStart = time.Now()
+	w.activeStats = w.stats
+	w.activeDiag = entryDiagnostics{}
+	w.nextArchive++
+	return nil
+}
+
+func (w *streamINPXWriter) ensureActiveWriter() error {
+	if w.bw != nil {
+		return nil
+	}
+	archive := w.archives[w.active]
 	name := strings.TrimSuffix(archive.Meta.Name, filepath.Ext(archive.Meta.Name)) + ".inp"
 	zw, err := w.zw.Create(name)
 	if err != nil {
@@ -521,16 +553,15 @@ func (w *streamINPXWriter) openNext() error {
 			return err
 		}
 	}
-	w.active = w.nextArchive
-	w.activeStart = time.Now()
-	w.activeStats = w.stats
-	w.activeDiag = entryDiagnostics{}
-	w.nextArchive++
 	return nil
 }
 
 func (w *streamINPXWriter) finishActive() error {
 	archive := w.archives[w.active]
+	if w.bw == nil {
+		w.active = -1
+		return nil
+	}
 	if err := w.bw.Flush(); err != nil {
 		return err
 	}
@@ -906,16 +937,18 @@ func compilationSectionTree(sections []model.FB2BodySectionFingerprint) *compila
 	return root
 }
 
-func fb2Annotation(rec model.DatasetRecord) string {
+func recordAnnotation(rec model.DatasetRecord) string {
 	if rec.Claims.Bibliographic == nil {
 		return ""
 	}
-	for _, claim := range rec.Claims.Bibliographic.Annotation {
-		if claim.Observation != "fb2" {
-			continue
-		}
-		if annotation, ok := claim.Value.(string); ok {
-			return annotation
+	for _, observation := range []string{"fb2", "fbd"} {
+		for _, claim := range rec.Claims.Bibliographic.Annotation {
+			if claim.Observation != observation {
+				continue
+			}
+			if annotation, ok := claim.Value.(string); ok {
+				return annotation
+			}
 		}
 	}
 	return ""
@@ -945,12 +978,12 @@ func buildRecordFields(
 		return recordFields{}, view, entryDiagnostics{}, false, err
 	}
 	diagnostics := entryDiagnostics{}
-	ext := view.Catalog.FileType
+	ext := inpxutil.ArchiveRecordExtension(rec)
+	if ext == "" {
+		ext = view.Catalog.FileType
+	}
 	if ext == "" {
 		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
-	}
-	if !strings.EqualFold(strings.TrimPrefix(ext, "."), "fb2") {
-		return recordFields{}, view, entryDiagnostics{}, false, nil
 	}
 	title := view.Database.Title
 	if title == "" {

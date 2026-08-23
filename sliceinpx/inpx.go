@@ -61,6 +61,7 @@ const (
 type Options struct {
 	InputPrefix         string
 	OutputPrefix        string
+	ContentMode         inpxutil.ContentMode
 	Additional          bool
 	SequenceMode        SequenceMode
 	FB2Preference       FB2Preference
@@ -300,6 +301,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if opts.FB2PathSeparator == "" {
 		opts.FB2PathSeparator = " / "
 	}
+	contentMode, err := inpxutil.ParseContentMode(string(opts.ContentMode), inpxutil.ContentAll)
+	if err != nil {
+		return stats, err
+	}
+	opts.ContentMode = contentMode
 	where, err := optionalTemplate("where", opts.Where)
 	if err != nil {
 		return stats, err
@@ -338,7 +344,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			meta = inpxutil.DatasetMetadata(dataset)
 			inpxutil.EnsureDumpDate(&meta, opts.Log)
 			if opts.DisambiguateAuthors && dataset.Database != nil {
-				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(dataset.Database.INPX, opts.Log, opts.Verbose)
+				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(
+					inpxutil.MetadataForContent(dataset.Database.INPX, opts.ContentMode),
+					opts.Log,
+					opts.Verbose,
+				)
 			}
 			stats.DumpDate = meta.DumpDate
 			outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
@@ -525,6 +535,14 @@ func newStreamINPXWriter(
 
 func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 	w.inputRecord++
+	contentKeep, err := inpxutil.RecordMatchesContent(w.opts.ContentMode, rec)
+	if err != nil {
+		return err
+	}
+	if !contentKeep {
+		w.stats.FilteredRecords++
+		return nil
+	}
 	archive, index, ok, err := w.recordTarget(rec)
 	if err != nil {
 		return err
@@ -616,7 +634,7 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 		if fields.Ext != "" {
 			name += "." + fields.Ext
 		}
-		if err := w.annotations.WriteRecord(archive.Meta.Name, name, fb2Annotation(rec)); err != nil {
+		if err := w.annotations.WriteRecord(archive.Meta.Name, name, recordAnnotation(rec)); err != nil {
 			return err
 		}
 	}
@@ -655,12 +673,12 @@ func (w *streamINPXWriter) buildRecordRows(
 		return recordFields{}, view, nil, entryDiagnostics{}, false, err
 	}
 	diagnostics := entryDiagnostics{}
-	ext := view.Catalog.FileType
+	ext := inpxutil.ArchiveRecordExtension(rec)
+	if ext == "" {
+		ext = view.Catalog.FileType
+	}
 	if ext == "" {
 		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
-	}
-	if !strings.EqualFold(strings.TrimPrefix(ext, "."), "fb2") {
-		return recordFields{}, view, nil, diagnostics, false, nil
 	}
 	title := view.Database.Title
 	if title == "" {
@@ -1367,16 +1385,18 @@ func compilationsOutputPathFor(outputPath string) string {
 	return strings.TrimSuffix(outputPath, ext) + "_compilations.zip"
 }
 
-func fb2Annotation(rec model.DatasetRecord) string {
+func recordAnnotation(rec model.DatasetRecord) string {
 	if rec.Claims.Bibliographic == nil {
 		return ""
 	}
-	for _, claim := range rec.Claims.Bibliographic.Annotation {
-		if claim.Observation != "fb2" {
-			continue
-		}
-		if annotation, ok := claim.Value.(string); ok {
-			return annotation
+	for _, observation := range []string{"fb2", "fbd"} {
+		for _, claim := range rec.Claims.Bibliographic.Annotation {
+			if claim.Observation != observation {
+				continue
+			}
+			if annotation, ok := claim.Value.(string); ok {
+				return annotation
+			}
 		}
 	}
 	return ""

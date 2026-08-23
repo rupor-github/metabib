@@ -58,6 +58,7 @@ type Limits struct {
 type Options struct {
 	InputPrefix         string
 	OutputPrefix        string
+	ContentMode         inpxutil.ContentMode
 	Format              Format
 	SequenceMode        SequenceMode
 	FB2Preference       FB2Preference
@@ -153,6 +154,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	if opts.Limits == (Limits{}) {
 		opts.Limits = DefaultLimits()
 	}
+	contentMode, err := inpxutil.ParseContentMode(string(opts.ContentMode), inpxutil.ContentFB2)
+	if err != nil {
+		return stats, err
+	}
+	opts.ContentMode = contentMode
 	var stream *streamINPXWriter
 	var tmpPath string
 	cleanupTemp := true
@@ -171,7 +177,11 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			meta = inpxutil.DatasetMetadata(dataset)
 			inpxutil.EnsureDumpDate(&meta, opts.Log)
 			if opts.DisambiguateAuthors && dataset.Database != nil {
-				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(dataset.Database.INPX, opts.Log, opts.Verbose)
+				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(
+					inpxutil.MetadataForContent(dataset.Database.INPX, opts.ContentMode),
+					opts.Log,
+					opts.Verbose,
+				)
 			}
 			stats.DumpDate = meta.DumpDate
 			outputPath, err := inpxutil.OutputPath(opts.OutputPrefix, meta)
@@ -238,21 +248,22 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 }
 
 type streamINPXWriter struct {
-	path        string
-	meta        inpxutil.Metadata
-	opts        Options
-	zw          *zip.Writer
-	f           *os.File
-	archives    []*inpxutil.DatasetArchiveRows
-	archiveByID map[string]int
-	nextArchive int
-	active      int
-	activeIndex int
-	activeStart time.Time
-	activeStats Stats
-	activeDiag  entryDiagnostics
-	bw          *bufio.Writer
-	stats       Stats
+	path                string
+	meta                inpxutil.Metadata
+	opts                Options
+	zw                  *zip.Writer
+	f                   *os.File
+	archives            []*inpxutil.DatasetArchiveRows
+	archiveByID         map[string]int
+	nextArchive         int
+	active              int
+	activeIndex         int
+	activeStart         time.Time
+	activeStats         Stats
+	activeDiag          entryDiagnostics
+	bw                  *bufio.Writer
+	pendingDummyIndexes []int
+	stats               Stats
 }
 
 func newStreamINPXWriter(path string, meta inpxutil.Metadata, dataset model.Dataset, opts Options) (*streamINPXWriter, error) {
@@ -281,6 +292,13 @@ func newStreamINPXWriter(path string, meta inpxutil.Metadata, dataset model.Data
 }
 
 func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
+	keep, err := inpxutil.RecordMatchesContent(w.opts.ContentMode, rec)
+	if err != nil {
+		return err
+	}
+	if !keep {
+		return nil
+	}
 	target, index, ok, err := w.recordTarget(rec)
 	if err != nil || !ok {
 		return err
@@ -346,19 +364,33 @@ func (w *streamINPXWriter) openNext() error {
 	if w.nextArchive >= len(w.archives) {
 		return errors.New("INPX record references archive past declared list")
 	}
-	archive := w.archives[w.nextArchive]
+	w.active = w.nextArchive
+	w.activeIndex = 0
+	w.activeStart = time.Now()
+	w.activeStats = w.stats
+	w.activeDiag = entryDiagnostics{}
+	w.pendingDummyIndexes = nil
+	w.nextArchive++
+	return nil
+}
+
+func (w *streamINPXWriter) ensureActiveWriter() error {
+	if w.bw != nil {
+		return nil
+	}
+	archive := w.archives[w.active]
 	name := strings.TrimSuffix(archive.Meta.Name, filepath.Ext(archive.Meta.Name)) + ".inp"
 	zw, err := w.zw.Create(name)
 	if err != nil {
 		return fmt.Errorf("create INPX entry %q: %w", name, err)
 	}
 	w.bw = bufio.NewWriter(zw)
-	w.active = w.nextArchive
-	w.activeIndex = 0
-	w.activeStart = time.Now()
-	w.activeStats = w.stats
-	w.activeDiag = entryDiagnostics{}
-	w.nextArchive++
+	for _, index := range w.pendingDummyIndexes {
+		if err := w.writeDummyToActive(index); err != nil {
+			return err
+		}
+	}
+	w.pendingDummyIndexes = nil
 	return nil
 }
 
@@ -367,6 +399,19 @@ func (w *streamINPXWriter) writeMissing(index int) error {
 	if inpxutil.InRanges(archive.Meta.Ignored, index) {
 		return nil
 	}
+	return w.writeDummy(index)
+}
+
+func (w *streamINPXWriter) writeDummy(index int) error {
+	if w.bw == nil {
+		w.pendingDummyIndexes = append(w.pendingDummyIndexes, index)
+		return nil
+	}
+	return w.writeDummyToActive(index)
+}
+
+func (w *streamINPXWriter) writeDummyToActive(index int) error {
+	archive := w.archives[w.active]
 	w.stats.Files++
 	w.stats.Dummy++
 	if _, err := w.bw.WriteString(dummyLine(index + 1)); err != nil {
@@ -378,15 +423,20 @@ func (w *streamINPXWriter) writeMissing(index int) error {
 
 func (w *streamINPXWriter) writeRecordAt(rec model.DatasetRecord, index int) error {
 	archive := w.archives[w.active]
-	w.stats.Files++
 	line, view, diagnostics, err := recordLine(rec, w.opts)
 	if err != nil {
 		return err
 	}
 	if line == "" {
-		line = dummyLine(index + 1)
-		w.stats.Dummy++
+		if err := w.writeDummy(index); err != nil {
+			return err
+		}
+		w.activeIndex++
+		return nil
 	} else {
+		if err := w.ensureActiveWriter(); err != nil {
+			return err
+		}
 		w.stats.Records++
 		if view.HasDatabase {
 			w.stats.DBRecords++
@@ -395,6 +445,7 @@ func (w *streamINPXWriter) writeRecordAt(rec model.DatasetRecord, index int) err
 		}
 		w.activeDiag.add(diagnostics)
 	}
+	w.stats.Files++
 	if _, err := w.bw.WriteString(line); err != nil {
 		name := strings.TrimSuffix(archive.Meta.Name, filepath.Ext(archive.Meta.Name)) + ".inp"
 		return fmt.Errorf("write INPX entry %q: %w", name, err)
@@ -410,6 +461,11 @@ func (w *streamINPXWriter) finishActive() error {
 			return err
 		}
 		w.activeIndex++
+	}
+	if w.bw == nil {
+		w.pendingDummyIndexes = nil
+		w.active = -1
+		return nil
 	}
 	if err := w.bw.Flush(); err != nil {
 		return err
@@ -512,7 +568,7 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 	if err != nil {
 		return "", view, entryDiagnostics{}, err
 	}
-	if !view.HasDatabase && !view.HasFB2 {
+	if !view.HasDatabase && !view.HasFB2 && !view.HasSidecar {
 		return "", view, entryDiagnostics{}, nil
 	}
 	diagnostics := entryDiagnostics{}
@@ -531,7 +587,10 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 	if fileName == "" {
 		fileName = datasetBookID(rec)
 	}
-	ext := view.Catalog.FileType
+	ext := inpxutil.ArchiveRecordExtension(rec)
+	if ext == "" {
+		ext = view.Catalog.FileType
+	}
 	if ext == "" {
 		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
 	}

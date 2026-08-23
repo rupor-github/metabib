@@ -85,6 +85,127 @@ func TestGenerateFiltersAndSplitsByLanguage(t *testing.T) {
 	}
 }
 
+func TestGenerateDefaultsToAllContent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	fb2 := sliceRecord("archive-0001", 0, 1, "ru")
+	pdf := sliceNonFB2Record("archive-0001", 1, 2, "ru")
+	writeSliceDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      2,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives:     []model.DatasetArchive{{ID: "archive-0001", Name: "books.zip", Entries: 2}},
+	}, fb2, pdf)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:      prefix,
+		OutputPrefix:     filepath.Join(dir, "slice"),
+		Where:            `true`,
+		CommentTemplate:  "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:  "{{ .DumpDate }}\r\n",
+		SequenceMode:     SequenceAuthor,
+		FB2Preference:    PreferComplement,
+		FlattenMode:      FlattenAll,
+		DedupMode:        DedupCaseInsensitive,
+		FB2PathSeparator: " / ",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Records != 2 || stats.Files != 2 || stats.FilteredRecords != 0 {
+		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestGenerateAdditionalUSRSidecarAnnotations(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	rec := sliceNonFB2Record("archive-0001", 0, 42, "ru")
+	rec.Observations = append(
+		rec.Observations,
+		model.Observation{ID: "fbd", Source: "archive-0001", Kind: "fbd_description", Status: "present"},
+	)
+	rec.Claims.Bibliographic.Annotation = []model.Claim{{Observation: "fbd", Value: "Sidecar annotation & notes"}}
+	writeSliceDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives:     []model.DatasetArchive{{ID: "archive-0001", Name: "usr.zip", Entries: 1}},
+	}, rec)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:      prefix,
+		OutputPrefix:     filepath.Join(dir, "slice"),
+		ContentMode:      inpxutil.ContentUSR,
+		Additional:       true,
+		CommentTemplate:  "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:  "{{ .DumpDate }}\r\n",
+		SequenceMode:     SequenceAuthor,
+		FB2Preference:    PreferComplement,
+		FlattenMode:      FlattenAll,
+		DedupMode:        DedupCaseInsensitive,
+		FB2PathSeparator: " / ",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	entries := readSliceZipEntries(t, stats.AdditionalOutputPath)
+	want := "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<folder name=\"usr.zip\">\n" +
+		"\t<file name=\"42.pdf\">\n\t\t<p>Sidecar annotation &amp; notes</p>\n\t</file>\n</folder>\n"
+	if entries["usr.zip"] != want {
+		t.Fatalf("annotation entry = %q", entries["usr.zip"])
+	}
+}
+
+func TestGenerateContentFilterRunsBeforeWhere(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "all")
+	fb2 := sliceRecord("archive-0001", 0, 1, "ru")
+	pdf := sliceNonFB2Record("archive-0001", 1, 2, "ru")
+	writeSliceDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      2,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives:     []model.DatasetArchive{{ID: "archive-0001", Name: "books.zip", Entries: 2}},
+	}, fb2, pdf)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:      prefix,
+		OutputPrefix:     filepath.Join(dir, "slice"),
+		ContentMode:      inpxutil.ContentFB2,
+		Where:            `true`,
+		CommentTemplate:  "{{ .DatabaseName }} {{ .DisplayDate }}",
+		VersionTemplate:  "{{ .DumpDate }}\r\n",
+		SequenceMode:     SequenceAuthor,
+		FB2Preference:    PreferComplement,
+		FlattenMode:      FlattenAll,
+		DedupMode:        DedupCaseInsensitive,
+		FB2PathSeparator: " / ",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Records != 1 || stats.Files != 1 || stats.FilteredRecords != 1 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	entries := readSliceZipEntries(t, stats.OutputPath)
+	if strings.Contains(entries["books.inp"], inpxutil.FieldSep+"pdf"+inpxutil.FieldSep) {
+		t.Fatalf("content-filtered PDF reached --where/output: %q", entries["books.inp"])
+	}
+}
+
 func TestGenerateRejectsDatabaseOnlyDataset(t *testing.T) {
 	t.Parallel()
 
@@ -370,6 +491,15 @@ func sliceRecord(source string, index int, bookID int64, lang string) model.Data
 	rec.Record.Locator = model.RecordLocator{Kind: "archive_entry", Source: source, Index: &index, BookID: &bookID}
 	rec.Artifacts[0].Name = strconv.FormatInt(bookID, 10) + ".fb2"
 	rec.Artifacts[0].Occurrences = []model.Occurrence{{Archive: source, Entry: rec.Artifacts[0].Name, Index: index, UncompressedSize: 123}}
+	return rec
+}
+
+func sliceNonFB2Record(source string, index int, bookID int64, lang string) model.DatasetRecord {
+	rec := sliceRecord(source, index, bookID, lang)
+	rec.Artifacts[0].Name = strconv.FormatInt(bookID, 10) + ".pdf"
+	rec.Artifacts[0].MediaType = "application/pdf"
+	rec.Artifacts[0].Occurrences[0].Entry = rec.Artifacts[0].Name
+	rec.Claims.Catalog.Status = []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "pdf"}}}
 	return rec
 }
 

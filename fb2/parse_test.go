@@ -1,12 +1,17 @@
 package fb2
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/xml"
 	"errors"
 	"strings"
 	"testing"
+
+	unicodeenc "golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 const sampleFB2 = `<?xml version="1.0" encoding="utf-8"?>
@@ -58,6 +63,91 @@ func TestParseTitleInfoOnly(t *testing.T) {
 	if len(titleInfo.Sequences) != 1 || len(titleInfo.Sequences[0].Nested) != 1 {
 		t.Fatalf("sequences = %#v", titleInfo.Sequences)
 	}
+}
+
+func TestParseUnicodeBOMEncodings(t *testing.T) {
+	t.Parallel()
+
+	const document = `<?xml version="1.0" encoding="$ENC"?>
+<FictionBook><description><title-info><book-title>Привет</book-title></title-info></description></FictionBook>`
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{
+			name: "utf-8 bom",
+			data: append(
+				[]byte{0xEF, 0xBB, 0xBF},
+				[]byte(strings.ReplaceAll(document, "$ENC", "utf-8"))...,
+			),
+		},
+		{
+			name: "utf-16 be bom",
+			data: encodeXML(
+				t,
+				strings.ReplaceAll(document, "$ENC", "utf-16"),
+				unicodeenc.UTF16(unicodeenc.BigEndian, unicodeenc.UseBOM).NewEncoder(),
+			),
+		},
+		{
+			name: "utf-16 le bom",
+			data: encodeXML(
+				t,
+				strings.ReplaceAll(document, "$ENC", "utf-16"),
+				unicodeenc.UTF16(unicodeenc.LittleEndian, unicodeenc.UseBOM).NewEncoder(),
+			),
+		},
+		{
+			name: "utf-32 be bom",
+			data: encodeUTF32XML(strings.ReplaceAll(document, "$ENC", "utf-32"), binary.BigEndian),
+		},
+		{
+			name: "utf-32 le bom",
+			data: encodeUTF32XML(strings.ReplaceAll(document, "$ENC", "utf-32"), binary.LittleEndian),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			src, err := Parse(bytes.NewReader(tt.data), false)
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if !src.Present || src.Description == nil || src.Description.TitleInfo == nil ||
+				src.Description.TitleInfo.Title != "Привет" {
+				t.Fatalf("source = %#v", src)
+			}
+		})
+	}
+}
+
+func encodeXML(t *testing.T, text string, encoder transform.Transformer) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+	w := transform.NewWriter(&buf, encoder)
+	if _, err := w.Write([]byte(text)); err != nil {
+		t.Fatalf("write transformed XML: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close transformed XML: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func encodeUTF32XML(text string, order binary.ByteOrder) []byte {
+	var buf bytes.Buffer
+	var bom [4]byte
+	order.PutUint32(bom[:], 0xFEFF)
+	buf.Write(bom[:])
+	for _, r := range text {
+		var raw [4]byte
+		order.PutUint32(raw[:], uint32(r))
+		buf.Write(raw[:])
+	}
+	return buf.Bytes()
 }
 
 func TestParseWithBodyFingerprints(t *testing.T) {

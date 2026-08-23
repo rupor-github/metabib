@@ -1,6 +1,7 @@
 package library
 
 import (
+	"archive/zip"
 	"bufio"
 	"context"
 	"crypto/md5"
@@ -25,10 +26,14 @@ import (
 )
 
 const (
-	archiveManifestSchema  = "metabib.archive_manifest/1"
-	databaseManifestSchema = "metabib.database_manifest/1"
-	manifestExt            = ".manifest.zst"
-	sourceMTimeTolerance   = time.Microsecond
+	archiveManifestSchemaV1 = "metabib.archive_manifest/1"
+	archiveManifestSchemaV2 = "metabib.archive_manifest/2"
+	databaseManifestSchema  = "metabib.database_manifest/2"
+	archiveManifestSchema   = archiveManifestSchemaV2
+	archiveScopeFB2         = "fb2"
+	archiveScopeUSR         = "usr"
+	manifestExt             = ".manifest.zst"
+	sourceMTimeTolerance    = time.Microsecond
 )
 
 type ArchiveManifestDecision struct {
@@ -37,8 +42,10 @@ type ArchiveManifestDecision struct {
 	Use                 bool
 	Create              bool
 	ArchiveMD5          string
+	ArchiveMD5Elapsed   time.Duration
 	Records             int64
 	FB2BodyFingerprints bool
+	Scope               string
 }
 
 type DatabaseManifestDecision struct {
@@ -70,10 +77,16 @@ func (r ManifestReport) Ready(allowStale bool) bool {
 }
 
 type manifestProcessing struct {
-	ParseFB2            bool `json:"parse_fb2"`
-	FB2DescriptionTree  bool `json:"fb2_description_tree"`
-	FB2BodyFingerprints bool `json:"fb2_body_fingerprints"`
-	ArchiveContentMD5   bool `json:"archive_content_md5"`
+	ParseFB2                bool                             `json:"parse_fb2"`
+	FB2DescriptionTree      bool                             `json:"fb2_description_tree"`
+	FB2BodyFingerprints     bool                             `json:"fb2_body_fingerprints"`
+	ArchiveContentMD5       bool                             `json:"archive_content_md5"`
+	NestedArchiveInspection *manifestNestedArchiveInspection `json:"nested_archive_inspection,omitempty"`
+}
+
+type manifestNestedArchiveInspection struct {
+	Enabled              bool  `json:"enabled"`
+	MaxCompressedSizeMiB int64 `json:"max_compressed_size_mib"`
 }
 
 type manifestFeatures struct {
@@ -88,6 +101,7 @@ type manifestFeature struct {
 type archiveManifestHeader struct {
 	Schema     string                `json:"schema"`
 	Source     ArchiveManifestSource `json:"source"`
+	Scope      string                `json:"scope,omitempty"`
 	Processing manifestProcessing    `json:"processing"`
 	Features   *manifestFeatures     `json:"features,omitempty"`
 	Created    string                `json:"created"`
@@ -350,7 +364,7 @@ func ForEachManifestRecord(ctx context.Context, manifestPath string, handle func
 		}
 		return 0, fmt.Errorf("read manifest header %q: %w", manifestPath, err)
 	}
-	if header.Schema != archiveManifestSchema && header.Schema != databaseManifestSchema {
+	if header.Schema != archiveManifestSchemaV1 && header.Schema != archiveManifestSchemaV2 && header.Schema != databaseManifestSchema {
 		return 0, fmt.Errorf("manifest %q has unexpected schema %q", manifestPath, header.Schema)
 	}
 	if header.Records < 0 {
@@ -609,7 +623,11 @@ func planArchiveManifest(
 	verbose bool,
 ) (ArchiveManifestDecision, error) {
 	start := time.Now()
-	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
+	scope, err := classifyArchiveScope(archive, log, verbose)
+	if err != nil {
+		return ArchiveManifestDecision{}, err
+	}
+	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath, Scope: scope}
 	archiveInfo, err := os.Stat(archive)
 	if err != nil {
 		return decision, fmt.Errorf("stat archive %q: %w", archive, err)
@@ -643,14 +661,16 @@ func planArchiveManifest(
 		)
 	}
 	header, err := readArchiveManifestHeader(manifestPath)
-	if err == nil && archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), true) {
+	if err == nil && archiveManifestLightMatchesForScope(header, cfg, archive, decision.Scope, archiveInfo.ModTime(), true) {
 		if checkMD5 {
+			md5Start := time.Now()
 			archiveMD5, err := fileMD5(ctx, archive)
+			decision.ArchiveMD5Elapsed += time.Since(md5Start)
 			if err != nil {
 				return decision, err
 			}
 			decision.ArchiveMD5 = archiveMD5
-			if !archiveManifestMatches(header, cfg, archive, archiveMD5) {
+			if !archiveManifestMatchesForScope(header, cfg, archive, decision.Scope, archiveMD5) {
 				if !cfg.Processing.Rebuild {
 					if log != nil {
 						log.Warn(
@@ -662,7 +682,11 @@ func planArchiveManifest(
 					return decision, nil
 				}
 				if log != nil {
-					log.Warn("Archive manifest checksum does not match source archive; rebuilding", zap.String("archive", archive), zap.String("manifest", manifestPath))
+					log.Warn(
+						"Archive manifest checksum does not match source archive; rebuilding",
+						zap.String("archive", archive),
+						zap.String("manifest", manifestPath),
+					)
 				}
 				decision.Create = true
 				return decision, nil
@@ -716,7 +740,12 @@ func planArchiveManifest(
 			return decision, nil
 		}
 		if log != nil {
-			log.Warn("Archive manifest header could not be read; rebuilding", zap.String("archive", archive), zap.String("manifest", manifestPath), zap.Error(err))
+			log.Warn(
+				"Archive manifest header could not be read; rebuilding",
+				zap.String("archive", archive),
+				zap.String("manifest", manifestPath),
+				zap.Error(err),
+			)
 		}
 	} else if !cfg.Processing.Rebuild {
 		if log != nil {
@@ -751,7 +780,11 @@ func validateArchiveManifest(
 	log *zap.Logger,
 	verbose bool,
 ) (ArchiveManifestDecision, ManifestReport, error) {
-	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath}
+	scope, err := classifyArchiveScope(archive, nil, false)
+	if err != nil {
+		return ArchiveManifestDecision{}, ManifestReport{}, err
+	}
+	decision := ArchiveManifestDecision{ArchivePath: archive, ManifestPath: manifestPath, Scope: scope}
 	report := ManifestReport{Kind: "archive", SourcePath: archive, ManifestPath: manifestPath}
 	archiveInfo, err := os.Stat(archive)
 	if err != nil {
@@ -779,13 +812,14 @@ func validateArchiveManifest(
 	decision.Records = header.Records
 	decision.FB2BodyFingerprints = archiveManifestHasFB2BodyFingerprints(header)
 	decision.Use = true
-	if !archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), false) {
+	if !archiveManifestLightMatchesForScope(header, cfg, archive, decision.Scope, archiveInfo.ModTime(), false) {
 		report.Valid = false
 		report.Reason = "manifest does not match current archive inputs"
 		logManifestReport(log, report, verbose)
 		return decision, report, nil
 	}
-	if manifestInfo.ModTime().After(archiveInfo.ModTime()) && archiveManifestLightMatches(header, cfg, archive, archiveInfo.ModTime(), true) {
+	if manifestInfo.ModTime().After(archiveInfo.ModTime()) &&
+		archiveManifestLightMatchesForScope(header, cfg, archive, decision.Scope, archiveInfo.ModTime(), true) {
 		report.Fresh = true
 	} else {
 		report.Reason = "manifest is older than source archive or source timestamp changed"
@@ -796,7 +830,7 @@ func validateArchiveManifest(
 			return decision, report, err
 		}
 		decision.ArchiveMD5 = archiveMD5
-		if !archiveManifestMatches(header, cfg, archive, archiveMD5) {
+		if !archiveManifestMatchesForScope(header, cfg, archive, decision.Scope, archiveMD5) {
 			report.Valid = false
 			report.Reason = "manifest checksum does not match source archive"
 		} else {
@@ -878,6 +912,57 @@ func logArchiveManifestSummary(log *zap.Logger, reports []ManifestReport) {
 	log.Warn("Manifest not ready", fields...)
 }
 
+func classifyArchiveScope(archive string, log *zap.Logger, verbose bool) (string, error) {
+	zr, err := zip.OpenReader(archive)
+	if err != nil {
+		return "", fmt.Errorf("open archive %q for scope classification: %w", archive, err)
+	}
+	defer zr.Close()
+
+	var fb2Books, usrBooks int
+	usrArchive := isUSRArchivePath(archive)
+	for idx, file := range zr.File {
+		name := zipEntryName(file)
+		if file.FileInfo().IsDir() || isIgnoredArchiveEntry(name) || isFBDEntry(name) {
+			continue
+		}
+		if isFB2Entry(name) || (usrArchive && isNestedFB2Entry(name)) {
+			fb2Books++
+			continue
+		}
+		usrBooks++
+		if verbose && log != nil {
+			log.Debug(
+				"Archive non-FB2 entry classified",
+				zap.String("archive", archive),
+				zap.String("entry", name),
+				zap.Int("index", idx),
+				zap.String("extension", strings.TrimPrefix(filepath.Ext(name), ".")),
+			)
+		}
+	}
+	if usrArchive {
+		return archiveScopeUSR, nil
+	}
+	if fb2Books > 0 {
+		return archiveScopeFB2, nil
+	}
+	return archiveScopeUSR, nil
+}
+
+func isUSRArchivePath(archive string) bool {
+	base := strings.ToLower(filepath.Base(archive))
+	if strings.Contains(base, ".usr-") || strings.Contains(base, ".usr.") || strings.HasPrefix(base, "usr-") {
+		return true
+	}
+	for _, component := range strings.FieldsFunc(strings.ToLower(filepath.Dir(archive)), func(r rune) bool { return r == '/' || r == '\\' }) {
+		if component == "usr" || strings.HasSuffix(component, "_usr") || strings.HasSuffix(component, "-usr") {
+			return true
+		}
+	}
+	return false
+}
+
 func archiveManifestPath(cfg *config.Config, archive string) string {
 	base := strings.TrimSuffix(filepath.Base(archive), filepath.Ext(archive)) + manifestExt
 	if cfg.Processing.Manifests.ArchiveDir != "" {
@@ -932,6 +1017,10 @@ func sameCleanPath(left string, right string) bool {
 		right = rightAbs
 	}
 	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func archivePathBase(path string) string {
+	return filepath.Base(strings.ReplaceAll(path, `\`, "/"))
 }
 
 func collidingArchiveManifestPath(cfg *config.Config, archive string, used map[string]struct{}) string {
@@ -1010,7 +1099,7 @@ func readArchiveManifestHeader(path string) (archiveManifestHeader, error) {
 	if err := readManifestHeader(path, &header); err != nil {
 		return header, err
 	}
-	if header.Schema != archiveManifestSchema {
+	if header.Schema != archiveManifestSchemaV1 && header.Schema != archiveManifestSchemaV2 {
 		return header, fmt.Errorf("manifest %q has unexpected schema %q", path, header.Schema)
 	}
 	return header, nil
@@ -1090,6 +1179,17 @@ func processingManifest(cfg *config.Config) manifestProcessing {
 	}
 }
 
+func archiveProcessingManifest(cfg *config.Config, scope string) manifestProcessing {
+	processing := processingManifest(cfg)
+	if scope == archiveScopeUSR {
+		processing.NestedArchiveInspection = &manifestNestedArchiveInspection{
+			Enabled:              cfg.Processing.NestedArchiveInspection.Enabled,
+			MaxCompressedSizeMiB: cfg.Processing.NestedArchiveInspection.MaxCompressedSizeMiB,
+		}
+	}
+	return processing
+}
+
 func manifestFeaturesFor(cfg *config.Config) *manifestFeatures {
 	if !cfg.Processing.FB2BodyFingerprints {
 		return nil
@@ -1106,19 +1206,44 @@ func archiveManifestHasFB2BodyFingerprints(header archiveManifestHeader) bool {
 		header.Features.FB2BodyFingerprints.SectionEncoding == model.FB2BodySectionEncoding
 }
 
-func archiveManifestMatches(header archiveManifestHeader, cfg *config.Config, archive string, md5sum string) bool {
-	return archiveManifestLightMatches(header, cfg, archive, time.Time{}, false) &&
+func archiveManifestMatchesForScope(header archiveManifestHeader, cfg *config.Config, archive string, scope string, md5sum string) bool {
+	return archiveManifestLightMatchesForScope(header, cfg, archive, scope, time.Time{}, false) &&
 		header.Source.MD5 == md5sum
 }
 
 func archiveManifestLightMatches(header archiveManifestHeader, cfg *config.Config, archive string, modified time.Time, compareModified bool) bool {
-	if filepath.Base(header.Source.Path) != filepath.Base(archive) || header.Processing != processingManifest(cfg) {
+	return archiveManifestLightMatchesForScope(header, cfg, archive, archiveScopeFB2, modified, compareModified)
+}
+
+func archiveManifestLightMatchesForScope(
+	header archiveManifestHeader,
+	cfg *config.Config,
+	archive string,
+	scope string,
+	modified time.Time,
+	compareModified bool,
+) bool {
+	if !archiveManifestScopeMatches(header, scope) {
+		return false
+	}
+	if archivePathBase(header.Source.Path) != archivePathBase(archive) ||
+		!manifestProcessingMatches(header.Processing, archiveProcessingManifest(cfg, scope)) {
 		return false
 	}
 	if cfg.Processing.FB2BodyFingerprints && !archiveManifestHasFB2BodyFingerprints(header) {
 		return false
 	}
 	return !compareModified || sourceMTimeMatches(header.Source.Modified, modified)
+}
+
+func archiveManifestScopeMatches(header archiveManifestHeader, scope string) bool {
+	if scope == "" {
+		scope = archiveScopeFB2
+	}
+	if header.Schema == "" || header.Schema == archiveManifestSchemaV1 {
+		return scope == archiveScopeFB2
+	}
+	return header.Schema == archiveManifestSchemaV2 && header.Scope == scope
 }
 
 func databaseManifestMatches(
@@ -1128,7 +1253,11 @@ func databaseManifestMatches(
 	format db.Format,
 	dumps []DumpManifestSource,
 ) bool {
-	if header.Source.DumpDate != dumpDate || databaseManifestFormat(header) != format || header.Processing != processingManifest(cfg) {
+	if !databaseManifestINPXCompatible(header.INPX) || header.Schema != databaseManifestSchema {
+		return false
+	}
+	if header.Source.DumpDate != dumpDate || databaseManifestFormat(header) != format ||
+		!manifestProcessingMatches(header.Processing, processingManifest(cfg)) {
 		return false
 	}
 	if len(header.Source.Dumps) != len(dumps) {
@@ -1156,7 +1285,11 @@ func databaseManifestLightMatches(
 	dumps []DumpManifestSource,
 	compareModified bool,
 ) bool {
-	if header.Source.DumpDate != dumpDate || databaseManifestFormat(header) != format || header.Processing != processingManifest(cfg) {
+	if !databaseManifestINPXCompatible(header.INPX) || header.Schema != databaseManifestSchema {
+		return false
+	}
+	if header.Source.DumpDate != dumpDate || databaseManifestFormat(header) != format ||
+		!manifestProcessingMatches(header.Processing, processingManifest(cfg)) {
 		return false
 	}
 	if len(header.Source.Dumps) != len(dumps) {
@@ -1188,6 +1321,10 @@ func databaseManifestFormat(header databaseManifestHeader) db.Format {
 	return header.Source.Format
 }
 
+func databaseManifestINPXCompatible(inpx *model.INPXMetadata) bool {
+	return inpx == nil || inpx.ScopedDBAuthorAmbiguity
+}
+
 func sourceMTimeMatches(stored string, current any) bool {
 	storedTime, err := time.Parse(time.RFC3339Nano, stored)
 	if err != nil {
@@ -1212,10 +1349,27 @@ func sourceMTimeMatches(stored string, current any) bool {
 	return delta <= sourceMTimeTolerance
 }
 
+func manifestProcessingMatches(stored manifestProcessing, current manifestProcessing) bool {
+	if stored.ParseFB2 != current.ParseFB2 ||
+		stored.FB2DescriptionTree != current.FB2DescriptionTree ||
+		stored.FB2BodyFingerprints != current.FB2BodyFingerprints ||
+		stored.ArchiveContentMD5 != current.ArchiveContentMD5 {
+		return false
+	}
+	if stored.NestedArchiveInspection == nil || current.NestedArchiveInspection == nil {
+		return stored.NestedArchiveInspection == nil && current.NestedArchiveInspection == nil
+	}
+	return *stored.NestedArchiveInspection == *current.NestedArchiveInspection
+}
+
 func archiveManifestHeaderFor(cfg *config.Config, decision ArchiveManifestDecision, records int64) (archiveManifestHeader, error) {
 	info, err := os.Stat(decision.ArchivePath)
 	if err != nil {
 		return archiveManifestHeader{}, fmt.Errorf("stat archive %q: %w", decision.ArchivePath, err)
+	}
+	scope := decision.Scope
+	if scope == "" {
+		scope = archiveScopeFB2
 	}
 	return archiveManifestHeader{
 		Schema: archiveManifestSchema,
@@ -1224,7 +1378,8 @@ func archiveManifestHeaderFor(cfg *config.Config, decision ArchiveManifestDecisi
 			Modified: info.ModTime().Format(time.RFC3339Nano),
 			MD5:      decision.ArchiveMD5,
 		},
-		Processing: processingManifest(cfg),
+		Scope:      scope,
+		Processing: archiveProcessingManifest(cfg, scope),
 		Features:   manifestFeaturesFor(cfg),
 		Created:    time.Now().Format(time.RFC3339Nano),
 		Records:    records,

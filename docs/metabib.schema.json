@@ -8,7 +8,8 @@
     "schema": {"const": "metabib.record/1"},
     "id": {"$ref": "#/$defs/record_id"},
     "sources": {"$ref": "#/$defs/record_sources"},
-    "errors": {"type": "array", "items": {"type": "string"}}
+    "errors": {"type": "array", "items": {"type": "string"}},
+    "issues": {"type": "array", "items": {"$ref": "#/$defs/issue"}}
   },
   "additionalProperties": false,
   "$defs": {
@@ -20,6 +21,7 @@
         "book_id": {"type": "integer"},
         "file_name": {"type": "string"},
         "extension": {"type": "string"},
+        "container_extension": {"type": "string"},
         "archive": {"$ref": "#/$defs/archive_info"}
       },
       "additionalProperties": false
@@ -43,7 +45,21 @@
       "required": ["database", "fb2"],
       "properties": {
         "database": {"$ref": "#/$defs/database_source"},
-        "fb2": {"$ref": "#/$defs/fb2_source"}
+        "fb2": {"$ref": "#/$defs/fb2_source"},
+        "sidecars": {"type": "array", "items": {"$ref": "#/$defs/sidecar_source"}}
+      },
+      "additionalProperties": false
+    },
+
+    "sidecar_source": {
+      "type": "object",
+      "required": ["present", "kind", "format", "entry"],
+      "properties": {
+        "present": {"type": "boolean"},
+        "kind": {"const": "fbd"},
+        "format": {"const": "fictionbook-description"},
+        "entry": {"type": "string"},
+        "description": {"$ref": "#/$defs/fb2_description"}
       },
       "additionalProperties": false
     },
@@ -290,6 +306,20 @@
         "create": {"type": "string"},
         "price": {"type": "string"},
         "parts": {"type": "array", "items": {"$ref": "#/$defs/fb2_output_part"}}
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["stage", "code", "retryable"],
+      "properties": {
+        "observation": {"type": "string"},
+        "stage": {"enum": ["match", "open", "read", "parse", "normalize", "validate", "nested_archive_inspection"]},
+        "code": {"type": "string"},
+        "path": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"},
+        "retryable": {"type": "boolean"}
       },
       "additionalProperties": false
     }

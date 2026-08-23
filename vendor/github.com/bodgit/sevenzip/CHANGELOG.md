@@ -1,0 +1,102 @@
+# Changelog
+
+## [1.6.5](https://github.com/bodgit/sevenzip/compare/v1.6.4...v1.6.5) (2026-07-10)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/andybalholm/brotli to v1.2.2 ([#473](https://github.com/bodgit/sevenzip/issues/473)) ([0ba424c](https://github.com/bodgit/sevenzip/commit/0ba424c48ac35922e6a6c2639b62ca2e49613864))
+* **deps:** update module github.com/klauspost/compress to v1.19.0 ([#474](https://github.com/bodgit/sevenzip/issues/474)) ([9dddc71](https://github.com/bodgit/sevenzip/commit/9dddc718f94f9f34e4382a0a8923efa5d5e66c93))
+* **deps:** update module github.com/pierrec/lz4/v4 to v4.1.27 ([#462](https://github.com/bodgit/sevenzip/issues/462)) ([f4764c5](https://github.com/bodgit/sevenzip/commit/f4764c59997cb819e06ae3f0f019c3ddf84d9127))
+* **deps:** update module github.com/stangelandcl/ppmd to v0.1.1 ([#459](https://github.com/bodgit/sevenzip/issues/459)) ([9ab6e10](https://github.com/bodgit/sevenzip/commit/9ab6e109dac62115ee8eb8a7c0319475e4a6e386))
+* **deps:** update module golang.org/x/sync to v0.22.0 ([#466](https://github.com/bodgit/sevenzip/issues/466)) ([d9d7777](https://github.com/bodgit/sevenzip/commit/d9d777733a22c5f4408d856bda97761979cbf19b))
+* **deps:** update module golang.org/x/text to v0.40.0 ([#467](https://github.com/bodgit/sevenzip/issues/467)) ([4271f9b](https://github.com/bodgit/sevenzip/commit/4271f9b1e23036ea5c5e8a6d371fabd0ecc9e646))
+* return EOF when buffer is empty ([#476](https://github.com/bodgit/sevenzip/issues/476)) ([b9f4edb](https://github.com/bodgit/sevenzip/commit/b9f4edb8a975656ee6d239b37598147db11a50f1))
+
+## [1.6.4](https://github.com/bodgit/sevenzip/compare/v1.6.3...v1.6.4) (2026-05-22)
+
+
+### Bug Fixes
+
+* **lzma2:** prevent undefined bit shift overflow in dictionary calculation ([#456](https://github.com/bodgit/sevenzip/issues/456)) ([8d9854b](https://github.com/bodgit/sevenzip/commit/8d9854bb7d60fe32cf2cd82c59db1ff60d0c875b))
+* Override ppmd package with 32-bit fix ([#458](https://github.com/bodgit/sevenzip/issues/458)) ([38c26cd](https://github.com/bodgit/sevenzip/commit/38c26cddc07f138dec12d6b6adbd8a6186673736)), closes [#457](https://github.com/bodgit/sevenzip/issues/457)
+* **types:** prevent implicit 32-bit overflow panic and OOM DoS in checkUint64 ([#453](https://github.com/bodgit/sevenzip/issues/453)) ([c9e301e](https://github.com/bodgit/sevenzip/commit/c9e301ea8886d9c6068d8662aed751dfd324acb1))
+
+## [1.6.3](https://github.com/bodgit/sevenzip/compare/v1.6.2...v1.6.3) (2026-05-22)
+
+
+### Bug Fixes
+
+* **deps:** update module github.com/klauspost/compress to v1.18.6 ([#441](https://github.com/bodgit/sevenzip/issues/441)) ([e76b100](https://github.com/bodgit/sevenzip/commit/e76b100e060196e0d5d32d456e3c518f7a377e0c))
+* **deps:** update module golang.org/x/text to v0.37.0 ([#446](https://github.com/bodgit/sevenzip/issues/446)) ([fa85316](https://github.com/bodgit/sevenzip/commit/fa85316bcfeeadfc71f3b28e456dec34f8402962))
+* ppmd support ([#451](https://github.com/bodgit/sevenzip/issues/451)) ([f07faff](https://github.com/bodgit/sevenzip/commit/f07fafff0ca6d416b2455c3d7cbfabf74ffe2679))
+* protect against specially crafted archives setting high AES cycles ([#448](https://github.com/bodgit/sevenzip/issues/448)) ([ec43e2b](https://github.com/bodgit/sevenzip/commit/ec43e2b9539052c77c5dbc804534887096cd5c6a))
+
+## [1.6.2](https://github.com/bodgit/sevenzip/compare/v1.6.1...v1.6.2) (2026-04-28)
+
+
+### Bug Fixes
+
+* Add ARM64 filter support ([#395](https://github.com/bodgit/sevenzip/issues/395)) ([8648ac7](https://github.com/bodgit/sevenzip/commit/8648ac720dde1f74f152548e85fb8e3bd24c3e0a))
+* **deps:** update go4.org digest to a507140 ([#422](https://github.com/bodgit/sevenzip/issues/422)) ([367448a](https://github.com/bodgit/sevenzip/commit/367448ab2194081b2a36a702e210124e0d82a9be))
+* **deps:** update module github.com/andybalholm/brotli to v1.2.1 ([#425](https://github.com/bodgit/sevenzip/issues/425)) ([63d4609](https://github.com/bodgit/sevenzip/commit/63d4609e64a621b26cee6e35cce72bef053fea35))
+* **deps:** update module github.com/klauspost/compress to v1.18.5 ([#426](https://github.com/bodgit/sevenzip/issues/426)) ([c01c118](https://github.com/bodgit/sevenzip/commit/c01c1187479ec2c563e418213347d31493905365))
+* **deps:** update module github.com/pierrec/lz4/v4 to v4.1.26 ([#427](https://github.com/bodgit/sevenzip/issues/427)) ([189b20d](https://github.com/bodgit/sevenzip/commit/189b20d6602bbe0d796800233f2e21520b746aa6))
+* **deps:** update module github.com/spf13/afero to v1.15.0 ([#431](https://github.com/bodgit/sevenzip/issues/431)) ([960c916](https://github.com/bodgit/sevenzip/commit/960c91607dc9f4a8e911d15b770a7c394e2706c4))
+* **deps:** update module golang.org/x/sync to v0.20.0 ([#432](https://github.com/bodgit/sevenzip/issues/432)) ([aa1e391](https://github.com/bodgit/sevenzip/commit/aa1e3915fa76dab329aa3aa0f47315ead4c9ffa1))
+* **deps:** update module golang.org/x/text to v0.36.0 ([#433](https://github.com/bodgit/sevenzip/issues/433)) ([dbed104](https://github.com/bodgit/sevenzip/commit/dbed1043297a5cceaff96c5aaa7ec52c4989e73e))
+* Handle streams with no files ([#401](https://github.com/bodgit/sevenzip/issues/401)) ([fe03793](https://github.com/bodgit/sevenzip/commit/fe0379373743f88bc62bef15661bf1125666ffdc))
+* Prevent panics discovered by fuzzing ([#402](https://github.com/bodgit/sevenzip/issues/402)) ([740fcf9](https://github.com/bodgit/sevenzip/commit/740fcf91a86fb010fd60a11456743e911de893f5))
+
+## [1.6.1](https://github.com/bodgit/sevenzip/compare/v1.6.0...v1.6.1) (2025-04-26)
+
+
+### Bug Fixes
+
+* Handle CRC being in the unpackInfo ([#346](https://github.com/bodgit/sevenzip/issues/346)) ([695062b](https://github.com/bodgit/sevenzip/commit/695062bf4652faeafbf2002dc34c48a89876fd5b))
+* Make it possible to override decompressor for existing method ([#302](https://github.com/bodgit/sevenzip/issues/302)) ([63e8b07](https://github.com/bodgit/sevenzip/commit/63e8b079422b762247664e2ff144cac49be1366a))
+
+## [1.6.0](https://github.com/bodgit/sevenzip/compare/v1.5.2...v1.6.0) (2024-11-17)
+
+
+### Features
+
+* Add ReadError to wrap I/O errors ([#278](https://github.com/bodgit/sevenzip/issues/278)) ([d38d0aa](https://github.com/bodgit/sevenzip/commit/d38d0aaf74e642d9004b8fee09ab93befeffd174))
+
+## [1.5.2](https://github.com/bodgit/sevenzip/compare/v1.5.1...v1.5.2) (2024-08-29)
+
+
+### Bug Fixes
+
+* Avoid panic in Reader init (empty2.7z); header.filesInfo is nil. ([#252](https://github.com/bodgit/sevenzip/issues/252)) ([10d7550](https://github.com/bodgit/sevenzip/commit/10d75506fa01719e9e0f074c4e7b3c3b96f4233d))
+* Lint fixes ([#253](https://github.com/bodgit/sevenzip/issues/253)) ([c82d2e9](https://github.com/bodgit/sevenzip/commit/c82d2e90e52ae81797b0f790fabe90baf35bf581))
+
+## [1.5.1](https://github.com/bodgit/sevenzip/compare/v1.5.0...v1.5.1) (2024-04-05)
+
+
+### Performance Improvements
+
+* Add AES key caching ([#189](https://github.com/bodgit/sevenzip/issues/189)) ([3d794c2](https://github.com/bodgit/sevenzip/commit/3d794c26c683fe80def4496d49106679b868ae2e))
+* Don't use pools for streams with one file ([#194](https://github.com/bodgit/sevenzip/issues/194)) ([b4cfdcf](https://github.com/bodgit/sevenzip/commit/b4cfdcfe0a64380d64c112d41a870dc8c33c1274))
+
+## [1.5.0](https://github.com/bodgit/sevenzip/compare/v1.4.5...v1.5.0) (2024-02-08)
+
+
+### Features
+
+* Export the folder/stream identifier ([#169](https://github.com/bodgit/sevenzip/issues/169)) ([187a49e](https://github.com/bodgit/sevenzip/commit/187a49e243ec0618b527851fcee0503d8436e7c2))
+
+## [1.4.5](https://github.com/bodgit/sevenzip/compare/v1.4.4...v1.4.5) (2023-12-12)
+
+
+### Bug Fixes
+
+* Handle lack of CRC digests ([#143](https://github.com/bodgit/sevenzip/issues/143)) ([4ead944](https://github.com/bodgit/sevenzip/commit/4ead944ad71398931b70a09ea40ba9ce742f4bf7))
+* Handle small reads in branch converters ([#144](https://github.com/bodgit/sevenzip/issues/144)) ([dfaf538](https://github.com/bodgit/sevenzip/commit/dfaf538402be45e6cd12064b3d49e7496d2b22f4))
+
+## [1.4.4](https://github.com/bodgit/sevenzip/compare/v1.4.3...v1.4.4) (2023-11-06)
+
+
+### Bug Fixes
+
+* Handle panic when unpack info is missing ([#117](https://github.com/bodgit/sevenzip/issues/117)) ([db3ba77](https://github.com/bodgit/sevenzip/commit/db3ba775286aa4efce8fdd1c398bf2bd4dfba37d))

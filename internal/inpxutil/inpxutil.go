@@ -28,6 +28,14 @@ const (
 	OnlineArchiveName = "online.zip"
 )
 
+type ContentMode string
+
+const (
+	ContentFB2 ContentMode = "fb2"
+	ContentUSR ContentMode = "usr"
+	ContentAll ContentMode = "all"
+)
+
 var cleanseReplacer = strings.NewReplacer(
 	"\r\n", " ",
 	"\r", " ",
@@ -55,6 +63,120 @@ type Stats struct {
 	DBRecords            int64
 	FB2Records           int64
 	Dummy                int64
+}
+
+func ParseContentMode(value string, fallback ContentMode) (ContentMode, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return fallback, nil
+	case string(ContentFB2):
+		return ContentFB2, nil
+	case string(ContentUSR):
+		return ContentUSR, nil
+	case string(ContentAll):
+		return ContentAll, nil
+	default:
+		return "", fmt.Errorf("invalid INPX content mode %q", value)
+	}
+}
+
+func RecordMatchesContent(mode ContentMode, rec model.DatasetRecord) (bool, error) {
+	switch mode {
+	case ContentAll:
+		return true, nil
+	case ContentFB2, ContentUSR:
+		isFB2, err := RecordIsFB2Content(rec)
+		if err != nil {
+			return false, err
+		}
+		if mode == ContentFB2 {
+			return isFB2, nil
+		}
+		return !isFB2, nil
+	default:
+		return false, fmt.Errorf("invalid INPX content mode %q", mode)
+	}
+}
+
+func RecordIsFB2Content(rec model.DatasetRecord) (bool, error) {
+	if rec.Record.Locator.Kind == "archive_entry" {
+		if ext := ArchiveRecordExtension(rec); ext != "" {
+			return strings.EqualFold(ext, "fb2"), nil
+		}
+	}
+	view, err := DatasetRecordClaims(rec)
+	if err != nil {
+		return false, err
+	}
+	ext := strings.TrimPrefix(view.Catalog.FileType, ".")
+	if ext == "" {
+		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
+	}
+	if ext == "" {
+		for _, artifact := range rec.Artifacts {
+			ext = strings.TrimPrefix(filepath.Ext(artifact.Name), ".")
+			if ext != "" {
+				break
+			}
+			for _, occurrence := range artifact.Occurrences {
+				ext = strings.TrimPrefix(filepath.Ext(occurrence.Entry), ".")
+				if ext != "" {
+					break
+				}
+			}
+			if ext != "" {
+				break
+			}
+		}
+	}
+	return strings.EqualFold(ext, "fb2"), nil
+}
+
+func ArchiveRecordExtension(rec model.DatasetRecord) string {
+	locator := rec.Record.Locator
+	for _, artifact := range rec.Artifacts {
+		if artifact.Name != "" {
+			if ext := archiveEntryExtension(artifact.Name); ext != "" {
+				return ext
+			}
+		}
+		for _, occurrence := range artifact.Occurrences {
+			if occurrence.Entry == "" || occurrence.Archive != locator.Source {
+				continue
+			}
+			if locator.Index != nil && occurrence.Index != *locator.Index {
+				continue
+			}
+			return archiveEntryExtension(occurrence.Entry)
+		}
+	}
+	return ""
+}
+
+func archiveEntryExtension(name string) string {
+	base := filepath.Base(name)
+	if containerExt := nestedArchiveContainerExtension(base); containerExt != "" {
+		stem := strings.TrimSuffix(base, "."+containerExt)
+		if ext := strings.TrimPrefix(filepath.Ext(stem), "."); ext != "" {
+			return ext
+		}
+		return containerExt
+	}
+	return strings.TrimPrefix(filepath.Ext(base), ".")
+}
+
+func nestedArchiveContainerExtension(name string) string {
+	lower := strings.ToLower(filepath.Base(name))
+	for _, ext := range knownNestedArchiveExtensions() {
+		if strings.HasSuffix(lower, "."+ext) {
+			return ext
+		}
+	}
+	return ""
+}
+
+func knownNestedArchiveExtensions() []string {
+	return []string{"tar.bz2", "tar.zst", "tar.gz", "tar.xz", "tbz2", "tgz", "tbz", "txz", "tzst", "zip", "rar", "7z", "tar"}
 }
 
 type DatasetArchiveRows struct {
