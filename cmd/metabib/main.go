@@ -174,12 +174,12 @@ func fetchCommand() *cli.Command {
 func rollupCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "rollup",
-		Usage: "Roll daily FB2 update archives into size-bounded archive ZIPs",
+		Usage: "Roll daily FB2 and USR update archives into size-bounded archive ZIPs",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "archives",
 				Aliases:  []string{"a"},
-				Usage:    "directory for finalized fb2-*.zip archives and active .merging archive",
+				Usage:    "directory for finalized fb2-*/usr-* archives and active .merging archives",
 				Required: true,
 			},
 			&cli.StringSliceFlag{
@@ -187,7 +187,6 @@ func rollupCommand() *cli.Command {
 				Aliases: []string{"u"},
 				Usage:   "directory containing daily update ZIPs; can be repeated; defaults to --archives",
 			},
-			&cli.IntFlag{Name: "size", Value: 2000, Usage: "finalized archive target size in decimal megabytes"},
 		},
 		Action: runRollup,
 	}
@@ -399,11 +398,12 @@ func (c fetchExitCode) ExitCode() int {
 func runRollup(ctx context.Context, cmd *cli.Command) error {
 	env := state.EnvFromContext(ctx)
 	res, err := rollup.Run(ctx, rollup.Options{
-		ArchiveDir:  cmd.String("archives"),
-		UpdateDirs:  cmd.StringSlice("updates"),
-		SizeBytes:   int64(cmd.Int("size")) * 1000 * 1000,
-		ValidateCRC: env.Cfg.Rollup.ValidateCRC,
-		Log:         env.Log,
+		ArchiveDir:      cmd.String("archives"),
+		UpdateDirs:      cmd.StringSlice("updates"),
+		TargetSizeBytes: rollupTargetSizeBytes(env.Cfg.Rollup.TargetSizeMiB),
+		ValidateCRC:     env.Cfg.Rollup.ValidateCRC,
+		UpdatePatterns:  rollupUpdatePatterns(env.Cfg.Rollup.UpdatePatterns),
+		Log:             env.Log,
 	})
 	if err != nil {
 		return err
@@ -414,6 +414,7 @@ func runRollup(ctx context.Context, cmd *cli.Command) error {
 			zap.Int("updates", res.Updates),
 			zap.Int("finalized", res.Finalized),
 			zap.String("active_merge", res.ActiveMerge),
+			zap.Strings("active_merges", res.ActiveMerges),
 			zap.Strings("finalized_archives", res.FinalizedArchives),
 		)
 	}
@@ -421,6 +422,22 @@ func runRollup(ctx context.Context, cmd *cli.Command) error {
 		return rollupExitCode(rollup.NewArchiveExitCode)
 	}
 	return nil
+}
+
+func rollupTargetSizeBytes(size config.RollupTargetSizeConfig) map[string]int64 {
+	const mib = int64(1024 * 1024)
+	return map[string]int64{
+		"fb2": size.FB2 * mib,
+		"usr": size.USR * mib,
+	}
+}
+
+func rollupUpdatePatterns(patterns []config.RollupUpdatePatternConfig) []rollup.UpdatePattern {
+	res := make([]rollup.UpdatePattern, 0, len(patterns))
+	for _, pattern := range patterns {
+		res = append(res, rollup.UpdatePattern{Name: pattern.Name, Family: pattern.Family, Pattern: pattern.Pattern})
+	}
+	return res
 }
 
 type rollupExitCode int

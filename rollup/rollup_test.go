@@ -34,18 +34,70 @@ func TestGetUpdates(t *testing.T) {
 		{info: fakeInfo{name: "f.fb2.000101-000150.zip"}},
 		{info: fakeInfo{name: "f.fb2.000140-000160.zip"}},
 		{info: fakeInfo{name: "f.fb2.000151-000200.zip"}},
+		{info: fakeInfo{name: "f.pdf.000151-000200.zip"}},
 		{info: fakeInfo{name: "2026-07-12.000201-000250.503.fb2.zip"}},
 		{info: fakeInfo{name: "2026-07-12.000251-000300.503.pdf.zip"}},
 		{info: fakeInfo{name: "f.fb2.000201-000250.zip.tmp"}},
 		{info: fakeInfo{name: "backup-f.fb2.000251-000300.zip"}},
 		{info: fakeInfo{name: "fb2-000001-000100.zip"}},
 	}
-	updates, err := getUpdates(files, 150)
+	updates, err := getUpdates(files, 150, archiveFamily{Prefix: "fb2", Name: "fb2"}, mustCompileDefaultUpdatePatterns(t))
 	if err != nil {
 		t.Fatalf("getUpdates() error = %v", err)
 	}
 	if len(updates) != 3 || updates[0].begin != 140 || updates[0].end != 160 || updates[1].begin != 151 || updates[1].end != 200 || updates[2].begin != 201 || updates[2].end != 250 {
 		t.Fatalf("updates = %#v, want 140-160, 151-200, and 201-250", updates)
+	}
+}
+
+func TestGetUSRUpdates(t *testing.T) {
+	t.Parallel()
+
+	files := []archive{
+		{info: fakeInfo{name: "f.fb2.000101-000150.zip"}},
+		{info: fakeInfo{name: "f.n.000101-000150.zip"}},
+		{info: fakeInfo{name: "f.pdf.000151-000200.zip"}},
+		{info: fakeInfo{name: "2026-07-12.000201-000250.503.fb2.zip"}},
+		{info: fakeInfo{name: "2026-07-12.000251-000300.503.pdf.zip"}},
+	}
+	updates, err := getUpdates(files, 150, archiveFamily{Prefix: "usr", Name: "usr"}, mustCompileDefaultUpdatePatterns(t))
+	if err != nil {
+		t.Fatalf("getUpdates() error = %v", err)
+	}
+	if len(updates) != 2 || updates[0].begin != 151 || updates[0].end != 200 || updates[1].begin != 251 || updates[1].end != 300 {
+		t.Fatalf("updates = %#v, want 151-200 and 251-300", updates)
+	}
+}
+
+func TestGetUpdatesUsesConfiguredPatterns(t *testing.T) {
+	t.Parallel()
+
+	patterns, err := compileUpdatePatterns([]UpdatePattern{{Name: "custom-usr", Family: "usr", Pattern: `(?i)^custom\.([0-9]+)-([0-9]+)\.zip$`}})
+	if err != nil {
+		t.Fatalf("compileUpdatePatterns() error = %v", err)
+	}
+	updates, err := getUpdates([]archive{{info: fakeInfo{name: "custom.000010-000020.zip"}}}, 0, archiveFamily{Prefix: "usr", Name: "usr"}, patterns)
+	if err != nil {
+		t.Fatalf("getUpdates() error = %v", err)
+	}
+	if len(updates) != 1 || updates[0].begin != 10 || updates[0].end != 20 {
+		t.Fatalf("updates = %#v, want custom 10-20", updates)
+	}
+}
+
+func TestGetUpdatesRejectsAmbiguousPatterns(t *testing.T) {
+	t.Parallel()
+
+	patterns, err := compileUpdatePatterns([]UpdatePattern{
+		{Name: "first", Family: "fb2", Pattern: `(?i)^f\.fb2\.([0-9]+)-([0-9]+)\.zip$`},
+		{Name: "second", Family: "fb2", Pattern: `(?i)^f\.[^.]+\.([0-9]+)-([0-9]+)\.zip$`},
+	})
+	if err != nil {
+		t.Fatalf("compileUpdatePatterns() error = %v", err)
+	}
+	_, err = getUpdates([]archive{{info: fakeInfo{name: "f.fb2.000010-000020.zip"}}}, 0, archiveFamily{Prefix: "fb2", Name: "fb2"}, patterns)
+	if err == nil || !strings.Contains(err.Error(), "matches multiple rollup patterns") {
+		t.Fatalf("getUpdates() error = %v, want ambiguity error", err)
 	}
 }
 
@@ -58,14 +110,14 @@ func TestLocalArchiveNamesRequireExactMatch(t *testing.T) {
 		{info: fakeInfo{name: "fb2-000001-000300.merging.tmp"}},
 		{info: fakeInfo{name: "fb2-000001-000400.zip"}},
 	}
-	last, err := getLastArchive(files)
+	last, err := getLastArchive(files, archiveFamily{Prefix: "fb2", Name: "fb2"})
 	if err != nil {
 		t.Fatalf("getLastArchive() error = %v", err)
 	}
 	if last.end != 400 {
 		t.Fatalf("last.end = %d, want 400", last.end)
 	}
-	merge, err := getMergeArchive(files)
+	merge, err := getMergeArchive(files, archiveFamily{Prefix: "fb2", Name: "fb2"})
 	if err != nil {
 		t.Fatalf("getMergeArchive() error = %v", err)
 	}
@@ -77,15 +129,16 @@ func TestLocalArchiveNamesRequireExactMatch(t *testing.T) {
 func TestArchiveNameWidth(t *testing.T) {
 	t.Parallel()
 
-	if got := archiveNameWidth(archive{}, archive{}); got != 10 {
+	fb2Family := archiveFamily{Prefix: "fb2", Name: "fb2"}
+	if got := archiveNameWidth(archive{}, archive{}, fb2Family); got != 10 {
 		t.Fatalf("archiveNameWidth(empty) = %d, want 10", got)
 	}
 	last := archive{info: fakeInfo{name: "fb2-000001-000100.zip"}}
-	if got := archiveNameWidth(last, archive{}); got != 6 {
+	if got := archiveNameWidth(last, archive{}, fb2Family); got != 6 {
 		t.Fatalf("archiveNameWidth(last) = %d, want 6", got)
 	}
 	merge := archive{info: fakeInfo{name: "fb2-0000000101-0000000200.merging"}}
-	if got := archiveNameWidth(last, merge); got != 10 {
+	if got := archiveNameWidth(last, merge, fb2Family); got != 10 {
 		t.Fatalf("archiveNameWidth(merge) = %d, want 10", got)
 	}
 }
@@ -100,7 +153,7 @@ func TestRunCreatesMergeArchive(t *testing.T) {
 		"2.fb2": "two",
 	})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
+	res, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -119,6 +172,81 @@ func TestRunCreatesMergeArchive(t *testing.T) {
 	}
 }
 
+func TestRunCreatesFB2AndUSRMergeArchives(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	writeZip(t, filepath.Join(updates, "f.fb2.000001-000002.zip"), map[string]string{
+		"1.fb2": "one",
+		"2.fb2": "two",
+	})
+	writeZip(t, filepath.Join(updates, "f.n.000001-000002.zip"), map[string]string{
+		"1.pdf": "one",
+		"2.pdf": "two",
+	})
+
+	res, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(res.ActiveMerges) != 2 {
+		t.Fatalf("ActiveMerges = %#v, want two", res.ActiveMerges)
+	}
+	for _, want := range []string{"fb2-0000000001-0000000002.merging", "usr-0000000001-0000000002.merging"} {
+		if _, err := os.Stat(filepath.Join(archives, want)); err != nil {
+			t.Fatalf("stat %s: %v", want, err)
+		}
+	}
+}
+
+func TestRunKeepsUSRFormatsForSameBookID(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	writeZip(t, filepath.Join(updates, "f.pdf.000001-000001.zip"), map[string]string{
+		"1.pdf":  "pdf",
+		"1.djvu": "djvu",
+	})
+
+	res, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "usr-0000000001-0000000001.merging" {
+		t.Fatalf("ActiveMerge = %q", res.ActiveMerge)
+	}
+	counts := countZipEntryNames(t, res.ActiveMerge)
+	if counts["1.pdf"] != 1 || counts["1.djvu"] != 1 || len(counts) != 2 {
+		t.Fatalf("entry counts = %#v, want pdf and djvu", counts)
+	}
+}
+
+func TestRunUsesFamilyTargetSizes(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	writeZip(t, filepath.Join(updates, "f.fb2.000001-000001.zip"), map[string]string{"1.fb2": "one"})
+	writeZip(t, filepath.Join(updates, "f.pdf.000001-000001.zip"), map[string]string{"1.pdf": "one"})
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		TargetSizeBytes: map[string]int64{"fb2": 1, "usr": 1_000_000},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.Finalized == 0 || len(res.FinalizedArchives) == 0 || filepath.Base(res.FinalizedArchives[0]) != "fb2-0000000001-0000000001.zip" {
+		t.Fatalf("FinalizedArchives = %#v, want fb2 finalized", res.FinalizedArchives)
+	}
+	if len(res.ActiveMerges) != 1 || filepath.Base(res.ActiveMerges[0]) != "usr-0000000001-0000000001.merging" {
+		t.Fatalf("ActiveMerges = %#v, want usr active merge", res.ActiveMerges)
+	}
+}
+
 func TestRunFinalizesArchive(t *testing.T) {
 	t.Parallel()
 
@@ -129,7 +257,7 @@ func TestRunFinalizesArchive(t *testing.T) {
 		"2.fb2": "two",
 	})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1})
+	res, err := Run(context.Background(), testOptions(archives, updates, 1))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -150,7 +278,7 @@ func TestRunRemovesSupersededLastArchive(t *testing.T) {
 	writeZip(t, oldArchive, map[string]string{"1.fb2": "one"})
 	writeZip(t, filepath.Join(updates, "f.fb2.0000000002-0000000002.zip"), map[string]string{"2.fb2": "two"})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
+	res, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -179,7 +307,7 @@ func TestRunPreservesUpdateArchives(t *testing.T) {
 	validUpdate := filepath.Join(updates, "f.fb2.0000000002-0000000002.zip")
 	writeZip(t, validUpdate, map[string]string{"2.fb2": "two"})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
+	res, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -209,10 +337,10 @@ func TestRunKeepsNewEntriesFromOverlappingUpdates(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 
 	res, err := Run(context.Background(), Options{
-		ArchiveDir: archives,
-		UpdateDirs: []string{updates},
-		SizeBytes:  1_000_000,
-		Log:        zap.New(core),
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		TargetSizeBytes: testTargetSizeBytes(1_000_000),
+		Log:             zap.New(core),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -247,10 +375,10 @@ func TestRunSkipsUpdateWhenFilenameEndExceedsActualEntries(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 
 	res, err := Run(context.Background(), Options{
-		ArchiveDir: archives,
-		UpdateDirs: []string{updates},
-		SizeBytes:  1_000_000,
-		Log:        zap.New(core),
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		TargetSizeBytes: testTargetSizeBytes(1_000_000),
+		Log:             zap.New(core),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -292,10 +420,10 @@ func TestRunSkipsDuplicatesWithinActiveWorkArchive(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 
 	res, err := Run(context.Background(), Options{
-		ArchiveDir: archives,
-		UpdateDirs: []string{updates},
-		SizeBytes:  1_000_000,
-		Log:        zap.New(core),
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		TargetSizeBytes: testTargetSizeBytes(1_000_000),
+		Log:             zap.New(core),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -325,7 +453,7 @@ func TestRunUsesMinMaxRangeForOutOfOrderEntries(t *testing.T) {
 		{Name: "1.fb2", Content: "one"},
 	})
 
-	res, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
+	res, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -344,7 +472,7 @@ func TestRunFailsWhenUpdateCannotBeOpened(t *testing.T) {
 		t.Fatalf("write update: %v", err)
 	}
 
-	_, err := Run(context.Background(), Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1_000_000})
+	_, err := Run(context.Background(), testOptions(archives, updates, 1_000_000))
 	if err == nil || !strings.Contains(err.Error(), "open update archive") {
 		t.Fatalf("Run() error = %v, want open update archive error", err)
 	}
@@ -367,7 +495,7 @@ func TestRunFailsWhenEntryCopyFailsAndKeepsCommittedOutput(t *testing.T) {
 
 	_, err := run(
 		context.Background(),
-		Options{ArchiveDir: archives, UpdateDirs: []string{updates}, SizeBytes: 1},
+		testOptions(archives, updates, 1),
 		func(writer *zip.Writer, file *zip.File) error {
 			copies++
 			if copies == 2 {
@@ -410,11 +538,11 @@ func TestRunWarnsAndIgnoresEmptyAndNonNumericEntries(t *testing.T) {
 	core, logs := observer.New(zap.WarnLevel)
 
 	res, err := Run(context.Background(), Options{
-		ArchiveDir:  archives,
-		UpdateDirs:  []string{updates},
-		SizeBytes:   1_000_000,
-		ValidateCRC: true,
-		Log:         zap.New(core),
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		TargetSizeBytes: testTargetSizeBytes(1_000_000),
+		ValidateCRC:     true,
+		Log:             zap.New(core),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -442,7 +570,7 @@ func TestRunOptionalCRCValidation(t *testing.T) {
 	writeCorruptStoredZip(t, fastUpdate, "1.fb2", "one")
 	sourceMethod, sourceRaw := readRawZipEntry(t, fastUpdate, "1.fb2")
 
-	res, err := Run(context.Background(), Options{ArchiveDir: fastArchives, UpdateDirs: []string{fastUpdates}, SizeBytes: 1_000_000})
+	res, err := Run(context.Background(), testOptions(fastArchives, fastUpdates, 1_000_000))
 	if err != nil {
 		t.Fatalf("Run(validate_crc=false) error = %v", err)
 	}
@@ -456,10 +584,10 @@ func TestRunOptionalCRCValidation(t *testing.T) {
 	checkedUpdate := filepath.Join(checkedUpdates, "f.fb2.0000000001-0000000001.zip")
 	writeCorruptStoredZip(t, checkedUpdate, "1.fb2", "one")
 	_, err = Run(context.Background(), Options{
-		ArchiveDir:  checkedArchives,
-		UpdateDirs:  []string{checkedUpdates},
-		SizeBytes:   1_000_000,
-		ValidateCRC: true,
+		ArchiveDir:      checkedArchives,
+		UpdateDirs:      []string{checkedUpdates},
+		TargetSizeBytes: testTargetSizeBytes(1_000_000),
+		ValidateCRC:     true,
 	})
 	if !errors.Is(err, zip.ErrChecksum) {
 		t.Fatalf("Run(validate_crc=true) error = %v, want zip.ErrChecksum", err)
@@ -476,6 +604,23 @@ func writeZip(t *testing.T, path string, files map[string]string) {
 		entries = append(entries, zipEntry{Name: name, Content: content})
 	}
 	writeZipOrdered(t, path, entries)
+}
+
+func testOptions(archives string, updates string, size int64) Options {
+	return Options{ArchiveDir: archives, UpdateDirs: []string{updates}, TargetSizeBytes: testTargetSizeBytes(size)}
+}
+
+func testTargetSizeBytes(size int64) map[string]int64 {
+	return map[string]int64{"fb2": size, "usr": size}
+}
+
+func mustCompileDefaultUpdatePatterns(t *testing.T) []compiledUpdatePattern {
+	t.Helper()
+	patterns, err := compileUpdatePatterns(nil)
+	if err != nil {
+		t.Fatalf("compileUpdatePatterns() error = %v", err)
+	}
+	return patterns
 }
 
 func writeCorruptStoredZip(t *testing.T, path string, name string, content string) {

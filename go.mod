@@ -9,6 +9,7 @@ tool (
 
 require (
 	github.com/bodgit/sevenzip v1.6.5
+	github.com/dlclark/regexp2/v2 v2.7.1
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/go-task/slim-sprig/v3 v3.0.0
 	github.com/klauspost/compress v1.19.2
@@ -81,7 +82,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
-	github.com/dlclark/regexp2/v2 v2.7.1 // indirect
 	github.com/dominikbraun/graph v0.23.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.1 // indirect

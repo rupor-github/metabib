@@ -57,14 +57,48 @@ fetch:
   libraries:
     - name: flibusta
       library_name: flibusta
+      archive_content: fb2
       archive_pattern: '(?i)<a\s+href="(f(?:\.fb2)*\.[0-9]+-[0-9]+\.zip)">'
+      sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
+      archive_url: http://flibusta.is/daily/
+      sql_url: http://flibusta.is/sql/
+      proxy: ""
+    - name: flibusta-usr
+      library_name: flibusta
+      archive_content: usr
+      archive_pattern: '(?i)<a\s+href="(f\.(?!fb2\.)[^.]+\.[0-9]+-[0-9]+\.zip)">'
+      sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
+      archive_url: http://flibusta.is/daily/
+      sql_url: http://flibusta.is/sql/
+      proxy: ""
+    - name: flibusta-all
+      library_name: flibusta
+      archive_content: all
+      archive_pattern: '(?i)<a\s+href="(f(?:\.[^.]+)?\.[0-9]+-[0-9]+\.zip)">'
       sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
       archive_url: http://flibusta.is/daily/
       sql_url: http://flibusta.is/sql/
       proxy: ""
     - name: librusec
       library_name: librusec
+      archive_content: fb2
       archive_pattern: '(?i)<a\s+href="([0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+-[0-9]+\.[0-9]+\.fb2\.zip)">'
+      sql_pattern: '<a\s+href="(lib\w+\.sql\.gz)">'
+      archive_url: http://lib.rusec.net/daily/
+      sql_url: http://lib.rusec.net/sql/
+      proxy: ""
+    - name: librusec-usr
+      library_name: librusec
+      archive_content: usr
+      archive_pattern: '(?i)<a\s+href="([0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+-[0-9]+\.[0-9]+\.(?!fb2\.)[^.]+\.zip)">'
+      sql_pattern: '<a\s+href="(lib\w+\.sql\.gz)">'
+      archive_url: http://lib.rusec.net/daily/
+      sql_url: http://lib.rusec.net/sql/
+      proxy: ""
+    - name: librusec-all
+      library_name: librusec
+      archive_content: all
+      archive_pattern: '(?i)<a\s+href="([0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+-[0-9]+\.[0-9]+\.[^.]+\.zip)">'
       sql_pattern: '<a\s+href="(lib\w+\.sql\.gz)">'
       archive_url: http://lib.rusec.net/daily/
       sql_url: http://lib.rusec.net/sql/
@@ -76,6 +110,31 @@ rollup:
   # significantly reduce rollup performance. Entries are still copied in their
   # original compressed form without recompression.
   validate_crc: false
+
+  # Finalized archive target sizes in binary mebibytes. FB2 and USR archives are
+  # separate lineages and can use different size policies.
+  target_size_mib:
+    fb2: 2048
+    usr: 4096
+
+  # Daily update filename patterns used by `metabib rollup`. Patterns are
+  # matched against local file names with regexp2 syntax. The first two capture
+  # groups must be the update range begin and end. family selects the destination
+  # local archive lineage (`fb2-*` or `usr-*`). A file matching multiple patterns
+  # is rejected as ambiguous.
+  update_patterns:
+    - name: flibusta-fb2
+      family: fb2
+      pattern: '(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$'
+    - name: flibusta-usr
+      family: usr
+      pattern: '(?i)^f\.(?!fb2\.)[^.]+\.([0-9]+)-([0-9]+)\.zip$'
+    - name: librusec-fb2
+      family: fb2
+      pattern: '(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.fb2\.zip$'
+    - name: librusec-usr
+      family: usr
+      pattern: '(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.(?!fb2\.)[^.]+\.zip$'
 
 processing:
   # Parse FB2 description metadata from archive entries.

@@ -95,12 +95,26 @@ type FetchConfig struct {
 }
 
 type RollupConfig struct {
-	ValidateCRC bool `yaml:"validate_crc"`
+	ValidateCRC    bool                        `yaml:"validate_crc"`
+	TargetSizeMiB  RollupTargetSizeConfig      `yaml:"target_size_mib"`
+	UpdatePatterns []RollupUpdatePatternConfig `yaml:"update_patterns" validate:"dive"`
+}
+
+type RollupTargetSizeConfig struct {
+	FB2 int64 `yaml:"fb2" validate:"min=1"`
+	USR int64 `yaml:"usr" validate:"min=1"`
+}
+
+type RollupUpdatePatternConfig struct {
+	Name    string `yaml:"name"`
+	Family  string `yaml:"family" validate:"required,oneof=fb2 usr"`
+	Pattern string `yaml:"pattern" validate:"required"`
 }
 
 type FetchLibraryConfig struct {
 	Name            string `yaml:"name" validate:"required"`
 	LibraryName     string `yaml:"library_name"`
+	ArchiveContent  string `yaml:"archive_content" validate:"omitempty,oneof=fb2 usr all"`
 	ArchivePattern  string `yaml:"archive_pattern" validate:"required"`
 	SQLPattern      string `yaml:"sql_pattern" validate:"required"`
 	ArchiveURL      string `yaml:"archive_url" validate:"required,url"`
@@ -184,6 +198,11 @@ func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {
 func validateConfig(cfg *Config) error {
 	if cfg.Processing.FB2BodyFingerprints && !cfg.Processing.ParseFB2 {
 		return errors.New("processing.fb2_body_fingerprints requires processing.parse_fb2")
+	}
+	for i := range cfg.Fetch.Libraries {
+		if cfg.Fetch.Libraries[i].ArchiveContent == "" {
+			cfg.Fetch.Libraries[i].ArchiveContent = "fb2"
+		}
 	}
 	return nil
 }

@@ -60,6 +60,24 @@ func TestGetLastBookIDWithMergingArchive(t *testing.T) {
 	}
 }
 
+func TestGetArchiveHighWaterTracksFamiliesSeparately(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	for _, name := range []string{"fb2-000001-000100.merging", "usr-000001-000250.merging"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	got, err := getArchiveHighWater(dir)
+	if err != nil {
+		t.Fatalf("getArchiveHighWater() error = %v", err)
+	}
+	if got[archiveFamilyFB2].End != 100 || got[archiveFamilyUSR].End != 250 {
+		t.Fatalf("getArchiveHighWater() = %#v, want fb2=100 usr=250", got)
+	}
+}
+
 func TestGetLastBookIDWithRetainedDailyUpdates(t *testing.T) {
 	t.Parallel()
 
@@ -95,6 +113,7 @@ func TestDissectRange(t *testing.T) {
 		second int
 	}{
 		{name: "flibusta", input: "f.fb2.000101-000150.zip", ok: true, first: 101, second: 150},
+		{name: "flibusta non-fb2", input: "f.pdf.000101-000150.zip", ok: true, first: 101, second: 150},
 		{name: "plain", input: "000151-000200.zip", ok: true, first: 151, second: 200},
 		{
 			name:   "librusec fb2",
@@ -103,7 +122,7 @@ func TestDissectRange(t *testing.T) {
 			first:  818211,
 			second: 818248,
 		},
-		{name: "librusec pdf", input: "2026-07-12.818211-818248.503.pdf.zip", ok: false},
+		{name: "librusec pdf", input: "2026-07-12.818211-818248.503.pdf.zip", ok: true, first: 818211, second: 818248},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -141,13 +160,105 @@ func TestLinksIncludesPartiallyOverlappingUpdates(t *testing.T) {
 	defer server.Close()
 
 	f := testFetcher(server)
-	got, err := f.links(context.Background(), server.URL, `href="([^"]+)"`, 100, true)
+	got, err := f.archiveLinks(context.Background(), server.URL, `href="([^"]+)"`, t.TempDir(), map[string]archiveHighWater{archiveFamilyFB2: {End: 100}})
 	if err != nil {
 		t.Fatalf("links() error = %v", err)
 	}
 	want := []string{"f.fb2.000050-000150.zip", "f.fb2.000151-000200.zip"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("links() = %v, want %v", got, want)
+	}
+}
+
+func TestArchiveLinksUseRegexp2AndRejectHiddenContentFiltering(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`<a href="2026-07-12.818211-818248.503.fb2.zip">fb2</a>`,
+			`<a href="2026-07-12.818211-818248.503.pdf.zip">pdf</a>`,
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	f := testFetcher(server)
+	f.opts.Library.ArchiveContent = archiveFamilyUSR
+	got, err := f.archiveLinks(
+		context.Background(),
+		server.URL,
+		`(?i)<a\s+href="([0-9]{4}-[0-9]{2}-[0-9]{2}\.[0-9]+-[0-9]+\.[0-9]+\.(?!fb2\.)[^.]+\.zip)">`,
+		t.TempDir(),
+		map[string]archiveHighWater{archiveFamilyUSR: {}},
+	)
+	if err != nil {
+		t.Fatalf("archiveLinks() error = %v", err)
+	}
+	if strings.Join(got, ",") != "2026-07-12.818211-818248.503.pdf.zip" {
+		t.Fatalf("archiveLinks() = %v, want pdf only", got)
+	}
+
+	_, err = f.archiveLinks(context.Background(), server.URL, `href="([^"]+)"`, t.TempDir(), map[string]archiveHighWater{archiveFamilyUSR: {}})
+	if err == nil || !strings.Contains(err.Error(), "for usr profile") {
+		t.Fatalf("archiveLinks() error = %v, want profile content mismatch", err)
+	}
+}
+
+func TestArchiveLinksUseRegexp2ForFlibustaUSR(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`<a href="f.fb2.000001-000100.zip">fb2</a>`,
+			`<a href="f.n.000001-000100.zip">n</a>`,
+			`<a href="f.pdf.000001-000100.zip">pdf</a>`,
+		}, "\n")))
+	}))
+	defer server.Close()
+
+	f := testFetcher(server)
+	f.opts.Library.ArchiveContent = archiveFamilyUSR
+	got, err := f.archiveLinks(
+		context.Background(),
+		server.URL,
+		`(?i)<a\s+href="(f\.(?!fb2\.)[^.]+\.[0-9]+-[0-9]+\.zip)">`,
+		t.TempDir(),
+		map[string]archiveHighWater{archiveFamilyUSR: {}},
+	)
+	if err != nil {
+		t.Fatalf("archiveLinks() error = %v", err)
+	}
+	want := []string{"f.n.000001-000100.zip", "f.pdf.000001-000100.zip"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("archiveLinks() = %v, want %v", got, want)
+	}
+}
+
+func TestArchiveLinksRecoverMissingSameRangeDailySibling(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`<a href="f.fb2.000001-000100.zip">fb2</a>`,
+			`<a href="f.n.000001-000100.zip">usr</a>`,
+		}, "\n")))
+	}))
+	defer server.Close()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "f.fb2.000001-000100.zip"), nil, 0o644); err != nil {
+		t.Fatalf("write existing daily update: %v", err)
+	}
+
+	f := testFetcher(server)
+	f.opts.Library.ArchiveContent = "all"
+	got, err := f.archiveLinks(context.Background(), server.URL, `href="([^"]+)"`, dir, map[string]archiveHighWater{
+		archiveFamilyFB2: {Begin: 1, End: 100, Daily: true},
+		archiveFamilyUSR: {Begin: 1, End: 100, Daily: true},
+	})
+	if err != nil {
+		t.Fatalf("archiveLinks() error = %v", err)
+	}
+	if strings.Join(got, ",") != "f.n.000001-000100.zip" {
+		t.Fatalf("archiveLinks() = %v, want missing usr sibling", got)
 	}
 }
 

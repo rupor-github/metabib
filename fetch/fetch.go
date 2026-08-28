@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	regexp2 "github.com/dlclark/regexp2/v2"
 	"go.uber.org/zap"
 	"golang.org/x/net/proxy"
 
@@ -25,6 +26,13 @@ import (
 )
 
 const NewArchivesExitCode = 2
+
+const profilePatternTimeout = time.Second
+
+const (
+	archiveFamilyFB2 = "fb2"
+	archiveFamilyUSR = "usr"
+)
 
 type Options struct {
 	Library       config.FetchLibraryConfig
@@ -47,6 +55,12 @@ type Result struct {
 	Archives    int
 	SQLTables   int
 	SQLDir      string
+}
+
+type archiveHighWater struct {
+	Begin int
+	End   int
+	Daily bool
 }
 
 type temporaryError struct {
@@ -97,15 +111,22 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if err := os.MkdirAll(archiveDir, 0o777); err != nil {
 		return Result{}, fmt.Errorf("create archive output directory %q: %w", archiveDir, err)
 	}
-	lastBook, err := getLastBookID(archiveDir)
+	highWater, err := getArchiveHighWater(archiveDir)
 	if err != nil {
 		return Result{}, err
 	}
 	if opts.Log != nil {
-		opts.Log.Info("Processing fetch profile", zap.String("library", libraryName), zap.String("profile", opts.Library.Name), zap.Int("last_book_id", lastBook))
+		opts.Log.Info(
+			"Processing fetch profile",
+			zap.String("library", libraryName),
+			zap.String("profile", opts.Library.Name),
+			zap.String("archive_content", archiveContent(opts.Library)),
+			zap.Int("fb2_last_book_id", highWater[archiveFamilyFB2].End),
+			zap.Int("usr_last_book_id", highWater[archiveFamilyUSR].End),
+		)
 	}
 
-	archiveLinks, err := f.links(ctx, opts.Library.ArchiveURL, opts.Library.ArchivePattern, lastBook, true)
+	archiveLinks, err := f.archiveLinks(ctx, opts.Library.ArchiveURL, opts.Library.ArchivePattern, archiveDir, highWater)
 	if err != nil {
 		return Result{}, err
 	}
@@ -113,7 +134,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	res := Result{LibraryName: libraryName, LastBookID: lastBook, Archives: len(archiveLinks), SQLDir: sqlDir}
+	res := Result{LibraryName: libraryName, LastBookID: max(highWater[archiveFamilyFB2].End, highWater[archiveFamilyUSR].End), Archives: len(archiveLinks), SQLDir: sqlDir}
 	if opts.Log != nil {
 		opts.Log.Info("Archive fetch completed", zap.Int("archives", res.Archives), zap.String("directory", archiveDir))
 	}
@@ -121,7 +142,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return res, nil
 	}
 
-	sqlLinks, err := f.links(ctx, opts.Library.SQLURL, opts.Library.SQLPattern, 0, false)
+	sqlLinks, err := f.links(ctx, opts.Library.SQLURL, opts.Library.SQLPattern)
 	if err != nil {
 		return Result{}, err
 	}
@@ -144,34 +165,59 @@ type fetcher struct {
 	userAgent string
 }
 
-func (f fetcher) links(ctx context.Context, baseURL string, pattern string, lastBook int, onlyNew bool) ([]string, error) {
+func (f fetcher) archiveLinks(ctx context.Context, baseURL string, pattern string, dest string, highWater map[string]archiveHighWater) ([]string, error) {
+	links, err := f.links(ctx, baseURL, pattern)
+	if err != nil {
+		return nil, err
+	}
+	content := archiveContent(f.opts.Library)
+	selected := make([]string, 0, len(links))
+	for _, link := range links {
+		family, _, second, ok, err := classifyUpdateName(link)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("archive pattern selected unsupported update name %q", link)
+		}
+		if !archiveContentAccepts(content, family) {
+			return nil, fmt.Errorf("archive pattern selected %s update %q for %s profile", family, link, content)
+		}
+		last := highWater[family]
+		if last.End < second || (last.End == second && last.Daily && !fileExists(filepath.Join(dest, link))) {
+			selected = append(selected, link)
+		}
+	}
+	return selected, nil
+}
+
+func (f fetcher) links(ctx context.Context, baseURL string, pattern string) ([]string, error) {
 	body, err := f.fetchString(ctx, baseURL)
 	if err != nil {
 		return nil, err
 	}
-	re, err := regexp.Compile(pattern)
+	re, err := regexp2.Compile(pattern, regexp2.None)
 	if err != nil {
 		return nil, fmt.Errorf("compile link pattern: %w", err)
 	}
-	matches := re.FindAllStringSubmatch(body, -1)
-	if matches == nil {
+	re.MatchTimeout = profilePatternTimeout
+	match, err := re.FindStringMatch(body)
+	if err != nil {
+		return nil, fmt.Errorf("match links at %s: %w", baseURL, err)
+	}
+	if match == nil {
 		return nil, fmt.Errorf("no suitable links found at %s", baseURL)
 	}
-	links := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
+	links := make([]string, 0)
+	for match != nil {
+		if match.GroupCount() < 2 {
+			return nil, fmt.Errorf("link pattern must capture file name as first group")
 		}
-		if onlyNew {
-			ok, _, second, err := dissectRange(match[1])
-			if err != nil {
-				return nil, err
-			}
-			if !ok || lastBook >= second {
-				continue
-			}
+		links = append(links, match.GroupByNumber(1).String())
+		match, err = re.FindNextMatch(match)
+		if err != nil {
+			return nil, fmt.Errorf("match links at %s: %w", baseURL, err)
 		}
-		links = append(links, match[1])
 	}
 	return links, nil
 }
@@ -480,70 +526,172 @@ func retryable(err error) bool {
 }
 
 func getLastBookID(path string) (int, error) {
+	highWater, err := getArchiveHighWater(path)
+	if err != nil {
+		return 0, err
+	}
+	return highWater[archiveFamilyFB2].End, nil
+}
+
+func getArchiveHighWater(path string) (map[string]archiveHighWater, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		return 0, fmt.Errorf("read archive directory %q: %w", path, err)
+		return nil, fmt.Errorf("read archive directory %q: %w", path, err)
 	}
-	lastBegin, lastEnd := 0, 0
-	mergeBegin, mergeEnd, mergeCount := 0, 0, 0
+	highWater := map[string]archiveHighWater{archiveFamilyFB2: {}, archiveFamilyUSR: {}}
+	mergeBegin := map[string]int{archiveFamilyFB2: 0, archiveFamilyUSR: 0}
+	mergeEnd := map[string]int{archiveFamilyFB2: 0, archiveFamilyUSR: 0}
+	mergeCount := map[string]int{archiveFamilyFB2: 0, archiveFamilyUSR: 0}
 	for _, entry := range entries {
 		name := entry.Name()
-		if ok, first, second, err := dissectRange(name); err != nil {
-			return 0, err
-		} else if ok && lastEnd < second {
-			lastBegin = first
-			lastEnd = second
+		family, first, second, daily, ok, err := classifyArchiveRangeName(name)
+		if err != nil {
+			return nil, err
+		}
+		if ok && highWater[family].End < second {
+			highWater[family] = archiveHighWater{Begin: first, End: second, Daily: daily}
 		}
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if ok, first, second, err := dissectMergeName(name); err != nil {
-			return 0, err
+		if family, first, second, ok, err := classifyMergeName(name); err != nil {
+			return nil, err
 		} else if ok {
-			mergeBegin = first
-			mergeEnd = second
-			mergeCount++
+			mergeBegin[family] = first
+			mergeEnd[family] = second
+			mergeCount[family]++
 		}
 	}
-	if mergeCount > 1 {
-		return 0, errors.New("there could only be single merge archive")
+	for _, family := range []string{archiveFamilyFB2, archiveFamilyUSR} {
+		if mergeCount[family] > 1 {
+			return nil, fmt.Errorf("there could only be single %s merge archive", family)
+		}
+		if mergeCount[family] == 0 {
+			continue
+		}
+		last := highWater[family]
+		if mergeBegin[family] < last.Begin ||
+			(mergeBegin[family] > last.Begin && mergeBegin[family] <= last.End) ||
+			mergeEnd[family] < last.End {
+			return nil, fmt.Errorf(
+				"%s merge (%d:%d) and last (%d:%d) archive do not match",
+				family,
+				mergeBegin[family],
+				mergeEnd[family],
+				last.Begin,
+				last.End,
+			)
+		}
+		highWater[family] = archiveHighWater{Begin: mergeBegin[family], End: mergeEnd[family]}
 	}
-	if mergeCount == 0 {
-		return lastEnd, nil
-	}
-	if mergeBegin < lastBegin || (mergeBegin > lastBegin && mergeBegin <= lastEnd) || mergeEnd < lastEnd {
-		return 0, fmt.Errorf("merge (%d:%d) and last (%d:%d) archive do not match", mergeBegin, mergeEnd, lastBegin, lastEnd)
-	}
-	return mergeEnd, nil
+	return highWater, nil
 }
 
 var (
-	mergeNameRE = regexp.MustCompile(`(?i)\s*fb2-([0-9]+)-([0-9]+)\.merging`)
-	rangeRE     = regexp.MustCompile(`(?i)(?:^|[^0-9])([0-9]+)-([0-9]+)(?:\.zip|\.[0-9]+\.fb2\.zip)`)
+	mergeNameRE         = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)-([0-9]+)\.merging$`)
+	localRangeRE        = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)-([0-9]+)\.zip$`)
+	plainFB2UpdateRE    = regexp.MustCompile(`(?i)^([0-9]+)-([0-9]+)\.zip$`)
+	flibustaFB2UpdateRE = regexp.MustCompile(`(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$`)
+	flibustaAnyUpdateRE = regexp.MustCompile(`(?i)^f\.([^.]+)\.([0-9]+)-([0-9]+)\.zip$`)
+	librusecAnyUpdateRE = regexp.MustCompile(`(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.([^.]+)\.zip$`)
 )
 
-func dissectMergeName(name string) (bool, int, int, error) {
-	return dissect(mergeNameRE, name)
+func classifyMergeName(name string) (string, int, int, bool, error) {
+	match := mergeNameRE.FindStringSubmatch(name)
+	if match == nil || !knownArchiveFamily(match[1]) {
+		return "", 0, 0, false, nil
+	}
+	first, second, err := parseRange(match[2], match[3], name)
+	return strings.ToLower(match[1]), first, second, true, err
+}
+
+func classifyArchiveRangeName(name string) (string, int, int, bool, bool, error) {
+	if family, first, second, ok, err := classifyLocalRangeName(name); ok || err != nil {
+		return family, first, second, false, ok, err
+	}
+	family, first, second, ok, err := classifyUpdateName(name)
+	return family, first, second, true, ok, err
+}
+
+func classifyRangeName(name string) (string, int, int, bool, error) {
+	family, first, second, _, ok, err := classifyArchiveRangeName(name)
+	return family, first, second, ok, err
+}
+
+func classifyLocalRangeName(name string) (string, int, int, bool, error) {
+	match := localRangeRE.FindStringSubmatch(name)
+	if match == nil || !knownArchiveFamily(match[1]) {
+		return "", 0, 0, false, nil
+	}
+	first, second, err := parseRange(match[2], match[3], name)
+	return strings.ToLower(match[1]), first, second, true, err
+}
+
+func classifyUpdateName(name string) (string, int, int, bool, error) {
+	if match := plainFB2UpdateRE.FindStringSubmatch(name); match != nil {
+		first, second, err := parseRange(match[1], match[2], name)
+		return archiveFamilyFB2, first, second, true, err
+	}
+	if match := flibustaFB2UpdateRE.FindStringSubmatch(name); match != nil {
+		first, second, err := parseRange(match[1], match[2], name)
+		return archiveFamilyFB2, first, second, true, err
+	}
+	if match := flibustaAnyUpdateRE.FindStringSubmatch(name); match != nil {
+		if strings.EqualFold(match[1], archiveFamilyFB2) {
+			first, second, err := parseRange(match[2], match[3], name)
+			return archiveFamilyFB2, first, second, true, err
+		}
+		first, second, err := parseRange(match[2], match[3], name)
+		return archiveFamilyUSR, first, second, true, err
+	}
+	match := librusecAnyUpdateRE.FindStringSubmatch(name)
+	if match == nil {
+		return "", 0, 0, false, nil
+	}
+	family := archiveFamilyUSR
+	if strings.EqualFold(match[3], archiveFamilyFB2) {
+		family = archiveFamilyFB2
+	}
+	first, second, err := parseRange(match[1], match[2], name)
+	return family, first, second, true, err
 }
 
 func dissectRange(name string) (bool, int, int, error) {
-	return dissect(rangeRE, name)
+	_, first, second, ok, err := classifyRangeName(name)
+	return ok, first, second, err
 }
 
-func dissect(re *regexp.Regexp, name string) (bool, int, int, error) {
-	match := re.FindStringSubmatch(name)
-	if match == nil {
-		return false, 0, 0, nil
-	}
-	first, err := strconv.Atoi(match[1])
+func parseRange(firstText string, secondText string, name string) (int, int, error) {
+	first, err := strconv.Atoi(firstText)
 	if err != nil {
-		return true, 0, 0, fmt.Errorf("dissect %q: %w", name, err)
+		return 0, 0, fmt.Errorf("dissect %q: %w", name, err)
 	}
-	second, err := strconv.Atoi(match[2])
+	second, err := strconv.Atoi(secondText)
 	if err != nil {
-		return true, 0, 0, fmt.Errorf("dissect %q: %w", name, err)
+		return 0, 0, fmt.Errorf("dissect %q: %w", name, err)
 	}
-	return true, first, second, nil
+	return first, second, nil
+}
+
+func knownArchiveFamily(family string) bool {
+	family = strings.ToLower(family)
+	return family == archiveFamilyFB2 || family == archiveFamilyUSR
+}
+
+func archiveContent(lib config.FetchLibraryConfig) string {
+	if lib.ArchiveContent == "" {
+		return archiveFamilyFB2
+	}
+	return strings.ToLower(lib.ArchiveContent)
+}
+
+func archiveContentAccepts(content string, family string) bool {
+	return content == "all" || content == family
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func joinURL(baseURL string, file string) string {

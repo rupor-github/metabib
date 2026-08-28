@@ -44,11 +44,31 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 		cfg.Processing.NestedArchiveInspection.MaxCompressedBytes() != 498*1024*1024 {
 		t.Fatalf("NestedArchiveInspection = %#v", cfg.Processing.NestedArchiveInspection)
 	}
-	if _, ok := cfg.Fetch.FindLibrary("flibusta"); !ok {
-		t.Fatal("default flibusta fetch profile is missing")
+	for _, name := range []string{"flibusta", "flibusta-usr", "flibusta-all", "librusec", "librusec-usr", "librusec-all"} {
+		lib, ok := cfg.Fetch.FindLibrary(name)
+		if !ok {
+			t.Fatalf("default %s fetch profile is missing", name)
+		}
+		if lib.ArchiveContent == "" {
+			t.Fatalf("default %s fetch profile archive_content is empty", name)
+		}
 	}
 	if cfg.Rollup.ValidateCRC {
 		t.Fatal("Rollup.ValidateCRC = true, want false")
+	}
+	if cfg.Rollup.TargetSizeMiB.FB2 != 2048 || cfg.Rollup.TargetSizeMiB.USR != 4096 {
+		t.Fatalf("Rollup.TargetSizeMiB = %#v, want fb2=2048 usr=4096", cfg.Rollup.TargetSizeMiB)
+	}
+	if len(cfg.Rollup.UpdatePatterns) != 4 {
+		t.Fatalf("Rollup.UpdatePatterns length = %d, want 4", len(cfg.Rollup.UpdatePatterns))
+	}
+	for _, pattern := range cfg.Rollup.UpdatePatterns {
+		if pattern.Family != "fb2" && pattern.Family != "usr" {
+			t.Fatalf("Rollup.UpdatePatterns contains invalid family: %#v", pattern)
+		}
+		if pattern.Pattern == "" {
+			t.Fatalf("Rollup.UpdatePatterns contains empty pattern: %#v", pattern)
+		}
 	}
 	if cfg.Database.AdminPath != "" {
 		t.Fatalf("Database.AdminPath = %q, want empty", cfg.Database.AdminPath)
@@ -76,6 +96,35 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	}
 	if len(cfg.INPX.Language.ContextRules) != 2 || cfg.INPX.Language.ContextRules[0].From != "ba" || cfg.INPX.Language.ContextRules[1].From != "xa" {
 		t.Fatalf("INPX language context rules = %#v", cfg.INPX.Language.ContextRules)
+	}
+}
+
+func TestLoadConfigurationDefaultsMissingArchiveContentToFB2(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"fetch:",
+		"  libraries:",
+		"    - name: custom",
+		"      archive_pattern: 'href=\"([^\"]+)\"'",
+		"      sql_pattern: 'href=\"([^\"]+)\"'",
+		"      archive_url: http://example.com/daily/",
+		"      sql_url: http://example.com/sql/",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("LoadConfiguration() error = %v", err)
+	}
+	lib, ok := cfg.Fetch.FindLibrary("custom")
+	if !ok {
+		t.Fatal("custom fetch profile is missing")
+	}
+	if lib.ArchiveContent != "fb2" {
+		t.Fatalf("ArchiveContent = %q, want fb2", lib.ArchiveContent)
 	}
 }
 

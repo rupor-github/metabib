@@ -81,7 +81,8 @@ Current schema versions:
 
 - `fetch` downloads new daily archive updates and SQL dumps from a configured
   remote library profile;
-- `rollup` folds daily FB2 update ZIPs into size-bounded local archive ZIPs;
+- `rollup` folds daily FB2 and USR update ZIPs into size-bounded local archive
+  ZIPs;
 - `cache` imports SQL dumps, queries database metadata, walks FB2 archive
   entries, parses FB2 descriptions, and writes manifest files for each selected
   source;
@@ -175,22 +176,32 @@ library profile:
 
 ```sh
 metabib fetch --library flibusta --to upd_flibusta --tosql flibusta_20260622 --continue
+metabib fetch --library flibusta-all --to upd_flibusta --tosql flibusta_20260622 --continue
 metabib fetch --library librusec --to upd_librusec --tosql librusec_20260713 --continue
+metabib fetch --library librusec-usr --to upd_librusec_usr --tosql librusec_20260713 --continue
 ```
 
 `fetch` reads profiles from the `fetch` section of the YAML configuration,
-discovers the last local book ID from existing range-named ZIPs in `--to`,
-downloads only newer daily archive updates, and decompresses downloaded
-`*.sql.gz` dumps into `--tosql`.
-Both rollup archives such as `fb2-000001-000100.zip` and retained daily updates
-such as `f.fb2.000101-000150.zip` count toward the local high-water mark. When
-`--tosql` is omitted, the SQL output directory is generated from the library name
-and current UTC timestamp. Use `--nosql` to download archive updates only.
+tracks FB2 and USR high-water marks independently from existing range-named ZIPs
+in `--to`, downloads only newer daily archive updates for the selected profile,
+and decompresses downloaded `*.sql.gz` dumps into `--tosql`.
+FB2 rollup archives such as `fb2-000001-000100.zip`, USR rollup archives such as
+`usr-000001-000100.zip`, active `.merging` archives, and retained daily updates
+count toward that family's local high-water mark. When `--tosql` is omitted, the
+SQL output directory is generated from the library name and current UTC timestamp.
+Use `--nosql` to download archive updates only.
 
-The default configuration includes `flibusta` and `librusec` fetch profiles.
-Librusec daily FB2 updates use dated names such as
-`2026-07-12.818211-818248.503.fb2.zip`; `metabib` downloads only the FB2 update
-archives and skips other content formats.
+FB2 and USR are maintained as separate update lineages. A newer FB2 archive or
+`fb2-*.merging` file does not suppress USR downloads, and a newer USR archive or
+`usr-*.merging` file does not suppress FB2 downloads. Combined profiles such as
+`flibusta-all` and `librusec-all` classify each matched remote update first, then
+compare it only with that lineage's high-water mark.
+
+The default configuration includes FB2-only `flibusta` and `librusec` profiles,
+USR-only `flibusta-usr` and `librusec-usr` profiles, and combined
+`flibusta-all` and `librusec-all` profiles. USR selection uses `regexp2`
+negative lookahead so any daily update extension except `fb2` is selected
+without maintaining an extension allowlist.
 
 Exit code `0` means no new archive updates were downloaded, exit code `1` means
 an error occurred, and exit code `2` means one or more new archive updates were
@@ -213,24 +224,46 @@ Available `fetch` arguments:
 
 ### Roll Up Daily Archives
 
-Roll downloaded daily update ZIPs into local size-bounded FB2 archives:
+Roll downloaded daily update ZIPs into local size-bounded FB2 and USR archives:
 
 ```sh
 metabib rollup --archives flibusta --updates upd_flibusta
 ```
 
-`rollup` keeps finalized archives and the active `.merging` archive in
-`--archives`, reads daily update ZIPs from each `--updates` directory, and appends
-ZIP entries without recompressing them. If no `--updates` directory is provided,
-`rollup` scans `--archives` for update ZIPs as well. Generated archive names use
-the ID width of the existing `.merging` archive or latest finalized `fb2-*.zip`;
-new archive directories default to 10-digit IDs.
+`rollup` keeps finalized archives and active `.merging` archives in `--archives`,
+reads daily update ZIPs from each `--updates` directory, classifies updates with
+`rollup.update_patterns`, and appends ZIP entries without recompressing them. If
+no `--updates` directory is provided, `rollup` scans `--archives` for update ZIPs
+as well. Generated archive names use the ID width of the existing `.merging`
+archive or latest finalized archive in the same family; new archive directories
+default to 10-digit IDs.
 Daily update ZIPs are always preserved; retention and cleanup are separate
 operational concerns.
 
-Rolled-up archive names are always Flibusta-style range names such as
-`fb2-0000817672-0000818248.zip`, including when the source updates are dated
-Librusec ZIPs.
+Rolled-up archive names are always local range names such as
+`fb2-0000817672-0000818248.zip` and `usr-0000817672-0000818248.zip`, including
+when source updates are dated Librusec ZIPs.
+
+Rollup also maintains these lineages independently. One invocation can consume a
+mixed update directory and update both active archives, for example producing
+`fb2-0000886760-0000887123.merging` and
+`usr-0000886760-0000887123.merging` from the same `--updates` directory. Each
+lineage has its own latest finalized archive, active `.merging` archive, size
+threshold accounting, and overlap checks.
+
+`rollup.update_patterns` are regexp2 filename patterns. The first two capture
+groups must be range begin and end, and `family` selects destination lineage
+(`fb2-*` or `usr-*`). If one update file matches multiple patterns, rollup fails
+with an ambiguity error so precedence is never hidden in code.
+
+Finalized archive target sizes are configured per lineage in binary mebibytes:
+
+```yaml
+rollup:
+  target_size_mib:
+    fb2: 2048
+    usr: 4096
+```
 
 By default, direct compressed copying does not validate entry payload CRCs. Set
 `rollup.validate_crc: true` in the configuration to decompress each non-empty
@@ -239,17 +272,16 @@ reduce performance, but entries are still copied in their original compressed fo
 without recompression.
 
 Exit code `0` means no finalized archive was produced, exit code `1` means an
-error occurred, and exit code `2` means one or more finalized `fb2-*.zip` archives
-were created. Use code `2` to decide whether cache/index rebuild work is needed.
+error occurred, and exit code `2` means one or more finalized `fb2-*.zip` or
+`usr-*.zip` archives were created. Use code `2` to decide whether cache/index
+rebuild work is needed.
 
 Available `rollup` arguments:
 
-- `--archives DIR`, `-a DIR`: required directory for finalized `fb2-*.zip`
-  archives and the active `fb2-*.merging` archive.
+- `--archives DIR`, `-a DIR`: required directory for finalized `fb2-*.zip` and
+  `usr-*.zip` archives plus active `fb2-*.merging` and `usr-*.merging` archives.
 - `--updates DIR`, `-u DIR`: directory containing daily update ZIPs; can be
   repeated. Defaults to `--archives` when omitted.
-- `--size MB`: finalized archive target size in decimal megabytes. Default is
-  `2000`.
 
 ### Build Cache Manifests
 

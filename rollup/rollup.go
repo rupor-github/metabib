@@ -13,7 +13,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	regexp2 "github.com/dlclark/regexp2/v2"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
@@ -21,19 +23,41 @@ import (
 
 const NewArchiveExitCode = 2
 
+const updatePatternTimeout = time.Second
+
 type Options struct {
-	ArchiveDir  string
-	UpdateDirs  []string
-	SizeBytes   int64
-	ValidateCRC bool
-	Log         *zap.Logger
+	ArchiveDir      string
+	UpdateDirs      []string
+	TargetSizeBytes map[string]int64
+	ValidateCRC     bool
+	UpdatePatterns  []UpdatePattern
+	Log             *zap.Logger
+}
+
+type UpdatePattern struct {
+	Name    string
+	Family  string
+	Pattern string
 }
 
 type Result struct {
 	Updates           int
 	Finalized         int
 	ActiveMerge       string
+	ActiveMerges      []string
 	FinalizedArchives []string
+}
+
+type archiveFamily struct {
+	Name   string
+	Prefix string
+}
+
+type compiledUpdatePattern struct {
+	Name    string
+	Family  archiveFamily
+	Pattern string
+	re      *regexp2.Regexp
 }
 
 type archive struct {
@@ -61,8 +85,8 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 	if opts.ArchiveDir == "" {
 		return Result{}, errors.New("archive directory is required")
 	}
-	if opts.SizeBytes <= 0 {
-		return Result{}, errors.New("archive size must be positive")
+	if err := validateTargetSizeBytes(opts.TargetSizeBytes); err != nil {
+		return Result{}, err
 	}
 	archiveDir, err := filepath.Abs(opts.ArchiveDir)
 	if err != nil {
@@ -80,19 +104,53 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 		return Result{}, err
 	}
 	sort.Sort(byName(allFiles))
+	updatePatterns, err := compileUpdatePatterns(opts.UpdatePatterns)
+	if err != nil {
+		return Result{}, err
+	}
 
-	last, err := getLastArchive(allFiles)
+	var res Result
+	for _, family := range archiveFamilies() {
+		familyRes, err := runFamily(ctx, opts, archiveDir, allFiles, family, updatePatterns, copyEntry)
+		if err != nil {
+			return Result{}, err
+		}
+		res.Updates += familyRes.Updates
+		res.Finalized += familyRes.Finalized
+		res.FinalizedArchives = append(res.FinalizedArchives, familyRes.FinalizedArchives...)
+		if familyRes.ActiveMerge != "" {
+			if res.ActiveMerge == "" {
+				res.ActiveMerge = familyRes.ActiveMerge
+			}
+			res.ActiveMerges = append(res.ActiveMerges, familyRes.ActiveMerge)
+		}
+	}
+	return res, nil
+}
+
+func runFamily(
+	ctx context.Context,
+	opts Options,
+	archiveDir string,
+	allFiles []archive,
+	family archiveFamily,
+	updatePatterns []compiledUpdatePattern,
+	copyEntry copyEntryFunc,
+) (Result, error) {
+	targetSize := opts.TargetSizeBytes[family.Name]
+	last, err := getLastArchive(allFiles, family)
 	if err != nil {
 		return Result{}, err
 	}
 	if last.info == nil {
 		last.dir = archiveDir
 		if opts.Log != nil {
-			opts.Log.Info("No finalized archive found; using archive directory", zap.String("directory", archiveDir))
+			opts.Log.Info("No finalized archive found; using archive directory", zap.String("family", family.Name), zap.String("directory", archiveDir))
 		}
 	} else if opts.Log != nil {
 		opts.Log.Info(
 			"Last archive detected",
+			zap.String("family", family.Name),
 			zap.String("file", filepath.Join(last.dir, last.info.Name())),
 			zap.Int("begin", last.begin),
 			zap.Int("end", last.end),
@@ -100,7 +158,7 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 		)
 	}
 
-	merge, err := getMergeArchive(allFiles)
+	merge, err := getMergeArchive(allFiles, family)
 	if err != nil {
 		return Result{}, err
 	}
@@ -115,6 +173,7 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 		if opts.Log != nil {
 			opts.Log.Info(
 				"Merge archive detected",
+				zap.String("family", family.Name),
 				zap.String("file", filepath.Join(merge.dir, merge.info.Name())),
 				zap.Int("begin", merge.begin),
 				zap.Int("end", merge.end),
@@ -126,7 +185,7 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 		merge.end = last.end
 	}
 
-	updates, err := getUpdates(allFiles, merge.end)
+	updates, err := getUpdates(allFiles, merge.end, family, updatePatterns)
 	if err != nil {
 		return Result{}, err
 	}
@@ -136,12 +195,12 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 	}
 	if len(updates) == 0 {
 		if opts.Log != nil {
-			opts.Log.Info("No archive updates found")
+			opts.Log.Info("No archive updates found", zap.String("family", family.Name))
 		}
 		return Result{}, nil
 	}
 	if opts.Log != nil {
-		opts.Log.Info("Archive updates found", zap.Int("updates", len(updates)))
+		opts.Log.Info("Archive updates found", zap.String("family", family.Name), zap.Int("updates", len(updates)))
 		for _, update := range updates {
 			fields := []zap.Field{
 				zap.String("file", filepath.Join(update.dir, update.info.Name())),
@@ -156,7 +215,16 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 		}
 	}
 
-	return processUpdates(ctx, opts, last, merge, updates, archiveNameWidth(last, merge), copyEntry)
+	return processUpdates(ctx, opts, last, merge, updates, archiveNameWidth(last, merge, family), family, targetSize, copyEntry)
+}
+
+func validateTargetSizeBytes(sizes map[string]int64) error {
+	for _, family := range archiveFamilies() {
+		if sizes[family.Name] <= 0 {
+			return fmt.Errorf("rollup target size for %s must be positive", family.Name)
+		}
+	}
+	return nil
 }
 
 func processUpdates(
@@ -166,11 +234,13 @@ func processUpdates(
 	merge archive,
 	updates []archive,
 	nameWidth int,
+	family archiveFamily,
+	targetSize int64,
 	copyEntry copyEntryFunc,
 ) (Result, error) {
-	format := fmt.Sprintf("fb2-%%0%dd-%%0%dd", nameWidth, nameWidth)
+	format := fmt.Sprintf("%s-%%0%dd-%%0%dd", family.Prefix, nameWidth, nameWidth)
 	res := Result{Updates: len(updates)}
-	work, err := openWorkArchive(opts, last, merge, &updates)
+	work, err := openWorkArchive(opts, last, merge, targetSize, &updates)
 	if err != nil {
 		return Result{}, err
 	}
@@ -181,12 +251,12 @@ func processUpdates(
 	}()
 	firstUpdateIsExisting := work.firstUpdateIsExisting
 
-	leftBytes := opts.SizeBytes - work.existingSize
+	leftBytes := targetSize - work.existingSize
 	firstBook := work.firstBook
 	lastBook := work.lastBook
 	existingEnd := merge.end
 	copiedNewEntry := false
-	activeWorkIDs := make(map[int]struct{})
+	activeWorkIDs := make(map[string]struct{})
 	for updateIndex, update := range updates {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
@@ -201,7 +271,10 @@ func processUpdates(
 			opts.Log.Info("Processing update archive", zap.String("file", updatePath))
 		}
 		files := slices.SortedFunc(slices.Values(rc.File), func(a, b *zip.File) int {
-			return nameToID(a.FileInfo().Name()) - nameToID(b.FileInfo().Name())
+			if diff := nameToID(a.FileInfo().Name()) - nameToID(b.FileInfo().Name()); diff != 0 {
+				return diff
+			}
+			return strings.Compare(a.FileInfo().Name(), b.FileInfo().Name())
 		})
 		for _, file := range files {
 			if file.FileInfo().Size() == 0 {
@@ -230,7 +303,8 @@ func processUpdates(
 				continue
 			}
 			if !updateIsExisting {
-				if _, ok := activeWorkIDs[id]; ok {
+				key := archiveEntryKey(file, family)
+				if _, ok := activeWorkIDs[key]; ok {
 					if opts.Log != nil {
 						opts.Log.Warn(
 							"Skipping duplicate archive entry from overlapping update",
@@ -263,7 +337,7 @@ func processUpdates(
 				lastBook = id
 			}
 			if !updateIsExisting {
-				activeWorkIDs[id] = struct{}{}
+				activeWorkIDs[archiveEntryKey(file, family)] = struct{}{}
 				copiedNewEntry = true
 				leftBytes -= int64(file.CompressedSize64)
 			}
@@ -290,11 +364,11 @@ func processUpdates(
 					rc.Close()
 					return Result{}, err
 				}
-				leftBytes = opts.SizeBytes
+				leftBytes = targetSize
 				firstBook = 0
 				lastBook = 0
 				copiedNewEntry = false
-				activeWorkIDs = make(map[int]struct{})
+				activeWorkIDs = make(map[string]struct{})
 			}
 		}
 		if err := rc.Close(); err != nil {
@@ -349,7 +423,7 @@ type workArchive struct {
 	firstUpdateIsExisting bool
 }
 
-func openWorkArchive(opts Options, last archive, merge archive, updates *[]archive) (*workArchive, error) {
+func openWorkArchive(opts Options, last archive, merge archive, targetSize int64, updates *[]archive) (*workArchive, error) {
 	if merge.info != nil {
 		return rewriteExistingMergeArchive(filepath.Join(merge.dir, merge.info.Name()), merge.begin, merge.end, merge.info.Size())
 	}
@@ -357,7 +431,7 @@ func openWorkArchive(opts Options, last archive, merge archive, updates *[]archi
 	if err != nil {
 		return nil, err
 	}
-	if last.info != nil && opts.SizeBytes-last.info.Size() > 0 {
+	if last.info != nil && targetSize-last.info.Size() > 0 {
 		lastPath := filepath.Join(last.dir, last.info.Name())
 		if opts.Log != nil {
 			opts.Log.Info("Merging last archive", zap.String("file", lastPath))
@@ -500,30 +574,77 @@ func collectArchives(dirs []string) ([]archive, error) {
 }
 
 var (
-	archiveNameRE        = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.zip$`)
-	mergeNameRE          = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.merging$`)
-	updateNameRE         = regexp.MustCompile(`(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$`)
-	librusecUpdateNameRE = regexp.MustCompile(`(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.fb2\.zip$`)
-	localNameRE          = regexp.MustCompile(`(?i)^fb2-([0-9]+)-([0-9]+)\.(?:zip|merging)$`)
+	localArchiveNameRE = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)-([0-9]+)\.zip$`)
+	localMergeNameRE   = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)-([0-9]+)\.merging$`)
+	localNameRE        = regexp.MustCompile(`(?i)^([a-z0-9]+)-([0-9]+)-([0-9]+)\.(?:zip|merging)$`)
 )
 
-func archiveNameWidth(last archive, merge archive) int {
+func archiveFamilies() []archiveFamily {
+	return []archiveFamily{{Name: "fb2", Prefix: "fb2"}, {Name: "usr", Prefix: "usr"}}
+}
+
+func defaultUpdatePatterns() []UpdatePattern {
+	return []UpdatePattern{
+		{Name: "flibusta-fb2", Family: "fb2", Pattern: `(?i)^f(?:\.fb2)?\.([0-9]+)-([0-9]+)\.zip$`},
+		{Name: "flibusta-usr", Family: "usr", Pattern: `(?i)^f\.(?!fb2\.)[^.]+\.([0-9]+)-([0-9]+)\.zip$`},
+		{Name: "librusec-fb2", Family: "fb2", Pattern: `(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.fb2\.zip$`},
+		{Name: "librusec-usr", Family: "usr", Pattern: `(?i)^[0-9]{4}-[0-9]{2}-[0-9]{2}\.([0-9]+)-([0-9]+)\.[0-9]+\.(?!fb2\.)[^.]+\.zip$`},
+	}
+}
+
+func compileUpdatePatterns(patterns []UpdatePattern) ([]compiledUpdatePattern, error) {
+	if len(patterns) == 0 {
+		patterns = defaultUpdatePatterns()
+	}
+	res := make([]compiledUpdatePattern, 0, len(patterns))
+	for _, pattern := range patterns {
+		family, ok := archiveFamilyByName(pattern.Family)
+		if !ok {
+			return nil, fmt.Errorf("rollup update pattern %q has unsupported family %q", patternLabel(pattern), pattern.Family)
+		}
+		re, err := regexp2.Compile(pattern.Pattern, regexp2.None)
+		if err != nil {
+			return nil, fmt.Errorf("compile rollup update pattern %q: %w", patternLabel(pattern), err)
+		}
+		re.MatchTimeout = updatePatternTimeout
+		res = append(res, compiledUpdatePattern{Name: patternLabel(pattern), Family: family, Pattern: pattern.Pattern, re: re})
+	}
+	return res, nil
+}
+
+func archiveFamilyByName(name string) (archiveFamily, bool) {
+	for _, family := range archiveFamilies() {
+		if strings.EqualFold(family.Name, name) {
+			return family, true
+		}
+	}
+	return archiveFamily{}, false
+}
+
+func patternLabel(pattern UpdatePattern) string {
+	if pattern.Name != "" {
+		return pattern.Name
+	}
+	return pattern.Pattern
+}
+
+func archiveNameWidth(last archive, merge archive, family archiveFamily) int {
 	for _, item := range []archive{merge, last} {
 		if item.info == nil {
 			continue
 		}
 		match := localNameRE.FindStringSubmatch(item.info.Name())
-		if len(match) >= 3 {
-			return max(len(match[1]), len(match[2]))
+		if len(match) >= 4 && strings.EqualFold(match[1], family.Prefix) {
+			return max(len(match[2]), len(match[3]))
 		}
 	}
 	return 10
 }
 
-func getLastArchive(files []archive) (archive, error) {
+func getLastArchive(files []archive, family archiveFamily) (archive, error) {
 	var res archive
 	for _, file := range files {
-		ok, first, second, err := dissect(archiveNameRE, file.info.Name())
+		ok, first, second, err := dissectLocalName(localArchiveNameRE, file.info.Name(), family)
 		if err != nil {
 			return archive{}, err
 		}
@@ -534,11 +655,11 @@ func getLastArchive(files []archive) (archive, error) {
 	return res, nil
 }
 
-func getMergeArchive(files []archive) (archive, error) {
+func getMergeArchive(files []archive, family archiveFamily) (archive, error) {
 	var res archive
 	var count int
 	for _, file := range files {
-		ok, first, second, err := dissect(mergeNameRE, file.info.Name())
+		ok, first, second, err := dissectLocalName(localMergeNameRE, file.info.Name(), family)
 		if err != nil {
 			return archive{}, err
 		}
@@ -548,19 +669,19 @@ func getMergeArchive(files []archive) (archive, error) {
 		}
 	}
 	if count > 1 {
-		return archive{}, errors.New("there could only be single merge archive")
+		return archive{}, fmt.Errorf("there could only be single %s merge archive", family.Name)
 	}
 	return res, nil
 }
 
-func getUpdates(files []archive, last int) ([]archive, error) {
+func getUpdates(files []archive, last int, family archiveFamily, patterns []compiledUpdatePattern) ([]archive, error) {
 	updates := make([]archive, 0)
 	for _, file := range files {
-		ok, first, second, err := dissectUpdateName(file.info.Name())
+		matchedFamily, first, second, ok, err := matchUpdateName(file.info.Name(), patterns)
 		if err != nil {
 			return nil, err
 		}
-		if ok && last < second {
+		if ok && matchedFamily.Name == family.Name && last < second {
 			updates = append(updates, archive{dir: file.dir, info: file.info, begin: first, end: second})
 		}
 	}
@@ -643,39 +764,89 @@ func updateArchiveActualRange(update archive) (int, int, error) {
 	return begin, end, nil
 }
 
-func dissectUpdateName(name string) (bool, int, int, error) {
-	for _, re := range []*regexp.Regexp{updateNameRE, librusecUpdateNameRE} {
-		ok, first, second, err := dissect(re, name)
-		if err != nil || ok {
-			return ok, first, second, err
-		}
-	}
-	return false, 0, 0, nil
-}
-
-func dissect(re *regexp.Regexp, name string) (bool, int, int, error) {
+func dissectLocalName(re *regexp.Regexp, name string, family archiveFamily) (bool, int, int, error) {
 	match := re.FindStringSubmatch(name)
 	if match == nil {
 		return false, 0, 0, nil
 	}
-	first, err := strconv.Atoi(match[1])
+	if !strings.EqualFold(match[1], family.Prefix) {
+		return false, 0, 0, nil
+	}
+	first, err := strconv.Atoi(match[2])
 	if err != nil {
 		return true, 0, 0, fmt.Errorf("dissect %q: %w", name, err)
 	}
-	second, err := strconv.Atoi(match[2])
+	second, err := strconv.Atoi(match[3])
 	if err != nil {
 		return true, 0, 0, fmt.Errorf("dissect %q: %w", name, err)
 	}
 	return true, first, second, nil
 }
 
+func matchUpdateName(name string, patterns []compiledUpdatePattern) (archiveFamily, int, int, bool, error) {
+	var matched *compiledUpdatePattern
+	var first, second int
+	for i := range patterns {
+		match, err := patterns[i].re.FindStringMatch(name)
+		if err != nil {
+			return archiveFamily{}, 0, 0, false, fmt.Errorf("match update file %q with rollup pattern %q: %w", name, patterns[i].Name, err)
+		}
+		if match == nil {
+			continue
+		}
+		if matched != nil {
+			return archiveFamily{}, 0, 0, false, fmt.Errorf(
+				"update file %q matches multiple rollup patterns: %q and %q",
+				name,
+				matched.Name,
+				patterns[i].Name,
+			)
+		}
+		if match.GroupCount() < 3 {
+			return archiveFamily{}, 0, 0, false, fmt.Errorf("rollup pattern %q must capture range begin and end", patterns[i].Name)
+		}
+		first, second, err = parseUpdateRange(match.GroupByNumber(1).String(), match.GroupByNumber(2).String(), name, patterns[i].Name)
+		if err != nil {
+			return archiveFamily{}, 0, 0, false, err
+		}
+		matched = &patterns[i]
+	}
+	if matched == nil {
+		return archiveFamily{}, 0, 0, false, nil
+	}
+	return matched.Family, first, second, true, nil
+}
+
+func parseUpdateRange(firstText string, secondText string, name string, pattern string) (int, int, error) {
+	first, err := strconv.Atoi(firstText)
+	if err != nil {
+		return 0, 0, fmt.Errorf("dissect update file %q with rollup pattern %q: %w", name, pattern, err)
+	}
+	second, err := strconv.Atoi(secondText)
+	if err != nil {
+		return 0, 0, fmt.Errorf("dissect update file %q with rollup pattern %q: %w", name, pattern, err)
+	}
+	return first, second, nil
+}
+
 func nameToID(name string) int {
-	base := strings.TrimSuffix(name, filepath.Ext(name))
+	base := filepath.Base(name)
+	if dot := strings.IndexByte(base, '.'); dot >= 0 {
+		base = base[:dot]
+	}
 	id, err := strconv.Atoi(base)
 	if err != nil {
 		return -1
 	}
 	return id
+}
+
+func archiveEntryKey(file *zip.File, family archiveFamily) string {
+	name := file.FileInfo().Name()
+	if family.Name == "fb2" {
+		return strconv.Itoa(nameToID(name))
+	}
+	return strings.ToLower(filepath.Base(name))
 }
 
 func countZipEntries(path string) (int, error) {
