@@ -583,16 +583,14 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 	}
 	genres := genresString(view.Database.Genres, view.FB2.Genres)
 	sequence, seqNum := sequenceString(view.Database.Sequences, view.FB2.Sequences, opts)
-	fileName := strings.TrimSuffix(view.Artifact.Name, filepath.Ext(view.Artifact.Name))
-	if fileName == "" {
-		fileName = datasetBookID(rec)
-	}
-	ext := inpxutil.ArchiveRecordExtension(rec)
-	if ext == "" {
-		ext = view.Catalog.FileType
-	}
-	if ext == "" {
-		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
+	fileName, ext := inpxutil.RecordFileNameAndExtension(rec, view)
+	if opts.Log != nil && (inpxutil.FileNameEscapeAmbiguous(fileName) || inpxutil.FileNameEscapeAmbiguous(ext)) {
+		opts.Log.Warn(
+			"Ambiguous INPX filename escape sequence",
+			zap.String("book_id", datasetBookID(rec)),
+			zap.String("file", fileName),
+			zap.String("ext", ext),
+		)
 	}
 	date := dateOnly(view.Catalog.Time)
 	if date == "" {
@@ -612,11 +610,11 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 		fix(title, opts.QuickFix, opts.Limits.Title),
 		fix(sequence, opts.QuickFix, opts.Limits.Sequence),
 		seqNum,
-		fileName,
+		inpxutil.CleanseFileName(fileName),
 		strconv.FormatUint(view.Artifact.Size, 10),
 		datasetBookID(rec),
 		view.Catalog.Deleted,
-		ext,
+		inpxutil.CleanseFileName(ext),
 		date,
 		strings.TrimSpace(lang),
 		ruksRate(view.Catalog.Rating),

@@ -540,6 +540,17 @@ and checksums for long-term correlation across regenerated datasets.
 
 ### INPX Generation
 
+All INPX generators treat filename fields as lookup keys. `FILE` and `EXT`
+preserve physical archive-entry spelling more strictly than display fields:
+non-breaking spaces, literal percent signs, tabs, and other non-structural bytes
+are left unchanged. Only characters that would break the INPX row format are
+escaped with a visible tilde sequence: field separator `0x04` becomes `~04`,
+carriage return becomes `~0D`, and line feed becomes `~0A`. This is a narrow
+metabib convention rather than full URL percent-encoding; INPX consumers need
+matching decode support to resolve such archive entries during import or
+extraction. Literal `~04`, `~0D`, and `~0A` in archive names are ambiguous escape
+sequences; generators warn when such names are encountered.
+
 #### `mhl-inpx`
 
 Build a MyHomeLib-compatible "historical" INPX from merged dataset JSONL:

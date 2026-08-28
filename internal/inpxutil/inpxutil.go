@@ -44,6 +44,12 @@ var cleanseReplacer = strings.NewReplacer(
 	"\u00a0", " ",
 )
 
+var cleanseFileNameReplacer = strings.NewReplacer(
+	"\r", "~0D",
+	"\n", "~0A",
+	FieldSep, "~04",
+)
+
 var authorComponentReplacer = strings.NewReplacer(
 	",", "，",
 	":", "：",
@@ -151,6 +157,56 @@ func ArchiveRecordExtension(rec model.DatasetRecord) string {
 		}
 	}
 	return ""
+}
+
+func RecordFileNameAndExtension(rec model.DatasetRecord, view DatasetRecordView) (string, string) {
+	if fileName, ext, ok := ArchiveRecordFileNameAndExtension(rec); ok {
+		return fileName, ext
+	}
+	ext := ArchiveRecordExtension(rec)
+	if ext == "" {
+		ext = view.Catalog.FileType
+	}
+	if ext == "" {
+		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
+	}
+	fileName := strings.TrimSuffix(view.Artifact.Name, filepath.Ext(view.Artifact.Name))
+	if fileName == "" {
+		fileName = DatasetBookID(rec)
+	}
+	return fileName, strings.TrimPrefix(ext, ".")
+}
+
+func ArchiveRecordFileNameAndExtension(rec model.DatasetRecord) (string, string, bool) {
+	locator := rec.Record.Locator
+	if locator.Kind != "archive_entry" {
+		return "", "", false
+	}
+	for _, artifact := range rec.Artifacts {
+		for _, occurrence := range artifact.Occurrences {
+			if occurrence.Entry == "" || occurrence.Archive != locator.Source {
+				continue
+			}
+			if locator.Index != nil && occurrence.Index != *locator.Index {
+				continue
+			}
+			fileName, ext := splitFinalExtension(occurrence.Entry)
+			return fileName, ext, true
+		}
+	}
+	for _, artifact := range rec.Artifacts {
+		if artifact.Name == "" {
+			continue
+		}
+		fileName, ext := splitFinalExtension(artifact.Name)
+		return fileName, ext, true
+	}
+	return "", "", false
+}
+
+func splitFinalExtension(name string) (string, string) {
+	ext := filepath.Ext(name)
+	return strings.TrimSuffix(name, ext), strings.TrimPrefix(ext, ".")
 }
 
 func archiveEntryExtension(name string) string {
@@ -499,6 +555,15 @@ func InRanges(ranges []model.IndexRange, idx int) bool {
 
 func Cleanse(value string) string {
 	return cleanseReplacer.Replace(value)
+}
+
+func CleanseFileName(value string) string {
+	return cleanseFileNameReplacer.Replace(value)
+}
+
+func FileNameEscapeAmbiguous(value string) bool {
+	upper := strings.ToUpper(value)
+	return strings.Contains(upper, "~04") || strings.Contains(upper, "~0D") || strings.Contains(upper, "~0A")
 }
 
 func CleanseAuthorComponent(value string) string {

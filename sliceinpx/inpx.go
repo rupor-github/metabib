@@ -673,13 +673,6 @@ func (w *streamINPXWriter) buildRecordRows(
 		return recordFields{}, view, nil, entryDiagnostics{}, false, err
 	}
 	diagnostics := entryDiagnostics{}
-	ext := inpxutil.ArchiveRecordExtension(rec)
-	if ext == "" {
-		ext = view.Catalog.FileType
-	}
-	if ext == "" {
-		ext = strings.TrimPrefix(filepath.Ext(view.Artifact.Name), ".")
-	}
 	title := view.Database.Title
 	if title == "" {
 		title = view.FB2.Title
@@ -687,9 +680,14 @@ func (w *streamINPXWriter) buildRecordRows(
 	if title == "" {
 		return recordFields{}, view, nil, diagnostics, false, nil
 	}
-	fileName := strings.TrimSuffix(view.Artifact.Name, filepath.Ext(view.Artifact.Name))
-	if fileName == "" {
-		fileName = datasetBookID(rec)
+	fileName, ext := inpxutil.RecordFileNameAndExtension(rec, view)
+	if w.opts.Log != nil && (inpxutil.FileNameEscapeAmbiguous(fileName) || inpxutil.FileNameEscapeAmbiguous(ext)) {
+		w.opts.Log.Warn(
+			"Ambiguous INPX filename escape sequence",
+			zap.String("book_id", datasetBookID(rec)),
+			zap.String("file", fileName),
+			zap.String("ext", ext),
+		)
 	}
 	date := inpxutil.DateOnly(view.Catalog.Time)
 	if date == "" {
@@ -720,11 +718,11 @@ func (w *streamINPXWriter) buildRecordRows(
 		Author:   authors,
 		Genre:    genresString(view.Database.Genres, view.FB2.Genres),
 		Title:    inpxutil.Cleanse(title),
-		File:     inpxutil.Cleanse(fileName),
+		File:     inpxutil.CleanseFileName(fileName),
 		Size:     strconv.FormatUint(view.Artifact.Size, 10),
 		LibID:    datasetBookID(rec),
 		Deleted:  inpxutil.Cleanse(view.Catalog.Deleted),
-		Ext:      inpxutil.Cleanse(strings.TrimPrefix(ext, ".")),
+		Ext:      inpxutil.CleanseFileName(strings.TrimPrefix(ext, ".")),
 		Date:     inpxutil.Cleanse(date),
 		InsNo:    strconv.Itoa(index + 1),
 		Folder:   inpxutil.Cleanse(archive.Name),

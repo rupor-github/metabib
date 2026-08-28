@@ -157,6 +157,39 @@ func TestGenerateFLibraryINPXIncludesNonFB2SidecarRecord(t *testing.T) {
 	}
 }
 
+func TestBuildRecordFieldsUsesNestedArchiveFileName(t *testing.T) {
+	t.Parallel()
+
+	index := 0
+	rec := flibNonFB2SidecarRecordWithDBFileType(index, "txt")
+	rec.Artifacts[0].Name = "dir/42\u00a0name.txt"
+	rec.Artifacts[0].Occurrences[0].Entry = "dir\\42\u00a0name" + inpxutil.FieldSep + "part\nline.txt.zip"
+	fields, _, _, ok, err := buildRecordFields(rec, Options{FB2Preference: PreferComplement})
+	if err != nil || !ok {
+		t.Fatalf("buildRecordFields() ok=%t error=%v", ok, err)
+	}
+	if fields.File != "dir\\42\u00a0name~04part~0Aline.txt" || fields.Ext != "zip" {
+		t.Fatalf("file fields = %q/%q, want dir\\42\\u00a0name~04part~0Aline.txt/zip", fields.File, fields.Ext)
+	}
+}
+
+func TestBuildRecordFieldsWarnsOnAmbiguousFileNameEscape(t *testing.T) {
+	t.Parallel()
+
+	index := 0
+	rec := flibNonFB2SidecarRecordWithDBFileType(index, "txt")
+	rec.Artifacts[0].Name = "literal~0Aname.txt"
+	rec.Artifacts[0].Occurrences[0].Entry = "literal~0Aname.txt"
+	core, logs := observer.New(zap.WarnLevel)
+	_, _, _, ok, err := buildRecordFields(rec, Options{FB2Preference: PreferComplement, Log: zap.New(core)})
+	if err != nil || !ok {
+		t.Fatalf("buildRecordFields() ok=%t error=%v", ok, err)
+	}
+	if logs.FilterMessage("Ambiguous INPX filename escape sequence").Len() != 1 {
+		t.Fatalf("warning logs = %#v, want one ambiguous filename escape warning", logs.All())
+	}
+}
+
 func TestGenerateFLibraryINPXDefaultsToFB2Content(t *testing.T) {
 	t.Parallel()
 

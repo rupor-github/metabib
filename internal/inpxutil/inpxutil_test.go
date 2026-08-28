@@ -247,6 +247,25 @@ func TestRecordMatchesContentUsesNestedArchiveExtension(t *testing.T) {
 	}
 }
 
+func TestRecordFileNameAndExtensionUsesArchiveEntryFinalExtension(t *testing.T) {
+	t.Parallel()
+
+	index := 0
+	rec := testDatasetArchiveRecord("archive-0001", index, "dir/logical\u00a0name.txt")
+	rec.Artifacts[0].Occurrences = []model.Occurrence{{Archive: "archive-0001", Entry: "dir\\logical\u00a0name.txt.zip", Index: index}}
+	rec.Claims.Catalog = &model.CatalogClaims{
+		Status: []model.Claim{{Observation: "db", Value: model.CatalogStatusValue{FileType: "txt"}}},
+	}
+	view, err := DatasetRecordClaims(rec)
+	if err != nil {
+		t.Fatalf("DatasetRecordClaims() error = %v", err)
+	}
+	fileName, ext := RecordFileNameAndExtension(rec, view)
+	if fileName != "dir\\logical\u00a0name.txt" || ext != "zip" {
+		t.Fatalf("RecordFileNameAndExtension() = %q, %q, want dir\\logical\\u00a0name.txt, zip", fileName, ext)
+	}
+}
+
 func TestCleanse(t *testing.T) {
 	t.Parallel()
 
@@ -259,6 +278,21 @@ func TestCleanse(t *testing.T) {
 	}
 	if got != "a b c de f" {
 		t.Fatalf("Cleanse() = %q, want %q", got, "a b c de f")
+	}
+}
+
+func TestCleanseFileNamePercentEncodesINPXSeparators(t *testing.T) {
+	t.Parallel()
+
+	got := CleanseFileName("a" + FieldSep + "b\rc\r\nd\ne\u00a0f")
+	if strings.Contains(got, FieldSep) || strings.Contains(got, "\r") || strings.Contains(got, "\n") {
+		t.Fatalf("CleanseFileName() = %q, still contains layout characters", got)
+	}
+	if got != "a~04b~0Dc~0D~0Ad~0Ae\u00a0f" {
+		t.Fatalf("CleanseFileName() = %q, want %q", got, "a~04b~0Dc~0D~0Ad~0Ae\u00a0f")
+	}
+	if !FileNameEscapeAmbiguous("literal~0a-name") || FileNameEscapeAmbiguous("literal%0A-name") {
+		t.Fatalf("FileNameEscapeAmbiguous() did not detect only tilde escape ambiguity")
 	}
 }
 
