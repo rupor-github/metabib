@@ -4,7 +4,7 @@
       <img src="docs/library.svg" width="96" alt="metabib" />
     </td>
     <td valign="middle">
-      <h1>Metadata extractor from Flibusta/Librusec SQL dumps and FB2 archives.</h1>
+      <h1>Metadata extractor from Flibusta/Librusec SQL dumps and FB2/USR archives.</h1>
     </td>
   </tr>
 </table>
