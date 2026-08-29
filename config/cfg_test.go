@@ -56,8 +56,14 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Rollup.ValidateCRC {
 		t.Fatal("Rollup.ValidateCRC = true, want false")
 	}
-	if cfg.Rollup.TargetSizeMiB.FB2 != 2048 || cfg.Rollup.TargetSizeMiB.USR != 4096 {
-		t.Fatalf("Rollup.TargetSizeMiB = %#v, want fb2=2048 usr=4096", cfg.Rollup.TargetSizeMiB)
+	if cfg.Rollup.Finalization.Policy != "size" {
+		t.Fatalf("Rollup.Finalization.Policy = %q, want size", cfg.Rollup.Finalization.Policy)
+	}
+	if cfg.Rollup.Finalization.Size.TargetMiB.FB2 != 2048 || cfg.Rollup.Finalization.Size.TargetMiB.USR != 4096 {
+		t.Fatalf("Rollup.Finalization.Size.TargetMiB = %#v, want fb2=2048 usr=4096", cfg.Rollup.Finalization.Size.TargetMiB)
+	}
+	if cfg.Rollup.Finalization.Rolling.Duration != "14d" || cfg.Rollup.Finalization.Calendar.Bucket != "month" {
+		t.Fatalf("Rollup.Finalization = %#v", cfg.Rollup.Finalization)
 	}
 	if len(cfg.Rollup.UpdatePatterns) != 4 {
 		t.Fatalf("Rollup.UpdatePatterns length = %d, want 4", len(cfg.Rollup.UpdatePatterns))
@@ -208,6 +214,68 @@ func TestLoadConfigurationRejectsFB2BodyFingerprintsWithoutParseFB2(t *testing.T
 	_, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
 	if err == nil || !strings.Contains(err.Error(), "processing.fb2_body_fingerprints requires processing.parse_fb2") {
 		t.Fatalf("LoadConfiguration() error = %v, want fb2_body_fingerprints validation error", err)
+	}
+}
+
+func TestLoadConfigurationRejectsOldRollupTargetSize(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"rollup:",
+		"  target_size_mib:",
+		"    fb2: 2048",
+		"    usr: 4096",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err == nil || !strings.Contains(err.Error(), "target_size_mib") {
+		t.Fatalf("LoadConfiguration() error = %v, want target_size_mib unknown field error", err)
+	}
+}
+
+func TestLoadConfigurationAcceptsRollingFinalization(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"rollup:",
+		"  finalization:",
+		"    policy: rolling",
+		"    rolling:",
+		"      duration: 2w",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err != nil {
+		t.Fatalf("LoadConfiguration() error = %v", err)
+	}
+	if cfg.Rollup.Finalization.Policy != "rolling" || cfg.Rollup.Finalization.Rolling.Duration != "2w" {
+		t.Fatalf("Rollup.Finalization = %#v, want rolling 2w", cfg.Rollup.Finalization)
+	}
+}
+
+func TestLoadConfigurationRejectsSubDayRollingFinalization(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"rollup:",
+		"  finalization:",
+		"    policy: rolling",
+		"    rolling:",
+		"      duration: 24h",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err == nil || !strings.Contains(err.Error(), "whole-day or whole-week") {
+		t.Fatalf("LoadConfiguration() error = %v, want rolling duration validation error", err)
 	}
 }
 

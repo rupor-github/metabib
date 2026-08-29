@@ -111,11 +111,25 @@ rollup:
   # original compressed form without recompression.
   validate_crc: false
 
-  # Finalized archive target sizes in binary mebibytes. FB2 and USR archives are
-  # separate lineages and can use different size policies.
-  target_size_mib:
-    fb2: 2048
-    usr: 4096
+  # Archive finalization policy. Size preserves legacy behavior and finalizes
+  # active archives when their compressed size reaches target_mib. Rolling and
+  # calendar policies use UTC runtime state stored in rollup-state.json and ignore
+  # size thresholds.
+  finalization:
+    policy: size # size, rolling, calendar
+
+    size:
+      target_mib:
+        fb2: 2048
+        usr: 4096
+
+    rolling:
+      # Whole-day or whole-week duration from active merge creation time.
+      duration: 14d
+
+    calendar:
+      # UTC bucket: iso-week, iso-biweek, month.
+      bucket: month
 
   # Daily update filename patterns used by `metabib rollup`. Patterns are
   # matched against local file names with regexp2 syntax. The first two capture

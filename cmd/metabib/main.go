@@ -397,10 +397,15 @@ func (c fetchExitCode) ExitCode() int {
 
 func runRollup(ctx context.Context, cmd *cli.Command) error {
 	env := state.EnvFromContext(ctx)
+	finalization, err := rollupFinalization(env.Cfg.Rollup.Finalization)
+	if err != nil {
+		return err
+	}
 	res, err := rollup.Run(ctx, rollup.Options{
 		ArchiveDir:      cmd.String("archives"),
 		UpdateDirs:      cmd.StringSlice("updates"),
-		TargetSizeBytes: rollupTargetSizeBytes(env.Cfg.Rollup.TargetSizeMiB),
+		TargetSizeBytes: rollupTargetSizeBytes(env.Cfg.Rollup.Finalization.Size.TargetMiB),
+		Finalization:    finalization,
 		ValidateCRC:     env.Cfg.Rollup.ValidateCRC,
 		UpdatePatterns:  rollupUpdatePatterns(env.Cfg.Rollup.UpdatePatterns),
 		Log:             env.Log,
@@ -411,6 +416,7 @@ func runRollup(ctx context.Context, cmd *cli.Command) error {
 	if env.Log != nil {
 		env.Log.Info(
 			"Rollup completed",
+			zap.String("finalization_policy", string(finalization.Policy)),
 			zap.Int("updates", res.Updates),
 			zap.Int("finalized", res.Finalized),
 			zap.String("active_merge", res.ActiveMerge),
@@ -422,6 +428,26 @@ func runRollup(ctx context.Context, cmd *cli.Command) error {
 		return rollupExitCode(rollup.NewArchiveExitCode)
 	}
 	return nil
+}
+
+func rollupFinalization(finalization config.RollupFinalizationConfig) (rollup.FinalizationOptions, error) {
+	policy := rollup.FinalizationPolicy(finalization.Policy)
+	if policy == "" {
+		policy = rollup.FinalizationPolicySize
+	}
+	res := rollup.FinalizationOptions{Policy: policy}
+	switch policy {
+	case rollup.FinalizationPolicyRolling:
+		duration, err := rollup.ParseRollingDuration(finalization.Rolling.Duration)
+		if err != nil {
+			return rollup.FinalizationOptions{}, fmt.Errorf("parse rollup rolling duration: %w", err)
+		}
+		res.RollingDuration = duration
+		res.RollingText = finalization.Rolling.Duration
+	case rollup.FinalizationPolicyCalendar:
+		res.CalendarBucket = rollup.CalendarBucket(finalization.Calendar.Bucket)
+	}
+	return res, nil
 }
 
 func rollupTargetSizeBytes(size config.RollupTargetSizeConfig) map[string]int64 {

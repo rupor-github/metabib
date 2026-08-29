@@ -3,6 +3,7 @@ package rollup
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,14 +24,50 @@ import (
 
 const NewArchiveExitCode = 2
 
-const updatePatternTimeout = time.Second
+const (
+	updatePatternTimeout = time.Second
+	stateFileName        = "rollup-state.json"
+)
+
+type FinalizationPolicy string
+
+const (
+	FinalizationPolicySize     FinalizationPolicy = "size"
+	FinalizationPolicyRolling  FinalizationPolicy = "rolling"
+	FinalizationPolicyCalendar FinalizationPolicy = "calendar"
+)
+
+type CalendarBucket string
+
+const (
+	CalendarBucketISOWeek   CalendarBucket = "iso-week"
+	CalendarBucketISOBiweek CalendarBucket = "iso-biweek"
+	CalendarBucketMonth     CalendarBucket = "month"
+)
+
+type FinalizationReason string
+
+const (
+	FinalizationReasonSize              FinalizationReason = "size"
+	FinalizationReasonRollingDeadline   FinalizationReason = "rolling_deadline"
+	FinalizationReasonCalendarBucketEnd FinalizationReason = "calendar_bucket_end"
+)
+
+type FinalizationOptions struct {
+	Policy          FinalizationPolicy
+	RollingDuration time.Duration
+	RollingText     string
+	CalendarBucket  CalendarBucket
+}
 
 type Options struct {
 	ArchiveDir      string
 	UpdateDirs      []string
 	TargetSizeBytes map[string]int64
+	Finalization    FinalizationOptions
 	ValidateCRC     bool
 	UpdatePatterns  []UpdatePattern
+	Now             func() time.Time
 	Log             *zap.Logger
 }
 
@@ -67,6 +104,24 @@ type archive struct {
 	end   int
 }
 
+type rollupState struct {
+	Version  int                           `json:"version"`
+	Lineages map[string]rollupLineageState `json:"lineages,omitempty"`
+}
+
+type rollupLineageState struct {
+	ActiveMerge string             `json:"active_merge"`
+	FirstBook   int                `json:"first_book"`
+	LastBook    int                `json:"last_book"`
+	Policy      FinalizationPolicy `json:"policy"`
+	Rolling     string             `json:"rolling,omitempty"`
+	StartedAt   *time.Time         `json:"started_at,omitempty"`
+	Deadline    *time.Time         `json:"deadline,omitempty"`
+	Calendar    CalendarBucket     `json:"calendar,omitempty"`
+	BucketStart *time.Time         `json:"bucket_start,omitempty"`
+	BucketEnd   *time.Time         `json:"bucket_end,omitempty"`
+}
+
 type byName []archive
 
 func (a byName) Len() int { return len(a) }
@@ -85,8 +140,13 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 	if opts.ArchiveDir == "" {
 		return Result{}, errors.New("archive directory is required")
 	}
-	if err := validateTargetSizeBytes(opts.TargetSizeBytes); err != nil {
+	finalization := normalizeFinalization(opts.Finalization)
+	if err := validateFinalizationOptions(finalization, opts.TargetSizeBytes); err != nil {
 		return Result{}, err
+	}
+	now := time.Now
+	if opts.Now != nil {
+		now = opts.Now
 	}
 	archiveDir, err := filepath.Abs(opts.ArchiveDir)
 	if err != nil {
@@ -108,10 +168,18 @@ func run(ctx context.Context, opts Options, copyEntry copyEntryFunc) (Result, er
 	if err != nil {
 		return Result{}, err
 	}
+	var state *rollupState
+	statePath := filepath.Join(archiveDir, stateFileName)
+	if finalization.Policy != FinalizationPolicySize {
+		state, err = loadRollupState(statePath)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 
 	var res Result
 	for _, family := range archiveFamilies() {
-		familyRes, err := runFamily(ctx, opts, archiveDir, allFiles, family, updatePatterns, copyEntry)
+		familyRes, err := runFamily(ctx, opts, archiveDir, allFiles, family, updatePatterns, finalization, statePath, state, now, copyEntry)
 		if err != nil {
 			return Result{}, err
 		}
@@ -135,6 +203,10 @@ func runFamily(
 	allFiles []archive,
 	family archiveFamily,
 	updatePatterns []compiledUpdatePattern,
+	finalization FinalizationOptions,
+	statePath string,
+	state *rollupState,
+	now func() time.Time,
 	copyEntry copyEntryFunc,
 ) (Result, error) {
 	targetSize := opts.TargetSizeBytes[family.Name]
@@ -184,6 +256,35 @@ func runFamily(
 		merge.begin = last.begin
 		merge.end = last.end
 	}
+	var res Result
+	var lineageState *rollupLineageState
+	if finalization.Policy != FinalizationPolicySize {
+		lineageState, err = validatePeriodState(state, family, merge, finalization)
+		if err != nil {
+			return Result{}, err
+		}
+		if merge.info == nil && removeRollupLineageState(state, family.Name) {
+			if err := saveRollupState(statePath, state); err != nil {
+				return Result{}, err
+			}
+		}
+		if merge.info != nil && periodExpired(*lineageState, now()) {
+			nameWidth := archiveNameWidth(last, merge, family)
+			finalized, err := finalizeMergeArchive(merge, family, nameWidth, finalization.Policy, finalizationReason(finalization), opts.Log)
+			if err != nil {
+				return Result{}, err
+			}
+			removeRollupLineageState(state, family.Name)
+			if err := saveRollupState(statePath, state); err != nil {
+				return Result{}, err
+			}
+			res.Finalized++
+			res.FinalizedArchives = append(res.FinalizedArchives, filepath.Join(finalized.dir, finalized.info.Name()))
+			last = finalized
+			merge = archive{begin: last.begin, end: last.end}
+			lineageState = nil
+		}
+	}
 
 	updates, err := getUpdates(allFiles, merge.end, family, updatePatterns)
 	if err != nil {
@@ -197,7 +298,7 @@ func runFamily(
 		if opts.Log != nil {
 			opts.Log.Info("No archive updates found", zap.String("family", family.Name))
 		}
-		return Result{}, nil
+		return res, nil
 	}
 	if opts.Log != nil {
 		opts.Log.Info("Archive updates found", zap.String("family", family.Name), zap.Int("updates", len(updates)))
@@ -215,7 +316,28 @@ func runFamily(
 		}
 	}
 
-	return processUpdates(ctx, opts, last, merge, updates, archiveNameWidth(last, merge, family), family, targetSize, copyEntry)
+	familyRes, err := processUpdates(
+		ctx,
+		opts,
+		last,
+		merge,
+		updates,
+		archiveNameWidth(last, merge, family),
+		family,
+		targetSize,
+		finalization,
+		statePath,
+		state,
+		lineageState,
+		now,
+		copyEntry,
+	)
+	if err != nil {
+		return Result{}, err
+	}
+	familyRes.Finalized += res.Finalized
+	familyRes.FinalizedArchives = append(res.FinalizedArchives, familyRes.FinalizedArchives...)
+	return familyRes, nil
 }
 
 func validateTargetSizeBytes(sizes map[string]int64) error {
@@ -227,6 +349,322 @@ func validateTargetSizeBytes(sizes map[string]int64) error {
 	return nil
 }
 
+func normalizeFinalization(finalization FinalizationOptions) FinalizationOptions {
+	if finalization.Policy == "" {
+		finalization.Policy = FinalizationPolicySize
+	}
+	return finalization
+}
+
+func validateFinalizationOptions(finalization FinalizationOptions, targetSizeBytes map[string]int64) error {
+	switch finalization.Policy {
+	case FinalizationPolicySize:
+		return validateTargetSizeBytes(targetSizeBytes)
+	case FinalizationPolicyRolling:
+		if finalization.RollingDuration <= 0 {
+			return errors.New("rollup rolling finalization duration must be positive")
+		}
+		const day = 24 * time.Hour
+		if finalization.RollingDuration%day != 0 {
+			return errors.New("rollup rolling finalization duration must be whole days")
+		}
+	case FinalizationPolicyCalendar:
+		switch finalization.CalendarBucket {
+		case CalendarBucketISOWeek, CalendarBucketISOBiweek, CalendarBucketMonth:
+			return nil
+		default:
+			return fmt.Errorf("unsupported rollup calendar bucket %q", finalization.CalendarBucket)
+		}
+	default:
+		return fmt.Errorf("unsupported rollup finalization policy %q", finalization.Policy)
+	}
+	return nil
+}
+
+func ParseRollingDuration(value string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("duration is required")
+	}
+	unit := value[len(value)-1]
+	multiplier := 24 * time.Hour
+	switch unit {
+	case 'd':
+	case 'w':
+		multiplier *= 7
+	default:
+		return 0, fmt.Errorf("duration %q must use whole-day or whole-week units", value)
+	}
+	amount, err := strconv.ParseInt(value[:len(value)-1], 10, 64)
+	if err != nil || amount <= 0 {
+		return 0, fmt.Errorf("duration %q must be a positive integer followed by d or w", value)
+	}
+	if amount > int64(1<<63-1)/int64(multiplier) {
+		return 0, fmt.Errorf("duration %q is too large", value)
+	}
+	return time.Duration(amount) * multiplier, nil
+}
+
+func formatRollingDuration(duration time.Duration) string {
+	const day = 24 * time.Hour
+	if duration%(7*day) == 0 {
+		return fmt.Sprintf("%dw", duration/(7*day))
+	}
+	return fmt.Sprintf("%dd", duration/day)
+}
+
+func loadRollupState(path string) (*rollupState, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &rollupState{Version: 1, Lineages: make(map[string]rollupLineageState)}, nil
+		}
+		return nil, fmt.Errorf("read rollup state %q: %w", path, err)
+	}
+	var state rollupState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("decode rollup state %q: %w", path, err)
+	}
+	if state.Version != 1 {
+		return nil, fmt.Errorf("rollup state %q has unsupported version %d", path, state.Version)
+	}
+	if state.Lineages == nil {
+		state.Lineages = make(map[string]rollupLineageState)
+	}
+	return &state, nil
+}
+
+func saveRollupState(path string, state *rollupState) error {
+	if state == nil {
+		return nil
+	}
+	if state.Version == 0 {
+		state.Version = 1
+	}
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode rollup state %q: %w", path, err)
+	}
+	data = append(data, '\n')
+	tmp, err := fileutil.CreateHiddenTemp(filepath.Dir(path), filepath.Base(path))
+	if err != nil {
+		return fmt.Errorf("create rollup state temp in %q: %w", filepath.Dir(path), err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write rollup state %q: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close rollup state %q: %w", tmpPath, err)
+	}
+	if err := fileutil.ReplaceOutputFile(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("publish rollup state %q: %w", path, err)
+	}
+	return nil
+}
+
+func validatePeriodState(
+	state *rollupState,
+	family archiveFamily,
+	merge archive,
+	finalization FinalizationOptions,
+) (*rollupLineageState, error) {
+	if merge.info == nil {
+		return nil, nil
+	}
+	if state == nil || state.Lineages == nil {
+		return nil, fmt.Errorf("rollup %s merge archive exists but rollup state is missing", family.Name)
+	}
+	lineage, ok := state.Lineages[family.Name]
+	if !ok {
+		return nil, fmt.Errorf("rollup %s merge archive exists but rollup state has no lineage data", family.Name)
+	}
+	if lineage.ActiveMerge != merge.info.Name() {
+		return nil, fmt.Errorf("rollup %s state active merge %q does not match %q", family.Name, lineage.ActiveMerge, merge.info.Name())
+	}
+	if lineage.FirstBook != merge.begin || lineage.LastBook != merge.end {
+		return nil, fmt.Errorf(
+			"rollup %s state range %d:%d does not match merge range %d:%d",
+			family.Name,
+			lineage.FirstBook,
+			lineage.LastBook,
+			merge.begin,
+			merge.end,
+		)
+	}
+	if lineage.Policy != finalization.Policy {
+		return nil, fmt.Errorf("rollup %s state policy %q does not match configured policy %q", family.Name, lineage.Policy, finalization.Policy)
+	}
+	switch finalization.Policy {
+	case FinalizationPolicyRolling:
+		if lineage.Rolling == "" || lineage.StartedAt == nil || lineage.Deadline == nil {
+			return nil, fmt.Errorf("rollup %s rolling state is incomplete", family.Name)
+		}
+		duration, err := ParseRollingDuration(lineage.Rolling)
+		if err != nil {
+			return nil, fmt.Errorf("rollup %s rolling state duration is invalid: %w", family.Name, err)
+		}
+		if duration != finalization.RollingDuration {
+			return nil, fmt.Errorf("rollup %s state rolling duration %q does not match configured duration", family.Name, lineage.Rolling)
+		}
+	case FinalizationPolicyCalendar:
+		if lineage.Calendar != finalization.CalendarBucket || lineage.BucketStart == nil || lineage.BucketEnd == nil {
+			return nil, fmt.Errorf("rollup %s calendar state is incomplete or does not match configured bucket", family.Name)
+		}
+	}
+	return &lineage, nil
+}
+
+func removeRollupLineageState(state *rollupState, family string) bool {
+	if state == nil || state.Lineages == nil {
+		return false
+	}
+	if _, ok := state.Lineages[family]; !ok {
+		return false
+	}
+	delete(state.Lineages, family)
+	return true
+}
+
+func setRollupLineageState(state *rollupState, family string, lineage rollupLineageState) {
+	if state.Lineages == nil {
+		state.Lineages = make(map[string]rollupLineageState)
+	}
+	state.Lineages[family] = lineage
+}
+
+func createRollupLineageState(
+	activeMerge string,
+	firstBook int,
+	lastBook int,
+	finalization FinalizationOptions,
+	startedAt time.Time,
+) rollupLineageState {
+	startedAt = startedAt.UTC()
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+	lineage := rollupLineageState{
+		ActiveMerge: activeMerge,
+		FirstBook:   firstBook,
+		LastBook:    lastBook,
+		Policy:      finalization.Policy,
+	}
+	switch finalization.Policy {
+	case FinalizationPolicyRolling:
+		rolling := finalization.RollingText
+		if rolling == "" {
+			rolling = formatRollingDuration(finalization.RollingDuration)
+		}
+		deadline := startedAt.Add(finalization.RollingDuration).UTC()
+		lineage.Rolling = rolling
+		lineage.StartedAt = timePtr(startedAt)
+		lineage.Deadline = timePtr(deadline)
+	case FinalizationPolicyCalendar:
+		bucketStart, bucketEnd := calendarBucketRange(startedAt, finalization.CalendarBucket)
+		lineage.Calendar = finalization.CalendarBucket
+		lineage.BucketStart = timePtr(bucketStart)
+		lineage.BucketEnd = timePtr(bucketEnd)
+	}
+	return lineage
+}
+
+func periodExpired(lineage rollupLineageState, now time.Time) bool {
+	now = now.UTC()
+	switch lineage.Policy {
+	case FinalizationPolicyRolling:
+		return lineage.Deadline != nil && !now.Before(*lineage.Deadline)
+	case FinalizationPolicyCalendar:
+		return lineage.BucketEnd != nil && !now.Before(*lineage.BucketEnd)
+	default:
+		return false
+	}
+}
+
+func finalizationReason(finalization FinalizationOptions) FinalizationReason {
+	switch finalization.Policy {
+	case FinalizationPolicyRolling:
+		return FinalizationReasonRollingDeadline
+	case FinalizationPolicyCalendar:
+		return FinalizationReasonCalendarBucketEnd
+	default:
+		return FinalizationReasonSize
+	}
+}
+
+func finalizeMergeArchive(
+	merge archive,
+	family archiveFamily,
+	nameWidth int,
+	policy FinalizationPolicy,
+	reason FinalizationReason,
+	log *zap.Logger,
+) (archive, error) {
+	format := fmt.Sprintf("%s-%%0%dd-%%0%dd.zip", family.Prefix, nameWidth, nameWidth)
+	finalName := filepath.Join(merge.dir, fmt.Sprintf(format, merge.begin, merge.end))
+	mergeName := filepath.Join(merge.dir, merge.info.Name())
+	if err := fileutil.ReplaceOutputFile(mergeName, finalName); err != nil {
+		return archive{}, fmt.Errorf("rename archive %q to %q: %w", mergeName, finalName, err)
+	}
+	if log != nil {
+		log.Info(
+			"Archive finalized",
+			zap.String("file", finalName),
+			zap.Int("begin", merge.begin),
+			zap.Int("end", merge.end),
+			zap.String("policy", string(policy)),
+			zap.String("reason", string(reason)),
+		)
+	}
+	info, err := os.Stat(finalName)
+	if err != nil {
+		return archive{}, fmt.Errorf("stat finalized archive %q: %w", finalName, err)
+	}
+	return archive{dir: filepath.Dir(finalName), info: info, begin: merge.begin, end: merge.end}, nil
+}
+
+func calendarBucketRange(now time.Time, bucket CalendarBucket) (time.Time, time.Time) {
+	now = now.UTC()
+	switch bucket {
+	case CalendarBucketISOWeek:
+		start := isoWeekStart(now)
+		return start, start.AddDate(0, 0, 7)
+	case CalendarBucketISOBiweek:
+		start := isoWeekStart(now)
+		_, week := start.ISOWeek()
+		if week == 53 {
+			return start, start.AddDate(0, 0, 7)
+		}
+		if week%2 == 0 {
+			start = start.AddDate(0, 0, -7)
+			return start, start.AddDate(0, 0, 14)
+		}
+		return start, start.AddDate(0, 0, 14)
+	case CalendarBucketMonth:
+		start := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+		return start, start.AddDate(0, 1, 0)
+	default:
+		return now, now
+	}
+}
+
+func isoWeekStart(now time.Time) time.Time {
+	date := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	weekday := int(date.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	return date.AddDate(0, 0, 1-weekday)
+}
+
+func timePtr(value time.Time) *time.Time {
+	return &value
+}
+
 func processUpdates(
 	ctx context.Context,
 	opts Options,
@@ -236,11 +674,16 @@ func processUpdates(
 	nameWidth int,
 	family archiveFamily,
 	targetSize int64,
+	finalization FinalizationOptions,
+	statePath string,
+	state *rollupState,
+	lineageState *rollupLineageState,
+	now func() time.Time,
 	copyEntry copyEntryFunc,
 ) (Result, error) {
 	format := fmt.Sprintf("%s-%%0%dd-%%0%dd", family.Prefix, nameWidth, nameWidth)
 	res := Result{Updates: len(updates)}
-	work, err := openWorkArchive(opts, last, merge, targetSize, &updates)
+	work, err := openWorkArchive(opts, last, merge, targetSize, finalization.Policy, &updates)
 	if err != nil {
 		return Result{}, err
 	}
@@ -256,6 +699,10 @@ func processUpdates(
 	lastBook := work.lastBook
 	existingEnd := merge.end
 	copiedNewEntry := false
+	newPeriodStartedAt := time.Time{}
+	if lineageState != nil && lineageState.StartedAt != nil {
+		newPeriodStartedAt = *lineageState.StartedAt
+	}
 	activeWorkIDs := make(map[string]struct{})
 	for updateIndex, update := range updates {
 		if err := ctx.Err(); err != nil {
@@ -338,10 +785,18 @@ func processUpdates(
 			}
 			if !updateIsExisting {
 				activeWorkIDs[archiveEntryKey(file, family)] = struct{}{}
+				if !copiedNewEntry {
+					newPeriodStartedAt = now().UTC()
+				}
 				copiedNewEntry = true
-				leftBytes -= int64(file.CompressedSize64)
 			}
-			if leftBytes <= 0 {
+			if finalization.Policy == FinalizationPolicySize {
+				if !updateIsExisting {
+					leftBytes -= int64(file.CompressedSize64)
+				}
+				if leftBytes > 0 {
+					continue
+				}
 				finalName := filepath.Join(last.dir, fmt.Sprintf(format+".zip", firstBook, lastBook))
 				if err := work.finishAs(finalName); err != nil {
 					rc.Close()
@@ -350,7 +805,14 @@ func processUpdates(
 				res.Finalized++
 				res.FinalizedArchives = append(res.FinalizedArchives, finalName)
 				if opts.Log != nil {
-					opts.Log.Info("Archive finalized", zap.String("file", finalName), zap.Int("begin", firstBook), zap.Int("end", lastBook))
+					opts.Log.Info(
+						"Archive finalized",
+						zap.String("file", finalName),
+						zap.Int("begin", firstBook),
+						zap.Int("end", lastBook),
+						zap.String("policy", string(FinalizationPolicySize)),
+						zap.String("reason", string(FinalizationReasonSize)),
+					)
 				}
 				lastInfo, err := os.Stat(finalName)
 				if err != nil {
@@ -386,6 +848,19 @@ func processUpdates(
 			return Result{}, err
 		}
 		res.ActiveMerge = mergeName
+		if finalization.Policy != FinalizationPolicySize {
+			lineage := createRollupLineageState(filepath.Base(mergeName), firstBook, lastBook, finalization, newPeriodStartedAt)
+			if lineageState != nil {
+				lineage = *lineageState
+				lineage.ActiveMerge = filepath.Base(mergeName)
+				lineage.FirstBook = firstBook
+				lineage.LastBook = lastBook
+			}
+			setRollupLineageState(state, family.Name, lineage)
+			if err := saveRollupState(statePath, state); err != nil {
+				return Result{}, err
+			}
+		}
 		if opts.Log != nil {
 			opts.Log.Info("Merge archive updated", zap.String("file", mergeName), zap.Int("begin", firstBook), zap.Int("end", lastBook))
 		}
@@ -423,7 +898,14 @@ type workArchive struct {
 	firstUpdateIsExisting bool
 }
 
-func openWorkArchive(opts Options, last archive, merge archive, targetSize int64, updates *[]archive) (*workArchive, error) {
+func openWorkArchive(
+	opts Options,
+	last archive,
+	merge archive,
+	targetSize int64,
+	policy FinalizationPolicy,
+	updates *[]archive,
+) (*workArchive, error) {
 	if merge.info != nil {
 		return rewriteExistingMergeArchive(filepath.Join(merge.dir, merge.info.Name()), merge.begin, merge.end, merge.info.Size())
 	}
@@ -431,7 +913,7 @@ func openWorkArchive(opts Options, last archive, merge archive, targetSize int64
 	if err != nil {
 		return nil, err
 	}
-	if last.info != nil && targetSize-last.info.Size() > 0 {
+	if policy == FinalizationPolicySize && last.info != nil && targetSize-last.info.Size() > 0 {
 		lastPath := filepath.Join(last.dir, last.info.Name())
 		if opts.Log != nil {
 			opts.Log.Info("Merging last archive", zap.String("file", lastPath))

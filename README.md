@@ -81,8 +81,8 @@ Current schema versions:
 
 - `fetch` downloads new daily archive updates and SQL dumps from a configured
   remote library profile;
-- `rollup` folds daily FB2 and USR update ZIPs into size-bounded local archive
-  ZIPs;
+- `rollup` folds daily FB2 and USR update ZIPs into local archive ZIPs using
+  size, rolling-duration, or UTC calendar-bucket finalization;
 - `cache` imports SQL dumps, queries database metadata, walks FB2 archive
   entries, parses FB2 descriptions, and writes manifest files for each selected
   source;
@@ -197,11 +197,17 @@ FB2 and USR are maintained as separate update lineages. A newer FB2 archive or
 `flibusta-all` and `librusec-all` classify each matched remote update first, then
 compare it only with that lineage's high-water mark.
 
-The default configuration includes FB2-only `flibusta` and `librusec` profiles,
-USR-only `flibusta-usr` and `librusec-usr` profiles, and combined
-`flibusta-all` and `librusec-all` profiles. USR selection uses `regexp2`
-negative lookahead so any daily update extension except `fb2` is selected
-without maintaining an extension allowlist.
+The default configuration includes these fetch profiles:
+
+- `flibusta`: Flibusta FB2 daily archives and SQL dumps.
+- `flibusta-usr`: Flibusta non-FB2 daily archives and SQL dumps.
+- `flibusta-all`: Flibusta FB2 plus non-FB2 daily archives and SQL dumps.
+- `librusec`: Librusec FB2 daily archives and SQL dumps.
+- `librusec-usr`: Librusec non-FB2 daily archives and SQL dumps.
+- `librusec-all`: Librusec FB2 plus non-FB2 daily archives and SQL dumps.
+
+USR selection uses `regexp2` negative lookahead so any daily update extension
+except `fb2` is selected without maintaining an extension allowlist.
 
 Exit code `0` means no new archive updates were downloaded, exit code `1` means
 an error occurred, and exit code `2` means one or more new archive updates were
@@ -224,7 +230,7 @@ Available `fetch` arguments:
 
 ### Roll Up Daily Archives
 
-Roll downloaded daily update ZIPs into local size-bounded FB2 and USR archives:
+Roll downloaded daily update ZIPs into local FB2 and USR archives:
 
 ```sh
 metabib rollup --archives flibusta --updates upd_flibusta
@@ -248,22 +254,99 @@ Rollup also maintains these lineages independently. One invocation can consume a
 mixed update directory and update both active archives, for example producing
 `fb2-0000886760-0000887123.merging` and
 `usr-0000886760-0000887123.merging` from the same `--updates` directory. Each
-lineage has its own latest finalized archive, active `.merging` archive, size
-threshold accounting, and overlap checks.
+lineage has its own latest finalized archive, active `.merging` archive, and
+overlap checks. Both lineages always use the same finalization policy.
 
 `rollup.update_patterns` are regexp2 filename patterns. The first two capture
 groups must be range begin and end, and `family` selects destination lineage
 (`fb2-*` or `usr-*`). If one update file matches multiple patterns, rollup fails
 with an ambiguity error so precedence is never hidden in code.
 
-Finalized archive target sizes are configured per lineage in binary mebibytes:
+Rollup finalization is configured once under `rollup.finalization` and always
+applies to both `fb2` and `usr`. The default `size` policy preserves the original
+behavior and finalizes active archives when their compressed size reaches the
+per-lineage target in binary mebibytes:
 
 ```yaml
 rollup:
-  target_size_mib:
-    fb2: 2048
-    usr: 4096
+  finalization:
+    policy: size
+    size:
+      target_mib:
+        fb2: 2048
+        usr: 4096
 ```
+
+Period policies ignore size targets. `rolling` finalizes an active `.merging`
+archive after a whole-day or whole-week duration from the time that merge first
+started accumulating entries:
+
+```yaml
+rollup:
+  finalization:
+    policy: rolling
+    rolling:
+      duration: 14d
+```
+
+Accepted rolling units are `d` and `w`; sub-day durations such as `24h` are
+rejected.
+
+`calendar` finalizes when current UTC time leaves the stored bucket:
+
+```yaml
+rollup:
+  finalization:
+    policy: calendar
+    calendar:
+      bucket: month
+```
+
+Supported UTC buckets are `iso-week`, `iso-biweek`, and `month`. ISO weeks start
+Monday `00:00:00` UTC. ISO biweeks are weeks `1-2`, `3-4`, and so on; ISO week
+`53` is a single-week bucket.
+
+Period policies store active merge timing in `rollup-state.json` inside
+`--archives`. If a period policy sees an existing `.merging` archive without
+matching state for that lineage, rollup fails instead of guessing when the merge
+started. Stored state for all active lineages must use the same configured policy.
+The `size` policy does not require this state file.
+
+State file format:
+
+```json
+{
+  "version": 1,
+  "lineages": {
+    "fb2": {
+      "active_merge": "fb2-0000000001-0000000100.merging",
+      "first_book": 1,
+      "last_book": 100,
+      "policy": "calendar",
+      "calendar": "month",
+      "bucket_start": "2026-08-01T00:00:00Z",
+      "bucket_end": "2026-09-01T00:00:00Z"
+    },
+    "usr": {
+      "active_merge": "usr-0000000001-0000000100.merging",
+      "first_book": 1,
+      "last_book": 100,
+      "policy": "calendar",
+      "calendar": "month",
+      "bucket_start": "2026-08-01T00:00:00Z",
+      "bucket_end": "2026-09-01T00:00:00Z"
+    }
+  }
+}
+```
+
+Only the fields for the selected policy are present for each active lineage.
+`active_merge`, `first_book`, and `last_book` must match the `.merging` filename
+for that lineage. When a lineage finalizes, its state entry is removed. When a
+new active merge starts, rollup writes a new state entry atomically.
+
+Finalization logs include both `policy` and `reason`; reasons are `size`,
+`rolling_deadline`, or `calendar_bucket_end`.
 
 By default, direct compressed copying does not validate entry payload CRCs. Set
 `rollup.validate_crc: true` in the configuration to decompress each non-empty
@@ -976,8 +1059,10 @@ metabib --config metabib.yaml cache \
 
 ### Flibusta Script
 
-`scripts/fb2_flibusta.sh` automates the common Flibusta FB2 workflow. The
-`metabib` executable is expected to be in the same directory as the script; if
+`scripts/fb2_flibusta.sh` is an example automation script for the common Flibusta
+FB2 workflow. It is not required by `metabib`; use it as a starting point for
+site-specific scheduling, paths, cleanup, and INPX output choices. The `metabib`
+executable is expected to be in the same directory as the script; if
 `metabib.yaml` exists there, it is passed to every `metabib` invocation.
 
 Run the full update workflow:

@@ -232,16 +232,19 @@ Preserve existing safety rules per family:
 - Use name width from same family's latest finalized or active archive; default
   to 10 digits for new lineages.
 - Finalize only when that family's active work archive reaches
-  `rollup.target_size_mib.<family>` converted to bytes.
+  `rollup.finalization.size.target_mib.<family>` converted to bytes.
 - Return rollup exit code `2` if any family finalizes at least one archive.
 
 Default target sizes:
 
 ```yaml
 rollup:
-  target_size_mib:
-    fb2: 2048
-    usr: 4096
+  finalization:
+    policy: size
+    size:
+      target_mib:
+        fb2: 2048
+        usr: 4096
 ```
 
 ### USR Duplicate Handling

@@ -96,13 +96,32 @@ type FetchConfig struct {
 
 type RollupConfig struct {
 	ValidateCRC    bool                        `yaml:"validate_crc"`
-	TargetSizeMiB  RollupTargetSizeConfig      `yaml:"target_size_mib"`
+	Finalization   RollupFinalizationConfig    `yaml:"finalization"`
 	UpdatePatterns []RollupUpdatePatternConfig `yaml:"update_patterns" validate:"dive"`
 }
 
+type RollupFinalizationConfig struct {
+	Policy   string                           `yaml:"policy" validate:"omitempty,oneof=size rolling calendar"`
+	Size     RollupSizeFinalizationConfig     `yaml:"size"`
+	Rolling  RollupRollingFinalizationConfig  `yaml:"rolling"`
+	Calendar RollupCalendarFinalizationConfig `yaml:"calendar"`
+}
+
+type RollupSizeFinalizationConfig struct {
+	TargetMiB RollupTargetSizeConfig `yaml:"target_mib"`
+}
+
 type RollupTargetSizeConfig struct {
-	FB2 int64 `yaml:"fb2" validate:"min=1"`
-	USR int64 `yaml:"usr" validate:"min=1"`
+	FB2 int64 `yaml:"fb2"`
+	USR int64 `yaml:"usr"`
+}
+
+type RollupRollingFinalizationConfig struct {
+	Duration string `yaml:"duration"`
+}
+
+type RollupCalendarFinalizationConfig struct {
+	Bucket string `yaml:"bucket" validate:"omitempty,oneof=iso-week iso-biweek month"`
 }
 
 type RollupUpdatePatternConfig struct {
@@ -199,12 +218,65 @@ func validateConfig(cfg *Config) error {
 	if cfg.Processing.FB2BodyFingerprints && !cfg.Processing.ParseFB2 {
 		return errors.New("processing.fb2_body_fingerprints requires processing.parse_fb2")
 	}
+	if err := validateRollupFinalizationConfig(&cfg.Rollup.Finalization); err != nil {
+		return err
+	}
 	for i := range cfg.Fetch.Libraries {
 		if cfg.Fetch.Libraries[i].ArchiveContent == "" {
 			cfg.Fetch.Libraries[i].ArchiveContent = "fb2"
 		}
 	}
 	return nil
+}
+
+func validateRollupFinalizationConfig(cfg *RollupFinalizationConfig) error {
+	if cfg.Policy == "" {
+		cfg.Policy = "size"
+	}
+	switch cfg.Policy {
+	case "size":
+		if cfg.Size.TargetMiB.FB2 <= 0 {
+			return errors.New("rollup.finalization.size.target_mib.fb2 must be positive")
+		}
+		if cfg.Size.TargetMiB.USR <= 0 {
+			return errors.New("rollup.finalization.size.target_mib.usr must be positive")
+		}
+	case "rolling":
+		if _, err := parseRollupRollingDuration(cfg.Rolling.Duration); err != nil {
+			return fmt.Errorf("rollup.finalization.rolling.duration is invalid: %w", err)
+		}
+	case "calendar":
+		if cfg.Calendar.Bucket == "" {
+			return errors.New("rollup.finalization.calendar.bucket is required")
+		}
+	default:
+		return fmt.Errorf("rollup.finalization.policy %q is not supported", cfg.Policy)
+	}
+	return nil
+}
+
+func parseRollupRollingDuration(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, errors.New("duration is required")
+	}
+	unit := value[len(value)-1]
+	multiplier := int64(1)
+	switch unit {
+	case 'd':
+	case 'w':
+		multiplier = 7
+	default:
+		return 0, fmt.Errorf("duration %q must use whole-day or whole-week units", value)
+	}
+	amount, err := strconv.ParseInt(value[:len(value)-1], 10, 64)
+	if err != nil || amount <= 0 {
+		return 0, fmt.Errorf("duration %q must be a positive integer followed by d or w", value)
+	}
+	if amount > (1<<63-1)/multiplier {
+		return 0, fmt.Errorf("duration %q is too large", value)
+	}
+	return amount * multiplier, nil
 }
 
 func LoadConfiguration(path string, options ...func(*gencfg.ProcessingOptions)) (*Config, error) {
