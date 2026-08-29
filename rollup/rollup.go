@@ -511,9 +511,17 @@ func validatePeriodState(
 		if duration != finalization.RollingDuration {
 			return nil, fmt.Errorf("rollup %s state rolling duration %q does not match configured duration", family.Name, lineage.Rolling)
 		}
+		wantDeadline := lineage.StartedAt.UTC().Add(duration).UTC()
+		if !lineage.Deadline.UTC().Equal(wantDeadline) {
+			return nil, fmt.Errorf("rollup %s state rolling deadline does not match started_at plus duration", family.Name)
+		}
 	case FinalizationPolicyCalendar:
 		if lineage.Calendar != finalization.CalendarBucket || lineage.BucketStart == nil || lineage.BucketEnd == nil {
 			return nil, fmt.Errorf("rollup %s calendar state is incomplete or does not match configured bucket", family.Name)
+		}
+		wantStart, wantEnd := calendarBucketRange(*lineage.BucketStart, finalization.CalendarBucket)
+		if !lineage.BucketStart.UTC().Equal(wantStart) || !lineage.BucketEnd.UTC().Equal(wantEnd) {
+			return nil, fmt.Errorf("rollup %s calendar state bucket range is invalid", family.Name)
 		}
 	}
 	return &lineage, nil

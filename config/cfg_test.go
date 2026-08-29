@@ -279,6 +279,26 @@ func TestLoadConfigurationRejectsSubDayRollingFinalization(t *testing.T) {
 	}
 }
 
+func TestLoadConfigurationRejectsHugeRollingFinalization(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"rollup:",
+		"  finalization:",
+		"    policy: rolling",
+		"    rolling:",
+		"      duration: 999999999999999999d",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("LoadConfiguration() error = %v, want rolling duration overflow error", err)
+	}
+}
+
 func TestDump(t *testing.T) {
 	t.Parallel()
 

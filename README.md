@@ -83,9 +83,11 @@ Current schema versions:
   remote library profile;
 - `rollup` folds daily FB2 and USR update ZIPs into local archive ZIPs using
   size, rolling-duration, or UTC calendar-bucket finalization;
-- `cache` imports SQL dumps, queries database metadata, walks FB2 archive
-  entries, parses FB2 descriptions, and writes manifest files for each selected
-  source;
+- `cache` imports SQL dumps, queries database metadata, and builds reusable
+  manifests for each selected source. Archive cache processing understands both
+  FB2 and USR scopes: FB2 archives parse FictionBook descriptions from `.fb2`
+  entries, while USR archives keep non-FB2 entries, pair supported `.fbd` sidecar
+  metadata, and can inspect nested book containers when enabled;
 - `merge` reads existing manifests and combines database-derived and
   archive-derived metadata into one provenance-aware dataset JSONL stream with a
   `metabib.dataset/1` header and `metabib.dataset_record/1` rows;
@@ -310,7 +312,9 @@ Period policies store active merge timing in `rollup-state.json` inside
 `--archives`. If a period policy sees an existing `.merging` archive without
 matching state for that lineage, rollup fails instead of guessing when the merge
 started. Stored state for all active lineages must use the same configured policy.
-The `size` policy does not require this state file.
+The `size` policy does not require this state file. When no `.merging` archive
+exists for a lineage, period rollup starts that lineage cleanly and creates state
+only after it publishes the first new active merge.
 
 State file format:
 

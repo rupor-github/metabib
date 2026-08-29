@@ -273,7 +273,8 @@ func parseRollupRollingDuration(value string) (int64, error) {
 	if err != nil || amount <= 0 {
 		return 0, fmt.Errorf("duration %q must be a positive integer followed by d or w", value)
 	}
-	if amount > (1<<63-1)/multiplier {
+	const nanosecondsPerDay = int64(24 * 60 * 60 * 1_000_000_000)
+	if amount > (1<<63-1)/(multiplier*nanosecondsPerDay) {
 		return 0, fmt.Errorf("duration %q is too large", value)
 	}
 	return amount * multiplier, nil

@@ -174,7 +174,7 @@ func fetchCommand() *cli.Command {
 func rollupCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "rollup",
-		Usage: "Roll daily FB2 and USR update archives into size-bounded archive ZIPs",
+		Usage: "Roll daily FB2 and USR update archives into finalized archive ZIPs",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "archives",

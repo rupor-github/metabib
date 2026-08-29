@@ -444,6 +444,209 @@ func TestRunRollingFinalizesExpiredMergeWithoutUpdates(t *testing.T) {
 	}
 }
 
+func TestRunRollingRejectsInvalidDeadlineState(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	startedAt := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	mergeName := "fb2-0000000001-0000000001.merging"
+	writeZip(t, filepath.Join(archives, mergeName), map[string]string{"1.fb2": "one"})
+	state := &rollupState{Version: 1, Lineages: map[string]rollupLineageState{
+		"fb2": {
+			ActiveMerge: mergeName,
+			FirstBook:   1,
+			LastBook:    1,
+			Policy:      FinalizationPolicyRolling,
+			Rolling:     "14d",
+			StartedAt:   timePtr(startedAt),
+			Deadline:    timePtr(startedAt.Add(13 * 24 * time.Hour)),
+		},
+	}}
+	if err := saveRollupState(filepath.Join(archives, stateFileName), state); err != nil {
+		t.Fatalf("saveRollupState() error = %v", err)
+	}
+
+	_, err := Run(context.Background(), Options{
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		Finalization:    testRollingFinalization(),
+		TargetSizeBytes: testTargetSizeBytes(1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "deadline does not match") {
+		t.Fatalf("Run() error = %v, want invalid deadline error", err)
+	}
+}
+
+func TestRunCalendarCreatesMergeState(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
+	writeZip(t, filepath.Join(updates, "f.fb2.000001-000001.zip"), map[string]string{"1.fb2": "one"})
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		TargetSizeBytes: testTargetSizeBytes(1),
+		Finalization: FinalizationOptions{
+			Policy:         FinalizationPolicyCalendar,
+			CalendarBucket: CalendarBucketMonth,
+		},
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.Finalized != 0 || filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000001.merging" {
+		t.Fatalf("result = %#v, want active calendar merge", res)
+	}
+	state, err := loadRollupState(filepath.Join(archives, stateFileName))
+	if err != nil {
+		t.Fatalf("loadRollupState() error = %v", err)
+	}
+	lineage := state.Lineages["fb2"]
+	if lineage.Policy != FinalizationPolicyCalendar || lineage.Calendar != CalendarBucketMonth {
+		t.Fatalf("lineage = %#v, want calendar month", lineage)
+	}
+	wantStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	wantEnd := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	if lineage.BucketStart == nil || !lineage.BucketStart.Equal(wantStart) || lineage.BucketEnd == nil || !lineage.BucketEnd.Equal(wantEnd) {
+		t.Fatalf("bucket = %v:%v, want %v:%v", lineage.BucketStart, lineage.BucketEnd, wantStart, wantEnd)
+	}
+}
+
+func TestRunCalendarFinalizesExpiredMergeWithoutUpdates(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	bucketStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	bucketEnd := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	mergeName := "fb2-0000000001-0000000001.merging"
+	writeZip(t, filepath.Join(archives, mergeName), map[string]string{"1.fb2": "one"})
+	state := &rollupState{Version: 1, Lineages: map[string]rollupLineageState{
+		"fb2": {
+			ActiveMerge: mergeName,
+			FirstBook:   1,
+			LastBook:    1,
+			Policy:      FinalizationPolicyCalendar,
+			Calendar:    CalendarBucketMonth,
+			BucketStart: timePtr(bucketStart),
+			BucketEnd:   timePtr(bucketEnd),
+		},
+	}}
+	if err := saveRollupState(filepath.Join(archives, stateFileName), state); err != nil {
+		t.Fatalf("saveRollupState() error = %v", err)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		Finalization:    testCalendarFinalization(),
+		TargetSizeBytes: testTargetSizeBytes(1),
+		Now:             func() time.Time { return bucketEnd },
+		Log:             zap.New(core),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.Finalized != 1 || filepath.Base(res.FinalizedArchives[0]) != "fb2-0000000001-0000000001.zip" {
+		t.Fatalf("result = %#v, want expired calendar merge finalized", res)
+	}
+	entries := logs.FilterMessage("Archive finalized").All()
+	if len(entries) != 1 || entries[0].ContextMap()["policy"] != string(FinalizationPolicyCalendar) ||
+		entries[0].ContextMap()["reason"] != string(FinalizationReasonCalendarBucketEnd) {
+		t.Fatalf("logs = %#v, want calendar_bucket_end finalization reason", logs.All())
+	}
+}
+
+func TestRunCalendarRejectsInvalidBucketState(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	mergeName := "fb2-0000000001-0000000001.merging"
+	writeZip(t, filepath.Join(archives, mergeName), map[string]string{"1.fb2": "one"})
+	state := &rollupState{Version: 1, Lineages: map[string]rollupLineageState{
+		"fb2": {
+			ActiveMerge: mergeName,
+			FirstBook:   1,
+			LastBook:    1,
+			Policy:      FinalizationPolicyCalendar,
+			Calendar:    CalendarBucketMonth,
+			BucketStart: timePtr(time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)),
+			BucketEnd:   timePtr(time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)),
+		},
+	}}
+	if err := saveRollupState(filepath.Join(archives, stateFileName), state); err != nil {
+		t.Fatalf("saveRollupState() error = %v", err)
+	}
+
+	_, err := Run(context.Background(), Options{
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		Finalization:    testCalendarFinalization(),
+		TargetSizeBytes: testTargetSizeBytes(1),
+	})
+	if err == nil || !strings.Contains(err.Error(), "bucket range is invalid") {
+		t.Fatalf("Run() error = %v, want invalid bucket range error", err)
+	}
+}
+
+func TestRunCalendarPreservesExistingBucketWhenMergeGrows(t *testing.T) {
+	t.Parallel()
+
+	archives := t.TempDir()
+	updates := t.TempDir()
+	bucketStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	bucketEnd := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	mergeName := "fb2-0000000001-0000000001.merging"
+	writeZip(t, filepath.Join(archives, mergeName), map[string]string{"1.fb2": "one"})
+	writeZip(t, filepath.Join(updates, "f.fb2.0000000002-0000000002.zip"), map[string]string{"2.fb2": "two"})
+	state := &rollupState{Version: 1, Lineages: map[string]rollupLineageState{
+		"fb2": {
+			ActiveMerge: mergeName,
+			FirstBook:   1,
+			LastBook:    1,
+			Policy:      FinalizationPolicyCalendar,
+			Calendar:    CalendarBucketMonth,
+			BucketStart: timePtr(bucketStart),
+			BucketEnd:   timePtr(bucketEnd),
+		},
+	}}
+	if err := saveRollupState(filepath.Join(archives, stateFileName), state); err != nil {
+		t.Fatalf("saveRollupState() error = %v", err)
+	}
+
+	res, err := Run(context.Background(), Options{
+		ArchiveDir:      archives,
+		UpdateDirs:      []string{updates},
+		Finalization:    testCalendarFinalization(),
+		TargetSizeBytes: testTargetSizeBytes(1),
+		Now:             func() time.Time { return time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if filepath.Base(res.ActiveMerge) != "fb2-0000000001-0000000002.merging" {
+		t.Fatalf("ActiveMerge = %q, want grown merge", res.ActiveMerge)
+	}
+	loaded, err := loadRollupState(filepath.Join(archives, stateFileName))
+	if err != nil {
+		t.Fatalf("loadRollupState() error = %v", err)
+	}
+	lineage := loaded.Lineages["fb2"]
+	if lineage.ActiveMerge != "fb2-0000000001-0000000002.merging" || lineage.FirstBook != 1 || lineage.LastBook != 2 {
+		t.Fatalf("lineage = %#v, want grown range", lineage)
+	}
+	if lineage.BucketStart == nil || !lineage.BucketStart.Equal(bucketStart) || lineage.BucketEnd == nil || !lineage.BucketEnd.Equal(bucketEnd) {
+		t.Fatalf("lineage = %#v, want original bucket preserved", lineage)
+	}
+}
+
 func TestRunRemovesSupersededLastArchive(t *testing.T) {
 	t.Parallel()
 
@@ -791,6 +994,10 @@ func testTargetSizeBytes(size int64) map[string]int64 {
 
 func testRollingFinalization() FinalizationOptions {
 	return FinalizationOptions{Policy: FinalizationPolicyRolling, RollingDuration: 14 * 24 * time.Hour, RollingText: "14d"}
+}
+
+func testCalendarFinalization() FinalizationOptions {
+	return FinalizationOptions{Policy: FinalizationPolicyCalendar, CalendarBucket: CalendarBucketMonth}
 }
 
 func mustCompileDefaultUpdatePatterns(t *testing.T) []compiledUpdatePattern {
