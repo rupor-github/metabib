@@ -74,7 +74,7 @@ mydir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Root directory for library archives, update archives, SQL dumps, and INPX.
 root="$1"
 
-# Finalized FB2 archive directory.
+# Finalized archive directory for selected profile.
 adir="${root}/${name}"
 
 # Directory for generated INPX and intermediate merged JSONL files.
@@ -135,13 +135,13 @@ detect_dump_date() {
 latest_dump_dir() {
 	local dirs
 	shopt -s nullglob
-	dirs=("${adir}"_*)
+	dirs=("${adir}"_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9])
 	shopt -u nullglob
 
 	if (( ${#dirs[@]} == 0 )); then
 		return 1
 	fi
-	printf '%s\n' "${dirs[@]}" | sort -nr | head -n 1
+	printf '%s\n' "${dirs[@]}" | sort -r | head -n 1
 }
 
 # Keep recent SQL dumps for rollback while preserving the newest imported dump
@@ -152,7 +152,7 @@ cleanup_old_sql_dump_dirs() {
 
 	while IFS= read -r dir; do
 		dirs+=("${dir}")
-	done < <(find "${root}" -maxdepth 1 -type d -name "${name}_*" | sort -nr)
+	done < <(find "${root}" -maxdepth 1 -type d -name "${name}_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9]" | sort -r)
 
 	for dir in "${dirs[@]}"; do
 		if [[ -f "${dir}/database.manifest.zst" ]]; then
