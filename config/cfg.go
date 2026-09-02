@@ -157,13 +157,14 @@ type ManifestConfig struct {
 }
 
 type INPXConfig struct {
-	QuickFix            bool               `yaml:"quick_fix"`
-	DisambiguateAuthors bool               `yaml:"disambiguate_authors"`
-	CommentTemplate     string             `yaml:"comment_template"`
-	VersionTemplate     string             `yaml:"version_template"`
-	Limits              INPXLimits         `yaml:"limits"`
-	Language            INPXLanguageConfig `yaml:"language"`
-	FLibrary            FLibraryINPXConfig `yaml:"flibrary"`
+	QuickFix                  bool               `yaml:"quick_fix"`
+	DisambiguateAuthors       bool               `yaml:"disambiguate_authors"`
+	AuthorDisambiguationField string             `yaml:"author_disambiguation_field" validate:"oneof=last first middle"`
+	CommentTemplate           string             `yaml:"comment_template"`
+	VersionTemplate           string             `yaml:"version_template"`
+	Limits                    INPXLimits         `yaml:"limits"`
+	Language                  INPXLanguageConfig `yaml:"language"`
+	FLibrary                  FLibraryINPXConfig `yaml:"flibrary"`
 }
 
 type INPXLanguageConfig struct {

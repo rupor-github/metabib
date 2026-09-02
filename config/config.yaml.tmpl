@@ -203,9 +203,13 @@ inpx:
   quick_fix: true
 
   # Disambiguate DB authors that have the same INPX-visible name components by
-  # appending a stable suffix to the exported last-name field. FB2-only authors
-  # are not changed because they do not have reliable catalog identities.
+  # appending a stable suffix to one exported name field. FB2-only authors are
+  # not changed because they do not have reliable catalog identities.
   disambiguate_authors: true
+
+  # INPX author name field that receives the disambiguation suffix: last, first,
+  # or middle. Default last preserves legacy output.
+  author_disambiguation_field: last
 
   # Go text/template collection.info template. Available values are DatabaseName,
   # DumpDate, and DisplayDate; slim-sprig template functions are available. The

@@ -121,6 +121,27 @@ func TestGenerateDefaultsToAllContent(t *testing.T) {
 	}
 }
 
+func TestPeopleStringDisambiguatesConfiguredAuthorField(t *testing.T) {
+	t.Parallel()
+
+	author := model.PersonValue{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "19026"}},
+		FirstName:  "Сергей",
+		MiddleName: "Александрович",
+		LastName:   "Васильев",
+	}
+	disambiguator := inpxutil.NewAuthorDisambiguator(
+		sliceAmbiguousAuthorMetadata(),
+		inpxutil.AuthorDisambiguationFirst,
+		nil,
+		false,
+	)
+	got := peopleStringWithDisambiguation([]model.PersonValue{author}, Options{AuthorDisambiguator: disambiguator})
+	if got != "Васильев,Сергей [археолог],Александрович:" {
+		t.Fatalf("peopleStringWithDisambiguation() = %q, want first-name suffix", got)
+	}
+}
+
 func TestGenerateAdditionalUSRSidecarAnnotations(t *testing.T) {
 	t.Parallel()
 
@@ -163,6 +184,16 @@ func TestGenerateAdditionalUSRSidecarAnnotations(t *testing.T) {
 	if entries["usr.zip"] != want {
 		t.Fatalf("annotation entry = %q", entries["usr.zip"])
 	}
+}
+
+func sliceAmbiguousAuthorMetadata() *model.INPXMetadata {
+	return &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
+		Key: "Васильев,Сергей,Александрович",
+		Authors: []model.INPXAmbiguousDBAuthor{
+			{ID: "19026", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"},
+			{ID: "77926", FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"},
+		},
+	}}}
 }
 
 func TestGenerateContentFilterRunsBeforeWhere(t *testing.T) {

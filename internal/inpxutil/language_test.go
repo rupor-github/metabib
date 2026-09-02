@@ -1,6 +1,7 @@
 package inpxutil
 
 import (
+	"sync"
 	"testing"
 
 	"go.uber.org/zap"
@@ -40,7 +41,13 @@ func TestLanguageResolverDerivesKnownNoisyValues(t *testing.T) {
 		{name: "unknown alias", field: "language", value: "un", want: "und", wantMethod: "alias"},
 		{name: "valid region stem", field: "language", value: "en-US", want: "en", wantMethod: "valid_tag"},
 		{name: "valid script stem", field: "language", value: "sr-Latn", want: "sr", wantMethod: "valid_tag"},
-		{name: "full phrase alias before split", field: "language", value: "Человеческое, слишком человеческое", want: "ru", wantMethod: "alias"},
+		{
+			name:       "full phrase alias before split",
+			field:      "language",
+			value:      "Человеческое, слишком человеческое",
+			want:       "ru",
+			wantMethod: "alias",
+		},
 		{name: "split valid", field: "language", value: "ru, engl", want: "ru", wantMethod: "split_valid_tag"},
 		{name: "trim garbage", field: "language", value: "ru~", want: "ru", wantMethod: "split_valid_tag"},
 		{name: "english display", field: "language", value: "russian", want: "ru", wantMethod: "english_display_name"},
@@ -76,6 +83,25 @@ func TestLanguageResolverDerivesKnownNoisyValues(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLanguageResolverDisplayNameCacheIsConcurrentSafe(t *testing.T) {
+	t.Parallel()
+
+	resolver := testLanguageResolver(t, nil, false)
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Go(func() {
+			resolved := resolver.resolve(
+				languageCandidate{Field: "language", Observation: "fb2", Value: "russian"},
+				languageRecordContext{},
+			)
+			if resolved.Value != "ru" || resolved.Method != "english_display_name" || resolved.Ignored {
+				t.Errorf("resolve() = %q, %q, ignored=%v; want ru, english_display_name, false", resolved.Value, resolved.Method, resolved.Ignored)
+			}
+		})
+	}
+	wg.Wait()
 }
 
 func TestLanguageResolverWarnsAndReturnsRawUnresolved(t *testing.T) {

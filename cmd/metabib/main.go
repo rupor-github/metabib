@@ -736,6 +736,10 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	disambiguationField, err := inpxutil.ParseAuthorDisambiguationField(cfg.INPX.AuthorDisambiguationField)
+	if err != nil {
+		return err
+	}
 	stats, err := sliceinpx.Generate(ctx, sliceinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
@@ -749,6 +753,7 @@ func runINPX(ctx context.Context, cmd *cli.Command) error {
 		Where:               where,
 		SplitBy:             splitBy,
 		DisambiguateAuthors: cfg.INPX.DisambiguateAuthors,
+		DisambiguationField: disambiguationField,
 		Language:            language,
 		CommentTemplate:     cfg.INPX.CommentTemplate,
 		VersionTemplate:     cfg.INPX.VersionTemplate,
@@ -829,6 +834,10 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	disambiguationField, err := inpxutil.ParseAuthorDisambiguationField(cfg.INPX.AuthorDisambiguationField)
+	if err != nil {
+		return err
+	}
 	stats, err := mhlinpx.Generate(ctx, mhlinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
@@ -838,6 +847,7 @@ func runMHLINPX(ctx context.Context, cmd *cli.Command) error {
 		FB2Preference:       preference,
 		QuickFix:            cfg.INPX.QuickFix,
 		DisambiguateAuthors: cfg.INPX.DisambiguateAuthors,
+		DisambiguationField: disambiguationField,
 		Limits:              limits,
 		Language:            language,
 		CommentTemplate:     cfg.INPX.CommentTemplate,
@@ -893,6 +903,10 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	disambiguationField, err := inpxutil.ParseAuthorDisambiguationField(cfg.INPX.AuthorDisambiguationField)
+	if err != nil {
+		return err
+	}
 	stats, err := flibinpx.Generate(ctx, flibinpx.Options{
 		InputPrefix:         cmd.String("input"),
 		OutputPrefix:        cmd.String("output"),
@@ -905,6 +919,7 @@ func runFLibINPX(ctx context.Context, cmd *cli.Command) error {
 		FB2PathSeparator:    cfg.INPX.FLibrary.FB2PathSeparator,
 		SourceLib:           cmd.String("source-lib"),
 		DisambiguateAuthors: cfg.INPX.DisambiguateAuthors,
+		DisambiguationField: disambiguationField,
 		Language:            language,
 		CommentTemplate:     cfg.INPX.CommentTemplate,
 		VersionTemplate:     cfg.INPX.VersionTemplate,

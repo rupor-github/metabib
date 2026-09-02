@@ -1,6 +1,7 @@
 package inpxutil
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,8 +16,17 @@ type DBAuthorAmbiguityCollector struct {
 }
 
 type AuthorDisambiguator struct {
+	field    AuthorDisambiguationField
 	suffixes map[string]string
 }
+
+type AuthorDisambiguationField string
+
+const (
+	AuthorDisambiguationLast   AuthorDisambiguationField = "last"
+	AuthorDisambiguationFirst  AuthorDisambiguationField = "first"
+	AuthorDisambiguationMiddle AuthorDisambiguationField = "middle"
+)
 
 type authorCollisionGroup struct {
 	key     string
@@ -43,7 +53,7 @@ func (c *DBAuthorAmbiguityCollector) AddContributor(contributor model.Contributo
 		LastName:   contributor.LastName,
 		NickName:   contributor.NickName,
 	}
-	key := authorKey(person, "")
+	key := authorKey(person, "", AuthorDisambiguationLast)
 	if key == "" {
 		return
 	}
@@ -113,14 +123,40 @@ func MetadataForContent(metadata *model.INPXMetadata, mode ContentMode) *model.I
 	return &model.INPXMetadata{AmbiguousDBAuthors: groups}
 }
 
-func NewAuthorDisambiguator(metadata *model.INPXMetadata, log *zap.Logger, verbose bool) *AuthorDisambiguator {
+func ParseAuthorDisambiguationField(value string) (AuthorDisambiguationField, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", string(AuthorDisambiguationLast):
+		return AuthorDisambiguationLast, nil
+	case string(AuthorDisambiguationFirst):
+		return AuthorDisambiguationFirst, nil
+	case string(AuthorDisambiguationMiddle):
+		return AuthorDisambiguationMiddle, nil
+	default:
+		return "", fmt.Errorf("invalid author disambiguation field %q", value)
+	}
+}
+
+func NormalizeAuthorDisambiguationField(field AuthorDisambiguationField) AuthorDisambiguationField {
+	if field == "" {
+		return AuthorDisambiguationLast
+	}
+	return field
+}
+
+func NewAuthorDisambiguator(
+	metadata *model.INPXMetadata,
+	field AuthorDisambiguationField,
+	log *zap.Logger,
+	verbose bool,
+) *AuthorDisambiguator {
 	if metadata == nil || len(metadata.AmbiguousDBAuthors) == 0 {
 		if verbose && log != nil {
 			log.Debug("INPX DB author disambiguation metadata is absent")
 		}
 		return nil
 	}
-	d := &AuthorDisambiguator{suffixes: make(map[string]string)}
+	field = NormalizeAuthorDisambiguationField(field)
+	d := &AuthorDisambiguator{field: field, suffixes: make(map[string]string)}
 	assignedKeys := make(map[string]string)
 	for _, group := range metadata.AmbiguousDBAuthors {
 		nickCounts := make(map[string]int)
@@ -142,14 +178,15 @@ func NewAuthorDisambiguator(metadata *model.INPXMetadata, log *zap.Logger, verbo
 				continue
 			}
 			collisionAuthor := authorFromMetadata(author)
-			suffix := selectAuthorSuffix(collisionAuthor, nickCounts, groupAuthors, assignedKeys)
+			suffix := selectAuthorSuffix(collisionAuthor, nickCounts, groupAuthors, assignedKeys, field)
 			d.suffixes[author.ID] = suffix
-			assignedKeys[authorKey(collisionAuthor.person, suffix)] = author.ID
+			assignedKeys[authorKey(collisionAuthor.person, suffix, field)] = author.ID
 			if verbose && log != nil {
 				log.Debug(
 					"INPX DB author disambiguated",
 					zap.String("author_key", group.Key),
 					zap.String("flibusta_person_id", author.ID),
+					zap.String("disambiguation_field", string(field)),
 					zap.String("nick_name", author.NickName),
 					zap.String("suffix", suffix),
 				)
@@ -169,8 +206,15 @@ func NewAuthorDisambiguator(metadata *model.INPXMetadata, log *zap.Logger, verbo
 	return d
 }
 
-func (d *AuthorDisambiguator) LastName(person model.PersonValue) string {
+func (d *AuthorDisambiguator) Field() AuthorDisambiguationField {
 	if d == nil {
+		return AuthorDisambiguationLast
+	}
+	return NormalizeAuthorDisambiguationField(d.field)
+}
+
+func (d *AuthorDisambiguator) LastName(person model.PersonValue) string {
+	if d == nil || d.Field() != AuthorDisambiguationLast {
 		return person.LastName
 	}
 	suffix := d.Suffix(person)
@@ -234,6 +278,7 @@ func selectAuthorSuffix(
 	nickCounts map[string]int,
 	groupAuthors map[string]authorCollisionAuthor,
 	assignedKeys map[string]string,
+	field AuthorDisambiguationField,
 ) string {
 	candidates := []string{authorSuffix(author, nickCounts)}
 	if author.nickName != "" {
@@ -244,7 +289,7 @@ func selectAuthorSuffix(
 		candidates = append(candidates, idSuffix)
 	}
 	for _, candidate := range candidates {
-		if !keyCollides(author.id, authorKey(author.person, candidate), groupAuthors, assignedKeys) {
+		if !keyCollides(author.id, authorKey(author.person, candidate, field), groupAuthors, assignedKeys) {
 			return candidate
 		}
 	}
@@ -262,14 +307,21 @@ func authorIDLabel(id string) string {
 	return "#" + id
 }
 
-func authorKey(person model.PersonValue, suffix string) string {
+func authorKey(person model.PersonValue, suffix string, field AuthorDisambiguationField) string {
 	lastName := CleanseAuthorComponent(person.LastName)
-	suffix = CleanseAuthorComponent(suffix)
-	if suffix != "" {
-		lastName = strings.TrimSpace(lastName + " " + suffix)
-	}
 	firstName := CleanseAuthorComponent(person.FirstName)
 	middleName := CleanseAuthorComponent(person.MiddleName)
+	suffix = CleanseAuthorComponent(suffix)
+	if suffix != "" {
+		switch NormalizeAuthorDisambiguationField(field) {
+		case AuthorDisambiguationFirst:
+			firstName = strings.TrimSpace(firstName + " " + suffix)
+		case AuthorDisambiguationMiddle:
+			middleName = strings.TrimSpace(middleName + " " + suffix)
+		default:
+			lastName = strings.TrimSpace(lastName + " " + suffix)
+		}
+	}
 	if lastName == "" && firstName == "" && middleName == "" {
 		return ""
 	}

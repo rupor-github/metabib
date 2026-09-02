@@ -429,25 +429,34 @@ func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 	}
 }
 
-func TestAuthorLastNamePreservesDisambiguationSuffixWithQuickFix(t *testing.T) {
+func TestAuthorNameComponentPreservesDisambiguationSuffixWithQuickFix(t *testing.T) {
 	t.Parallel()
 
-	got := authorLastName(
+	got := renderedAuthorLastName(
 		model.PersonValue{LastName: "VeryLongFamilyName"},
 		" [#123]",
-		Options{QuickFix: true, Limits: Limits{AuthorFamily: 12}},
+		Options{QuickFix: true, Limits: Limits{AuthorFamily: 12}, DisambiguationField: inpxutil.AuthorDisambiguationLast},
 	)
 	if got != "Very [#123]" {
-		t.Fatalf("authorLastName() = %q, want suffix preserved", got)
+		t.Fatalf("renderedAuthorLastName() = %q, want suffix preserved", got)
 	}
 
-	got = authorLastName(
+	got = renderedAuthorLastName(
 		model.PersonValue{LastName: "VeryLongFamilyName"},
 		"[#123456789]",
-		Options{QuickFix: true, Limits: Limits{AuthorFamily: 5}},
+		Options{QuickFix: true, Limits: Limits{AuthorFamily: 5}, DisambiguationField: inpxutil.AuthorDisambiguationLast},
 	)
 	if got != "[#123456789]" {
-		t.Fatalf("authorLastName() = %q, want full suffix over truncation", got)
+		t.Fatalf("renderedAuthorLastName() = %q, want full suffix over truncation", got)
+	}
+
+	got = renderedAuthorFirstName(
+		model.PersonValue{FirstName: "VeryLongGivenName"},
+		"[#123]",
+		Options{QuickFix: true, Limits: Limits{AuthorName: 12}, DisambiguationField: inpxutil.AuthorDisambiguationFirst},
+	)
+	if got != "Very [#123]" {
+		t.Fatalf("renderedAuthorFirstName() = %q, want suffix preserved", got)
 	}
 }
 
@@ -653,11 +662,16 @@ func TestRecordLineLogsDisambiguatedDBAuthor(t *testing.T) {
 	}}}}
 	core, logs := observer.New(zap.DebugLevel)
 	_, _, _, err := recordLine(rec, Options{
-		Format:              Format2X,
-		FB2Preference:       PreferComplement,
-		QuickFix:            true,
-		Limits:              DefaultLimits(),
-		AuthorDisambiguator: inpxutil.NewAuthorDisambiguator(ambiguousAuthorMetadata(), nil, false),
+		Format:        Format2X,
+		FB2Preference: PreferComplement,
+		QuickFix:      true,
+		Limits:        DefaultLimits(),
+		AuthorDisambiguator: inpxutil.NewAuthorDisambiguator(
+			ambiguousAuthorMetadata(),
+			inpxutil.AuthorDisambiguationMiddle,
+			nil,
+			false,
+		),
 		Log:                 zap.New(core),
 		DisambiguateAuthors: true,
 		Verbose:             true,
@@ -670,7 +684,8 @@ func TestRecordLineLogsDisambiguatedDBAuthor(t *testing.T) {
 		t.Fatalf("debug logs = %#v, want one disambiguation message", logs.All())
 	}
 	fields := entries[0].ContextMap()
-	if fields["book_id"] != "42" || fields["flibusta_person_id"] != "19026" || fields["suffix"] != "[археолог]" {
+	if fields["book_id"] != "42" || fields["flibusta_person_id"] != "19026" || fields["suffix"] != "[археолог]" ||
+		fields["disambiguation_field"] != "middle" || fields["rendered_middle_name"] != "Александрович [археолог]" {
 		t.Fatalf("log fields = %#v", fields)
 	}
 }

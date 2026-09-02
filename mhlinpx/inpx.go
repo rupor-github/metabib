@@ -64,6 +64,7 @@ type Options struct {
 	FB2Preference       FB2Preference
 	QuickFix            bool
 	DisambiguateAuthors bool
+	DisambiguationField inpxutil.AuthorDisambiguationField
 	Limits              Limits
 	Language            *inpxutil.LanguageResolver
 	CommentTemplate     string
@@ -179,6 +180,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			if opts.DisambiguateAuthors && dataset.Database != nil {
 				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(
 					inpxutil.MetadataForContent(dataset.Database.INPX, opts.ContentMode),
+					opts.DisambiguationField,
 					opts.Log,
 					opts.Verbose,
 				)
@@ -675,7 +677,10 @@ func logDisambiguatedDBAuthors(rec model.DatasetRecord, view inpxutil.DatasetRec
 			zap.String("last_name", person.LastName),
 			zap.String("nick_name", person.NickName),
 			zap.String("suffix", suffix),
-			zap.String("rendered_last_name", authorLastName(person, suffix, opts)),
+			zap.String("disambiguation_field", string(disambiguationField(opts))),
+			zap.String("rendered_first_name", renderedAuthorFirstName(person, suffix, opts)),
+			zap.String("rendered_middle_name", renderedAuthorMiddleName(person, suffix, opts)),
+			zap.String("rendered_last_name", renderedAuthorLastName(person, suffix, opts)),
 			zap.String("rendered_authors", renderedAuthors),
 			zap.String("locator_kind", rec.Record.Locator.Kind),
 			zap.String("locator_source", rec.Record.Locator.Source),
@@ -699,9 +704,10 @@ func dbAuthorsSelected(authors []model.PersonValue, fb2Authors []model.PersonVal
 func peopleString(people []model.PersonValue, opts Options) string {
 	var b strings.Builder
 	for _, person := range people {
-		lastName := authorLastName(person, opts.AuthorDisambiguator.Suffix(person), opts)
-		firstName := fix(inpxutil.CleanseAuthorComponent(person.FirstName), opts.QuickFix, opts.Limits.AuthorName)
-		middleName := fix(inpxutil.CleanseAuthorComponent(person.MiddleName), opts.QuickFix, opts.Limits.AuthorMiddle)
+		suffix := opts.AuthorDisambiguator.Suffix(person)
+		lastName := renderedAuthorLastName(person, suffix, opts)
+		firstName := renderedAuthorFirstName(person, suffix, opts)
+		middleName := renderedAuthorMiddleName(person, suffix, opts)
 		if lastName == "" && firstName == "" && middleName == "" {
 			continue
 		}
@@ -718,27 +724,52 @@ func peopleString(people []model.PersonValue, opts Options) string {
 	return b.String()
 }
 
-func authorLastName(person model.PersonValue, suffix string, opts Options) string {
-	lastName := inpxutil.CleanseAuthorComponent(person.LastName)
+func renderedAuthorLastName(person model.PersonValue, suffix string, opts Options) string {
+	return authorNameComponent(person.LastName, suffix, inpxutil.AuthorDisambiguationLast, opts, opts.Limits.AuthorFamily)
+}
+
+func renderedAuthorFirstName(person model.PersonValue, suffix string, opts Options) string {
+	return authorNameComponent(person.FirstName, suffix, inpxutil.AuthorDisambiguationFirst, opts, opts.Limits.AuthorName)
+}
+
+func renderedAuthorMiddleName(person model.PersonValue, suffix string, opts Options) string {
+	return authorNameComponent(person.MiddleName, suffix, inpxutil.AuthorDisambiguationMiddle, opts, opts.Limits.AuthorMiddle)
+}
+
+func authorNameComponent(
+	value string,
+	suffix string,
+	field inpxutil.AuthorDisambiguationField,
+	opts Options,
+	limit int,
+) string {
+	value = inpxutil.CleanseAuthorComponent(value)
 	suffix = inpxutil.CleanseAuthorComponent(suffix)
-	if suffix == "" {
-		return fix(lastName, opts.QuickFix, opts.Limits.AuthorFamily)
+	if suffix == "" || disambiguationField(opts) != field {
+		return fix(value, opts.QuickFix, limit)
 	}
 	suffix = " " + suffix
-	if !opts.QuickFix || opts.Limits.AuthorFamily <= 0 {
-		return strings.TrimSpace(lastName + suffix)
+	if !opts.QuickFix || limit <= 0 {
+		return strings.TrimSpace(value + suffix)
 	}
-	limit := max(opts.Limits.AuthorFamily-1, 0)
+	limit = max(limit-1, 0)
 	suffixRunes := []rune(suffix)
 	if len(suffixRunes) >= limit {
 		return strings.TrimSpace(suffix)
 	}
-	lastNameRunes := []rune(lastName)
-	lastNameLimit := limit - len(suffixRunes)
-	if len(lastNameRunes) > lastNameLimit {
-		lastName = strings.TrimRight(string(lastNameRunes[:lastNameLimit]), " \t")
+	valueRunes := []rune(value)
+	valueLimit := limit - len(suffixRunes)
+	if len(valueRunes) > valueLimit {
+		value = strings.TrimRight(string(valueRunes[:valueLimit]), " \t")
 	}
-	return strings.TrimSpace(lastName + suffix)
+	return strings.TrimSpace(value + suffix)
+}
+
+func disambiguationField(opts Options) inpxutil.AuthorDisambiguationField {
+	if opts.AuthorDisambiguator != nil {
+		return opts.AuthorDisambiguator.Field()
+	}
+	return inpxutil.NormalizeAuthorDisambiguationField(opts.DisambiguationField)
 }
 
 func genresString(genres []model.GenreValue, fb2Genres []model.GenreValue) string {

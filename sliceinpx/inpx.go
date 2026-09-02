@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"strings"
 	"unicode"
 
-	jsonv2 "encoding/json/v2"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"
@@ -71,6 +71,7 @@ type Options struct {
 	Where               string
 	SplitBy             string
 	DisambiguateAuthors bool
+	DisambiguationField inpxutil.AuthorDisambiguationField
 	Language            *inpxutil.LanguageResolver
 	CommentTemplate     string
 	VersionTemplate     string
@@ -346,6 +347,7 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			if opts.DisambiguateAuthors && dataset.Database != nil {
 				opts.AuthorDisambiguator = inpxutil.NewAuthorDisambiguator(
 					inpxutil.MetadataForContent(dataset.Database.INPX, opts.ContentMode),
+					opts.DisambiguationField,
 					opts.Log,
 					opts.Verbose,
 				)
@@ -413,7 +415,17 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 			if opts.Log != nil {
 				opts.Log.Info("INPX slice creation started", zap.String("file", outputPath), zap.Int("archives", len(dataset.Archives)))
 			}
-			stream, err = newStreamINPXWriter(tmpPath, annotationsTmpPath, compilationsTmpPath, stats.CompilationsOutputPath, meta, dataset, opts, where, splitBy)
+			stream, err = newStreamINPXWriter(
+				tmpPath,
+				annotationsTmpPath,
+				compilationsTmpPath,
+				stats.CompilationsOutputPath,
+				meta,
+				dataset,
+				opts,
+				where,
+				splitBy,
+			)
 			return err
 		},
 		func(rec model.DatasetRecord) error {
@@ -987,26 +999,27 @@ func recordLanguage(rec model.DatasetRecord, view inpxutil.DatasetRecordView, op
 
 func authorsString(dbPresent bool, authors []model.PersonValue, fb2Authors []model.PersonValue, opts Options) string {
 	if opts.FB2Preference == PreferReplace && len(fb2Authors) > 0 {
-		return peopleStringWithDisambiguation(fb2Authors, opts.AuthorDisambiguator)
+		return peopleStringWithDisambiguation(fb2Authors, opts)
 	}
 	if dbPresent && len(authors) == 0 {
 		return "неизвестный,автор,:"
 	}
 	if len(authors) == 0 && len(fb2Authors) > 0 {
-		return peopleStringWithDisambiguation(fb2Authors, opts.AuthorDisambiguator)
+		return peopleStringWithDisambiguation(fb2Authors, opts)
 	}
 	if len(authors) == 0 {
 		return "неизвестный,автор,:"
 	}
-	return peopleStringWithDisambiguation(authors, opts.AuthorDisambiguator)
+	return peopleStringWithDisambiguation(authors, opts)
 }
 
-func peopleStringWithDisambiguation(people []model.PersonValue, disambiguator *inpxutil.AuthorDisambiguator) string {
+func peopleStringWithDisambiguation(people []model.PersonValue, opts Options) string {
 	var b strings.Builder
 	for _, person := range people {
-		lastName := authorLastName(person, disambiguator.Suffix(person))
-		firstName := inpxutil.CleanseAuthorComponent(person.FirstName)
-		middleName := inpxutil.CleanseAuthorComponent(person.MiddleName)
+		suffix := opts.AuthorDisambiguator.Suffix(person)
+		lastName := renderedAuthorLastName(person, suffix, opts)
+		firstName := renderedAuthorFirstName(person, suffix, opts)
+		middleName := renderedAuthorMiddleName(person, suffix, opts)
 		if lastName == "" && firstName == "" && middleName == "" {
 			continue
 		}
@@ -1023,13 +1036,32 @@ func peopleStringWithDisambiguation(people []model.PersonValue, disambiguator *i
 	return b.String()
 }
 
-func authorLastName(person model.PersonValue, suffix string) string {
-	lastName := inpxutil.CleanseAuthorComponent(person.LastName)
+func renderedAuthorLastName(person model.PersonValue, suffix string, opts Options) string {
+	return authorNameComponent(person.LastName, suffix, inpxutil.AuthorDisambiguationLast, opts)
+}
+
+func renderedAuthorFirstName(person model.PersonValue, suffix string, opts Options) string {
+	return authorNameComponent(person.FirstName, suffix, inpxutil.AuthorDisambiguationFirst, opts)
+}
+
+func renderedAuthorMiddleName(person model.PersonValue, suffix string, opts Options) string {
+	return authorNameComponent(person.MiddleName, suffix, inpxutil.AuthorDisambiguationMiddle, opts)
+}
+
+func authorNameComponent(value string, suffix string, field inpxutil.AuthorDisambiguationField, opts Options) string {
+	value = inpxutil.CleanseAuthorComponent(value)
 	suffix = inpxutil.CleanseAuthorComponent(suffix)
-	if suffix == "" {
-		return lastName
+	if suffix == "" || disambiguationField(opts) != field {
+		return value
 	}
-	return strings.TrimSpace(lastName + " " + suffix)
+	return strings.TrimSpace(value + " " + suffix)
+}
+
+func disambiguationField(opts Options) inpxutil.AuthorDisambiguationField {
+	if opts.AuthorDisambiguator != nil {
+		return opts.AuthorDisambiguator.Field()
+	}
+	return inpxutil.NormalizeAuthorDisambiguationField(opts.DisambiguationField)
 }
 
 func logDisambiguatedDBAuthors(rec model.DatasetRecord, view inpxutil.DatasetRecordView, renderedAuthors string, opts Options) int {
@@ -1054,7 +1086,10 @@ func logDisambiguatedDBAuthors(rec model.DatasetRecord, view inpxutil.DatasetRec
 			zap.String("last_name", person.LastName),
 			zap.String("nick_name", person.NickName),
 			zap.String("suffix", suffix),
-			zap.String("rendered_last_name", authorLastName(person, suffix)),
+			zap.String("disambiguation_field", string(disambiguationField(opts))),
+			zap.String("rendered_first_name", renderedAuthorFirstName(person, suffix, opts)),
+			zap.String("rendered_middle_name", renderedAuthorMiddleName(person, suffix, opts)),
+			zap.String("rendered_last_name", renderedAuthorLastName(person, suffix, opts)),
 			zap.String("rendered_authors", renderedAuthors),
 			zap.String("locator_kind", rec.Record.Locator.Kind),
 			zap.String("locator_source", rec.Record.Locator.Source),

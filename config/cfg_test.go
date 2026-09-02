@@ -88,13 +88,18 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if !cfg.INPX.DisambiguateAuthors {
 		t.Fatal("INPX.DisambiguateAuthors = false, want true")
 	}
+	if cfg.INPX.AuthorDisambiguationField != "last" {
+		t.Fatalf("INPX.AuthorDisambiguationField = %q, want last", cfg.INPX.AuthorDisambiguationField)
+	}
 	if cfg.INPX.FLibrary.SequenceDedup != "case-insensitive" || cfg.INPX.FLibrary.FB2PathSeparator != " / " {
 		t.Fatalf("FLibrary INPX defaults = %#v", cfg.INPX.FLibrary)
 	}
 	if !cfg.INPX.Language.Canonicalize {
 		t.Fatal("INPX.Language.Canonicalize = false, want true")
 	}
-	if cfg.INPX.Language.Aliases["gr"] != "el" || cfg.INPX.Language.Aliases["un"] != "und" || cfg.INPX.Language.Aliases["Человеческое, слишком человеческое"] != "ru" {
+	if cfg.INPX.Language.Aliases["gr"] != "el" ||
+		cfg.INPX.Language.Aliases["un"] != "und" ||
+		cfg.INPX.Language.Aliases["Человеческое, слишком человеческое"] != "ru" {
 		t.Fatalf("INPX language aliases = %#v", cfg.INPX.Language.Aliases)
 	}
 	if strings.Join(cfg.INPX.Language.FallbackLocales, ",") != "en,ru,bg" {
@@ -196,6 +201,23 @@ func TestLoadConfigurationRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir())); err == nil {
 		t.Fatal("LoadConfiguration() error = nil, want unknown field error")
+	}
+}
+
+func TestLoadConfigurationRejectsInvalidAuthorDisambiguationField(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "metabib.yaml")
+	data := []byte(strings.Join([]string{
+		"inpx:",
+		"  author_disambiguation_field: nickname",
+	}, "\n"))
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	_, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+	if err == nil || !strings.Contains(err.Error(), "AuthorDisambiguationField") {
+		t.Fatalf("LoadConfiguration() error = %v, want author_disambiguation_field validation error", err)
 	}
 }
 

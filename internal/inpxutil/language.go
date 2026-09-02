@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode"
 
 	"go.uber.org/zap"
@@ -35,6 +36,7 @@ type LanguageResolver struct {
 	fallbackLocales []language.Tag
 	ignorePatterns  []*regexp.Regexp
 	contextRules    []languageContextRule
+	displayNamesMu  sync.Mutex
 	displayNames    map[string]languageNames
 	log             *zap.Logger
 	verbose         bool
@@ -342,9 +344,13 @@ func (r *LanguageResolver) displayNameWithLocale(value string, locale language.T
 
 func (r *LanguageResolver) names(locale language.Tag) languageNames {
 	key := locale.String()
+	r.displayNamesMu.Lock()
 	if names, ok := r.displayNames[key]; ok {
+		r.displayNamesMu.Unlock()
 		return names
 	}
+	r.displayNamesMu.Unlock()
+
 	namer := display.Languages(locale)
 	names := languageNames{exact: map[string]languageMatch{}}
 	if namer != nil {
@@ -361,7 +367,13 @@ func (r *LanguageResolver) names(locale language.Tag) languageNames {
 			names.all = append(names.all, match)
 		}
 	}
+	r.displayNamesMu.Lock()
+	if cached, ok := r.displayNames[key]; ok {
+		r.displayNamesMu.Unlock()
+		return cached
+	}
 	r.displayNames[key] = names
+	r.displayNamesMu.Unlock()
 	return names
 }
 

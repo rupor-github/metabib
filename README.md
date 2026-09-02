@@ -911,6 +911,7 @@ Some fields are used by every INPX generator, while MHL-specific options such as
 ```yaml
 inpx:
   disambiguate_authors: true
+  author_disambiguation_field: last
   comment_template: "\ufeff{{ .DatabaseName }} FB2 - {{ .DisplayDate }}\r\n{{ .DatabaseName }}_{{ .DumpDate }}\r\n65536\r\nЛокальные архивы библиотеки {{ .DatabaseName }} (FB2) {{ .DisplayDate }}"
   version_template: "{{ .DumpDate }}\r\n"
   language:
@@ -952,12 +953,21 @@ generation selects the matching group set by `--content`: `fb2` uses only FB2
 collisions, `usr` uses only USR collisions, and `all` uses all collisions.
 
 When a selected DB author belongs to an ambiguous group, the exported INPX
-last-name field receives a stable suffix. A unique database nickname becomes the
+author name receives a stable suffix. By default,
+`inpx.author_disambiguation_field: last` preserves existing behavior and appends
+the suffix to the last-name field. A unique database nickname becomes the
 preferred suffix, for example `Новиков [писатель],Александр,Васильевич:`. If no
 unique nickname is available, the suffix falls back to the Flibusta person ID,
 for example `Абрамов [#17376],Александр,Иванович:`. Only DB authors with catalog
 person identities are disambiguated; FB2-only authors are not changed because they
 do not have reliable database contributor IDs.
+
+Set `inpx.author_disambiguation_field` to choose which INPX author component gets
+the suffix:
+
+- `last`: `Васильев [археолог],Сергей,Александрович:`;
+- `first`: `Васильев,Сергей [археолог],Александрович:`;
+- `middle`: `Васильев,Сергей,Александрович [археолог]:`.
 
 Scoped disambiguation prevents non-FB2 catalog rows from changing default FB2
 INPX output. For example, if `Коллектив авторов` is ambiguous only because a PDF

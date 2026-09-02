@@ -548,6 +548,49 @@ func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 	}
 }
 
+func TestPeopleStringDisambiguatesConfiguredAuthorField(t *testing.T) {
+	t.Parallel()
+
+	author := model.PersonValue{
+		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "19026"}},
+		FirstName:  "Сергей",
+		MiddleName: "Александрович",
+		LastName:   "Васильев",
+	}
+	tests := []struct {
+		name  string
+		field inpxutil.AuthorDisambiguationField
+		want  string
+	}{
+		{
+			name:  "last",
+			field: inpxutil.AuthorDisambiguationLast,
+			want:  "Васильев [археолог],Сергей,Александрович:",
+		},
+		{
+			name:  "first",
+			field: inpxutil.AuthorDisambiguationFirst,
+			want:  "Васильев,Сергей [археолог],Александрович:",
+		},
+		{
+			name:  "middle",
+			field: inpxutil.AuthorDisambiguationMiddle,
+			want:  "Васильев,Сергей,Александрович [археолог]:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			disambiguator := inpxutil.NewAuthorDisambiguator(ambiguousAuthorMetadata(), tt.field, nil, false)
+			got := peopleStringWithDisambiguation([]model.PersonValue{author}, Options{AuthorDisambiguator: disambiguator})
+			if got != tt.want {
+				t.Fatalf("peopleStringWithDisambiguation() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildRecordFieldsLogsDisambiguatedDBAuthor(t *testing.T) {
 	t.Parallel()
 
@@ -563,8 +606,13 @@ func TestBuildRecordFieldsLogsDisambiguatedDBAuthor(t *testing.T) {
 	}}}}
 	core, logs := observer.New(zap.DebugLevel)
 	_, _, _, ok, err := buildRecordFields(rec, Options{
-		FB2Preference:       PreferComplement,
-		AuthorDisambiguator: inpxutil.NewAuthorDisambiguator(ambiguousAuthorMetadata(), nil, false),
+		FB2Preference: PreferComplement,
+		AuthorDisambiguator: inpxutil.NewAuthorDisambiguator(
+			ambiguousAuthorMetadata(),
+			inpxutil.AuthorDisambiguationFirst,
+			nil,
+			false,
+		),
 		Log:                 zap.New(core),
 		DisambiguateAuthors: true,
 		Verbose:             true,
@@ -577,7 +625,8 @@ func TestBuildRecordFieldsLogsDisambiguatedDBAuthor(t *testing.T) {
 		t.Fatalf("debug logs = %#v, want one disambiguation message", logs.All())
 	}
 	fields := entries[0].ContextMap()
-	if fields["book_id"] != "42" || fields["flibusta_person_id"] != "19026" || fields["suffix"] != "[археолог]" {
+	if fields["book_id"] != "42" || fields["flibusta_person_id"] != "19026" || fields["suffix"] != "[археолог]" ||
+		fields["disambiguation_field"] != "first" || fields["rendered_first_name"] != "Сергей [археолог]" {
 		t.Fatalf("log fields = %#v", fields)
 	}
 }

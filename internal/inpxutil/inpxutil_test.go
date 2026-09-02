@@ -486,8 +486,12 @@ func TestDBAuthorAmbiguityCollectorUsesDBAuthorIdentity(t *testing.T) {
 	t.Parallel()
 
 	collector := NewDBAuthorAmbiguityCollector()
-	collector.AddContributor(model.Contributor{ID: 19026, FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог"})
-	collector.AddContributor(model.Contributor{ID: 77926, FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт"})
+	collector.AddContributor(model.Contributor{
+		ID: 19026, FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "археолог",
+	})
+	collector.AddContributor(model.Contributor{
+		ID: 77926, FirstName: "Сергей", MiddleName: "Александрович", LastName: "Васильев", NickName: "поэт",
+	})
 	collector.AddContributor(model.Contributor{ID: 1, FirstName: "Other", LastName: "Author"})
 	metadata := collector.Metadata()
 	if metadata == nil || len(metadata.AmbiguousDBAuthors) != 1 {
@@ -497,7 +501,7 @@ func TestDBAuthorAmbiguityCollectorUsesDBAuthorIdentity(t *testing.T) {
 		t.Fatalf("ambiguous key = %q", metadata.AmbiguousDBAuthors[0].Key)
 	}
 	core, logs := observer.New(zap.DebugLevel)
-	disambiguator := NewAuthorDisambiguator(metadata, zap.New(core), true)
+	disambiguator := NewAuthorDisambiguator(metadata, AuthorDisambiguationLast, zap.New(core), true)
 	if disambiguator == nil {
 		t.Fatal("NewAuthorDisambiguator() = nil, want disambiguator")
 	}
@@ -524,12 +528,48 @@ func TestDBAuthorAmbiguityCollectorFallsBackToID(t *testing.T) {
 	collector := NewDBAuthorAmbiguityCollector()
 	collector.AddContributor(model.Contributor{ID: 1, FirstName: "First", MiddleName: "Middle", LastName: "Last", NickName: "same"})
 	collector.AddContributor(model.Contributor{ID: 2, FirstName: "First", MiddleName: "Middle", LastName: "Last", NickName: "same"})
-	disambiguator := NewAuthorDisambiguator(collector.Metadata(), nil, false)
+	disambiguator := NewAuthorDisambiguator(collector.Metadata(), AuthorDisambiguationLast, nil, false)
 	if got := disambiguator.LastName(model.PersonValue{
 		Identities: []model.IdentityTarget{{Scheme: "flibusta.person", Value: "2"}},
 		LastName:   "Last",
 	}); got != "Last [#2]" {
 		t.Fatalf("LastName() = %q, want ID suffix", got)
+	}
+}
+
+func TestAuthorKeyUsesConfiguredDisambiguationField(t *testing.T) {
+	t.Parallel()
+
+	person := model.PersonValue{FirstName: "First", MiddleName: "Middle", LastName: "Last"}
+	tests := []struct {
+		name  string
+		field AuthorDisambiguationField
+		want  string
+	}{
+		{
+			name:  "last",
+			field: AuthorDisambiguationLast,
+			want:  "Last [x],First,Middle",
+		},
+		{
+			name:  "first",
+			field: AuthorDisambiguationFirst,
+			want:  "Last,First [x],Middle",
+		},
+		{
+			name:  "middle",
+			field: AuthorDisambiguationMiddle,
+			want:  "Last,First,Middle [x]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := authorKey(person, "[x]", tt.field); got != tt.want {
+				t.Fatalf("authorKey() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
