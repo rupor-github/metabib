@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	jsonv2 "encoding/json/v2"
 	"github.com/klauspost/compress/zstd"
+	cli "github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
@@ -50,6 +51,29 @@ func TestMergeCommandHasAllowMissingFlag(t *testing.T) {
 		}
 	}
 	t.Fatal("merge command does not expose --allow-missing")
+}
+
+func TestFetchCommandHasNoArchivesFlagAndOptionalTo(t *testing.T) {
+	t.Parallel()
+
+	var hasNoArchives bool
+	for _, flag := range fetchCommand().Flags {
+		if slices.Contains(flag.Names(), "noarchives") {
+			hasNoArchives = true
+		}
+		if slices.Contains(flag.Names(), "to") {
+			stringFlag, ok := flag.(*cli.StringFlag)
+			if !ok {
+				t.Fatalf("--to flag type = %T, want *cli.StringFlag", flag)
+			}
+			if stringFlag.Required {
+				t.Fatal("--to flag is still required")
+			}
+		}
+	}
+	if !hasNoArchives {
+		t.Fatal("fetch command does not expose --noarchives")
+	}
 }
 
 func TestRecordFileKeys(t *testing.T) {

@@ -2,6 +2,7 @@ package fetch
 
 import (
 	"archive/zip"
+	"compress/gzip"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"metabib/config"
 )
 
 func TestGetLastBookID(t *testing.T) {
@@ -295,6 +298,59 @@ func TestProcessFile(t *testing.T) {
 	}
 }
 
+func TestRunNoArchivesDownloadsSQLWithoutArchiveDir(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sql/":
+			_, _ = w.Write([]byte(`<a href="libbook.sql.gz">libbook</a>`))
+		case "/sql/libbook.sql.gz":
+			gz := gzip.NewWriter(w)
+			_, _ = gz.Write([]byte("CREATE TABLE `libbook` (`BookId` int);\n"))
+			_ = gz.Close()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	sqlDir := t.TempDir()
+	res, err := Run(context.Background(), Options{
+		Library:     testLibraryConfig(server.URL),
+		SQLDir:      sqlDir,
+		NoArchives:  true,
+		DownloadSQL: true,
+		Retry:       1,
+		Timeout:     time.Second,
+		ChunkSize:   1024,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.Archives != 0 || res.SQLTables != 1 || res.SQLDir != sqlDir {
+		t.Fatalf("Run() = %#v, want SQL-only result", res)
+	}
+	if got := readString(t, filepath.Join(sqlDir, "libbook.sql")); !strings.Contains(got, "CREATE TABLE `libbook`") {
+		t.Fatalf("downloaded SQL = %q, want decompressed dump", got)
+	}
+}
+
+func TestRunRejectsNoArchivesWithNoSQL(t *testing.T) {
+	t.Parallel()
+
+	_, err := Run(context.Background(), Options{
+		NoArchives:  true,
+		DownloadSQL: false,
+		Retry:       1,
+		Timeout:     time.Second,
+		ChunkSize:   1024,
+	})
+	if err == nil || !strings.Contains(err.Error(), "nothing to fetch") {
+		t.Fatalf("Run() error = %v, want nothing to fetch", err)
+	}
+}
+
 func TestFetchFileResumeValidatesContentRange(t *testing.T) {
 	t.Parallel()
 
@@ -391,6 +447,17 @@ func testFetcher(server *httptest.Server) fetcher {
 		},
 		client:    server.Client(),
 		userAgent: "metabib-test",
+	}
+}
+
+func testLibraryConfig(serverURL string) config.FetchLibraryConfig {
+	return config.FetchLibraryConfig{
+		Name:           "test",
+		LibraryName:    "testlib",
+		ArchivePattern: `href="([^"]+\.zip)"`,
+		SQLPattern:     `href="([^"]+\.sql\.gz)"`,
+		ArchiveURL:     serverURL + "/daily/",
+		SQLURL:         serverURL + "/sql/",
 	}
 }
 

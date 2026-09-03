@@ -59,7 +59,7 @@ fetch:
       library_name: flibusta
       archive_content: fb2
       archive_pattern: '(?i)<a\s+href="(f(?:\.fb2)*\.[0-9]+-[0-9]+\.zip)">'
-      sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
+      sql_pattern: '(?i)<a\s+href="((?:lib\.lib\w+|lib\.b\.annotations)\.sql\.gz)">'
       archive_url: http://flibusta.is/daily/
       sql_url: http://flibusta.is/sql/
       proxy: ""
@@ -67,7 +67,7 @@ fetch:
       library_name: flibusta
       archive_content: usr
       archive_pattern: '(?i)<a\s+href="(f\.(?!fb2\.)[^.]+\.[0-9]+-[0-9]+\.zip)">'
-      sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
+      sql_pattern: '(?i)<a\s+href="((?:lib\.lib\w+|lib\.b\.annotations)\.sql\.gz)">'
       archive_url: http://flibusta.is/daily/
       sql_url: http://flibusta.is/sql/
       proxy: ""
@@ -75,7 +75,7 @@ fetch:
       library_name: flibusta
       archive_content: all
       archive_pattern: '(?i)<a\s+href="(f(?:\.[^.]+)?\.[0-9]+-[0-9]+\.zip)">'
-      sql_pattern: '(?i)<a\s+href="(lib\.lib\w+\.sql\.gz)">'
+      sql_pattern: '(?i)<a\s+href="((?:lib\.lib\w+|lib\.b\.annotations)\.sql\.gz)">'
       archive_url: http://flibusta.is/daily/
       sql_url: http://flibusta.is/sql/
       proxy: ""

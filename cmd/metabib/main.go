@@ -162,9 +162,10 @@ func fetchCommand() *cli.Command {
 			&cli.IntFlag{Name: "timeout", Value: 20, Usage: "per-request timeout in seconds"},
 			&cli.IntFlag{Name: "chunksize", Value: 10, Usage: "download chunk size in megabytes"},
 			&cli.BoolFlag{Name: "nosql", Usage: "do not download SQL dumps"},
+			&cli.BoolFlag{Name: "noarchives", Usage: "do not download daily archive ZIP files"},
 			&cli.BoolFlag{Name: "sticky", Usage: "ignore HTTP redirects and keep using the original host"},
 			&cli.BoolFlag{Name: "continue", Usage: "continue partially downloaded files when the server supports ranges"},
-			&cli.StringFlag{Name: "to", Aliases: []string{"o"}, Usage: "destination directory for daily archive ZIP files", Required: true},
+			&cli.StringFlag{Name: "to", Aliases: []string{"o"}, Usage: "destination directory for daily archive ZIP files"},
 			&cli.StringFlag{Name: "tosql", Usage: "destination directory for SQL dump files"},
 		},
 		Action: runFetch,
@@ -348,6 +349,12 @@ func mergeCommand() *cli.Command {
 func runFetch(ctx context.Context, cmd *cli.Command) error {
 	cfg := state.EnvFromContext(ctx).Cfg
 	env := state.EnvFromContext(ctx)
+	if cmd.Bool("nosql") && cmd.Bool("noarchives") {
+		return errors.New("nothing to fetch: --noarchives and --nosql cannot be used together")
+	}
+	if !cmd.Bool("noarchives") && cmd.String("to") == "" {
+		return errors.New("archive output directory is required unless --noarchives is set")
+	}
 	library, ok := cfg.Fetch.FindLibrary(cmd.String("library"))
 	if !ok {
 		return fmt.Errorf("unable to find fetch profile %q", cmd.String("library"))
@@ -356,6 +363,7 @@ func runFetch(ctx context.Context, cmd *cli.Command) error {
 		Library:       library,
 		ArchiveDir:    cmd.String("to"),
 		SQLDir:        cmd.String("tosql"),
+		NoArchives:    cmd.Bool("noarchives"),
 		DownloadSQL:   !cmd.Bool("nosql"),
 		Retry:         cmd.Int("retry"),
 		Timeout:       time.Duration(cmd.Int("timeout")) * time.Second,

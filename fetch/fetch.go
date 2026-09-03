@@ -38,6 +38,7 @@ type Options struct {
 	Library       config.FetchLibraryConfig
 	ArchiveDir    string
 	SQLDir        string
+	NoArchives    bool
 	DownloadSQL   bool
 	Retry         int
 	Timeout       time.Duration
@@ -81,13 +82,20 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.ChunkSize <= 0 {
 		return Result{}, fmt.Errorf("chunk size must be positive")
 	}
-	if opts.ArchiveDir == "" {
+	if opts.NoArchives && !opts.DownloadSQL {
+		return Result{}, errors.New("nothing to fetch: --noarchives and --nosql cannot be used together")
+	}
+	if !opts.NoArchives && opts.ArchiveDir == "" {
 		return Result{}, errors.New("archive output directory is required")
 	}
 
-	archiveDir, err := filepath.Abs(opts.ArchiveDir)
-	if err != nil {
-		return Result{}, fmt.Errorf("resolve archive output directory: %w", err)
+	var err error
+	archiveDir := ""
+	if !opts.NoArchives {
+		archiveDir, err = filepath.Abs(opts.ArchiveDir)
+		if err != nil {
+			return Result{}, fmt.Errorf("resolve archive output directory: %w", err)
+		}
 	}
 	libraryName := opts.Library.LibraryName
 	if libraryName == "" {
@@ -108,12 +116,16 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	f := fetcher{opts: opts, client: client, userAgent: userAgent(opts)}
 
-	if err := os.MkdirAll(archiveDir, 0o777); err != nil {
-		return Result{}, fmt.Errorf("create archive output directory %q: %w", archiveDir, err)
-	}
-	highWater, err := getArchiveHighWater(archiveDir)
-	if err != nil {
-		return Result{}, err
+	highWater := map[string]archiveHighWater{archiveFamilyFB2: {}, archiveFamilyUSR: {}}
+	if !opts.NoArchives {
+		if err := os.MkdirAll(archiveDir, 0o777); err != nil {
+			return Result{}, fmt.Errorf("create archive output directory %q: %w", archiveDir, err)
+		}
+		var err error
+		highWater, err = getArchiveHighWater(archiveDir)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	if opts.Log != nil {
 		opts.Log.Info(
@@ -126,16 +138,20 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		)
 	}
 
-	archiveLinks, err := f.archiveLinks(ctx, opts.Library.ArchiveURL, opts.Library.ArchivePattern, archiveDir, highWater)
-	if err != nil {
-		return Result{}, err
-	}
-	if err := f.files(ctx, archiveLinks, opts.Library.ArchiveURL, archiveDir); err != nil {
-		return Result{}, err
+	archiveLinks := []string(nil)
+	if !opts.NoArchives {
+		var err error
+		archiveLinks, err = f.archiveLinks(ctx, opts.Library.ArchiveURL, opts.Library.ArchivePattern, archiveDir, highWater)
+		if err != nil {
+			return Result{}, err
+		}
+		if err := f.files(ctx, archiveLinks, opts.Library.ArchiveURL, archiveDir); err != nil {
+			return Result{}, err
+		}
 	}
 
 	res := Result{LibraryName: libraryName, LastBookID: max(highWater[archiveFamilyFB2].End, highWater[archiveFamilyUSR].End), Archives: len(archiveLinks), SQLDir: sqlDir}
-	if opts.Log != nil {
+	if opts.Log != nil && !opts.NoArchives {
 		opts.Log.Info("Archive fetch completed", zap.Int("archives", res.Archives), zap.String("directory", archiveDir))
 	}
 	if !opts.DownloadSQL {

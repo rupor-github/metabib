@@ -181,6 +181,7 @@ metabib fetch --library flibusta --to upd_flibusta --tosql flibusta_20260622 --c
 metabib fetch --library flibusta-all --to upd_flibusta --tosql flibusta_20260622 --continue
 metabib fetch --library librusec --to upd_librusec --tosql librusec_20260713 --continue
 metabib fetch --library librusec-usr --to upd_librusec_usr --tosql librusec_20260713 --continue
+metabib fetch --library flibusta --noarchives --tosql flibusta_20260622
 ```
 
 `fetch` reads profiles from the `fetch` section of the YAML configuration,
@@ -191,7 +192,9 @@ FB2 rollup archives such as `fb2-000001-000100.zip`, USR rollup archives such as
 `usr-000001-000100.zip`, active `.merging` archives, and retained daily updates
 count toward that family's local high-water mark. When `--tosql` is omitted, the
 SQL output directory is generated from the library name and current UTC timestamp.
-Use `--nosql` to download archive updates only.
+Use `--nosql` to download archive updates only, or `--noarchives` to download SQL
+dumps only. `--to` is required unless `--noarchives` is set. `--nosql` and
+`--noarchives` cannot be used together.
 
 FB2 and USR are maintained as separate update lineages. A newer FB2 archive or
 `fb2-*.merging` file does not suppress USR downloads, and a newer USR archive or
@@ -211,18 +214,24 @@ The default configuration includes these fetch profiles:
 USR selection uses `regexp2` negative lookahead so any daily update extension
 except `fb2` is selected without maintaining an extension allowlist.
 
+Flibusta SQL selection downloads `lib.lib*.sql.gz` dumps and
+`lib.b.annotations.sql.gz`. It does not download `lib.b.annotations_pics.sql.gz`
+or `lib.a.*` dumps.
+
 Exit code `0` means no new archive updates were downloaded, exit code `1` means
 an error occurred, and exit code `2` means one or more new archive updates were
-downloaded. Use code `2` to decide whether archive rollup or index/cache rebuild
-work is needed.
+downloaded. SQL-only fetches with `--noarchives` return code `0` on success. Use
+code `2` to decide whether archive rollup or index/cache rebuild work is needed.
 
 Available `fetch` arguments:
 
 - `--library NAME`, `-l NAME`: fetch profile name from configuration. Default is
   `flibusta`.
-- `--to DIR`, `-o DIR`: required destination directory for daily archive ZIPs.
+- `--to DIR`, `-o DIR`: destination directory for daily archive ZIPs; required
+  unless `--noarchives` is set.
 - `--tosql DIR`: destination directory for decompressed SQL dump files.
 - `--nosql`: skip SQL dump downloads.
+- `--noarchives`: skip daily archive ZIP downloads.
 - `--retry N`: download attempts per index or file. Default is `3`.
 - `--timeout SECONDS`: per-request timeout. Default is `20`.
 - `--chunksize MB`: download chunk size used while streaming files. Default is
