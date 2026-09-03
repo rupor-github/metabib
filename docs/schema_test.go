@@ -2,13 +2,12 @@ package docs_test
 
 import (
 	jsonstd "encoding/json"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"math"
 	"os"
 	"strings"
 	"testing"
-
-	jsonv2 "encoding/json/v2"
 
 	"metabib/model"
 )
@@ -27,6 +26,7 @@ func TestMetabibSchemaCoversRecordModelFields(t *testing.T) {
 		`"database_genre"`,
 		`"database_sequence"`,
 		`"database_rating"`,
+		`"database_annotation"`,
 		`"database_joined_book"`,
 		`"fb2_source"`,
 		`"fb2_description"`,
@@ -72,6 +72,9 @@ func TestMetabibSchemaCoversRecordModelFields(t *testing.T) {
 		`"genres"`,
 		`"sequences"`,
 		`"rating"`,
+		`"annotations"`,
+		`"nid"`,
+		`"body"`,
 		`"filenames"`,
 		`"joined_books"`,
 		`"file_size"`,
@@ -172,6 +175,7 @@ func TestMetabibSchemaUsesTypedReferences(t *testing.T) {
 		`"book": {"$ref": "#/$defs/database_book"}`,
 		`"authors": {"type": "array", "items": {"$ref": "#/$defs/contributor"}}`,
 		`"rating": {"$ref": "#/$defs/database_rating"}`,
+		`"annotations": {"type": "array", "items": {"$ref": "#/$defs/database_annotation"}}`,
 		`"description": {"$ref": "#/$defs/fb2_description"}`,
 		`"title_info": {"$ref": "#/$defs/fb2_title_info"}`,
 		`"document_info": {"$ref": "#/$defs/fb2_document_info"}`,
@@ -554,7 +558,7 @@ func fullDatasetRecord() model.DatasetRecord {
 
 func fullRecord() model.Record {
 	return model.Record{
-		Schema: "metabib.record/1",
+		Schema: "metabib.record/2",
 		ID: model.RecordID{
 			Library:   "lib",
 			BookID:    1,
@@ -595,6 +599,7 @@ func fullRecord() model.Record {
 				Genres:       []model.DBGenre{{ID: 9, Code: "sf", TranslatedCode: "sci-fi", Description: "Science fiction", Meta: "meta"}},
 				Sequences:    []model.DBSequence{{ID: 10, Name: "Cycle", Number: 1, Level: 2, Type: 3}},
 				Rating:       &model.DBRating{Average: 4, Count: 5, Min: 1, Max: 5},
+				Annotations:  []model.DBAnnotation{{NID: 10, Title: "Annotation title", Body: "DB annotation"}},
 				Filenames:    []string{"1.fb2"},
 				JoinedBooks:  []model.DBJoinedBook{{ID: 11, Time: "2026-06-22T00:00:00Z", BadID: 1, GoodID: 2, RealID: 3}},
 			},

@@ -217,6 +217,16 @@ func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource) {
 			model.Claim{Observation: "db", Value: ratingValue(*db.Rating)},
 		)
 	}
+	for _, annotation := range db.Annotations {
+		if annotation.Body == "" {
+			continue
+		}
+		bib := bibliographicClaims(out)
+		bib.Annotation = append(
+			bib.Annotation,
+			model.Claim{Observation: "db", Value: annotation.Body, Raw: annotation},
+		)
+	}
 	if len(db.Filenames) > 0 {
 		catalog := catalogClaims(out)
 		catalog.Aliases = append(

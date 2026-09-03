@@ -204,6 +204,9 @@ func (r *Repository) BookByID(ctx context.Context, id int64) (model.DatabaseSour
 	if src.Rating, err = r.rating(ctx, id); err != nil {
 		return src, err
 	}
+	if src.Annotations, err = r.annotations(ctx, id); err != nil {
+		return src, err
+	}
 	if src.Filenames, err = r.filenames(ctx, id); err != nil {
 		return src, err
 	}
@@ -256,6 +259,9 @@ func (r *Repository) BookSourcesByIDs(ctx context.Context, ids []int64) (map[int
 		return nil, err
 	}
 	if err := r.attachRatings(ctx, ids, out); err != nil {
+		return nil, err
+	}
+	if err := r.attachAnnotations(ctx, ids, out); err != nil {
 		return nil, err
 	}
 	if err := r.attachFilenames(ctx, ids, out); err != nil {
@@ -535,6 +541,43 @@ SELECT %s, ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNS
 		}
 		src := out[bookID]
 		src.Rating = &model.DBRating{Average: avg.Float64, Count: count, Min: min.Int64, Max: max.Int64}
+		out[bookID] = src
+	}
+	return rows.Err()
+}
+
+func (r *Repository) attachAnnotations(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource) error {
+	if r.currentFormat() != FormatFlibustaCurrent {
+		return nil
+	}
+	if ok, err := r.tableExists(ctx, "libbannotations"); err != nil || !ok {
+		return err
+	}
+	query, args := inQuery(`
+SELECT BookId, nid, Title, Body
+  FROM libbannotations WHERE BookId IN (`, ids, `) ORDER BY BookId, nid`)
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("query annotations batch: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var bookID int64
+		var annotation model.DBAnnotation
+		var body sql.NullString
+		if err := rows.Scan(&bookID, &annotation.NID, &annotation.Title, &body); err != nil {
+			return fmt.Errorf("scan annotation batch: %w", err)
+		}
+		var err error
+		annotation.Body, err = AnnotationText(body.String)
+		if err != nil {
+			return fmt.Errorf("parse annotation body for book %d nid %d: %w", bookID, annotation.NID, err)
+		}
+		if strings.TrimSpace(annotation.Body) == "" {
+			continue
+		}
+		src := out[bookID]
+		src.Annotations = append(src.Annotations, annotation)
 		out[bookID] = src
 	}
 	return rows.Err()
@@ -851,6 +894,40 @@ SELECT ROUND(AVG(CAST(Rate AS UNSIGNED)), 0), COUNT(*), MIN(CAST(Rate AS UNSIGNE
 		return nil, nil
 	}
 	return &model.DBRating{Average: avg.Float64, Count: count, Min: min.Int64, Max: max.Int64}, nil
+}
+
+func (r *Repository) annotations(ctx context.Context, id int64) ([]model.DBAnnotation, error) {
+	if r.currentFormat() != FormatFlibustaCurrent {
+		return nil, nil
+	}
+	if ok, err := r.tableExists(ctx, "libbannotations"); err != nil || !ok {
+		return nil, err
+	}
+	rows, err := r.db.QueryContext(ctx, `
+SELECT nid, Title, Body
+  FROM libbannotations WHERE BookId = ? ORDER BY nid`, id)
+	if err != nil {
+		return nil, fmt.Errorf("query annotations for book %d: %w", id, err)
+	}
+	defer rows.Close()
+	var out []model.DBAnnotation
+	for rows.Next() {
+		var annotation model.DBAnnotation
+		var body sql.NullString
+		if err := rows.Scan(&annotation.NID, &annotation.Title, &body); err != nil {
+			return nil, fmt.Errorf("scan annotation: %w", err)
+		}
+		var err error
+		annotation.Body, err = AnnotationText(body.String)
+		if err != nil {
+			return nil, fmt.Errorf("parse annotation body for book %d nid %d: %w", id, annotation.NID, err)
+		}
+		if strings.TrimSpace(annotation.Body) == "" {
+			continue
+		}
+		out = append(out, annotation)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) filenames(ctx context.Context, id int64) ([]string, error) {

@@ -201,6 +201,19 @@ func TestBookByIDPopulatesAllDatabaseFields(t *testing.T) {
 	assertFullDatabaseSource(t, source)
 }
 
+func TestBookSourcesByIDsSkipsMissingAnnotations(t *testing.T) {
+	repo := newTestRepository(t)
+	repo.tables["libbannotations"] = false
+
+	sources, err := repo.BookSourcesByIDs(context.Background(), []int64{1})
+	if err != nil {
+		t.Fatalf("BookSourcesByIDs() error = %v", err)
+	}
+	if len(sources[1].Annotations) != 0 {
+		t.Fatalf("annotations = %#v, want empty", sources[1].Annotations)
+	}
+}
+
 func TestLibrusecCurrentRepositoryMapping(t *testing.T) {
 	repo := newLibrusecTestRepository(t)
 
@@ -263,6 +276,11 @@ func assertFullDatabaseSource(t *testing.T, source model.DatabaseSource) {
 	if source.Rating == nil || source.Rating.Average != 4 || source.Rating.Count != 5 || source.Rating.Min != 1 || source.Rating.Max != 5 {
 		t.Fatalf("rating = %#v", source.Rating)
 	}
+	if len(source.Annotations) != 2 || source.Annotations[0].NID != 10 || source.Annotations[0].Title != "First annotation" ||
+		source.Annotations[0].Body != "DB annotation 1." || source.Annotations[1].NID != 20 ||
+		source.Annotations[1].Title != "Second annotation" || source.Annotations[1].Body != "DB annotation 2." {
+		t.Fatalf("annotations = %#v", source.Annotations)
+	}
 	if len(source.Filenames) != 1 || source.Filenames[0] != "1.fb2" {
 		t.Fatalf("filenames = %#v", source.Filenames)
 	}
@@ -301,6 +319,7 @@ func newTestRepository(t *testing.T) *Repository {
 			"libseq":            true,
 			"libseqname":        true,
 			"librate":           true,
+			"libbannotations":   true,
 			"libfilename":       true,
 			"libjoinedbooks":    true,
 		},
@@ -328,16 +347,17 @@ func newLibrusecTestRepository(t *testing.T) *Repository {
 		db:     db,
 		format: FormatLibrusecCurrent,
 		tables: map[string]bool{
-			"libbook":        true,
-			"libavtor":       true,
-			"libavtors":      true,
-			"libgenre":       true,
-			"libgenres":      true,
-			"libseq":         true,
-			"libseqs":        true,
-			"librate":        true,
-			"libfilename":    false,
-			"libjoinedbooks": false,
+			"libbook":         true,
+			"libavtor":        true,
+			"libavtors":       true,
+			"libgenre":        true,
+			"libgenres":       true,
+			"libseq":          true,
+			"libseqs":         true,
+			"librate":         true,
+			"libbannotations": false,
+			"libfilename":     false,
+			"libjoinedbooks":  false,
 		},
 		cols: map[string]map[string]bool{"libbook": {"ReplacedBy": true}},
 	}
@@ -428,6 +448,18 @@ func repositoryTestRows(query string, _ []driver.NamedValue) (testRows, error) {
 		return rows([]string{"BookId", "Average", "Count", "Min", "Max"}, []driver.Value{int64(1), float64(4), int64(5), int64(1), int64(5)}), nil
 	case strings.Contains(query, "FROM librate WHERE BookId ="):
 		return rows([]string{"Average", "Count", "Min", "Max"}, []driver.Value{float64(4), int64(5), int64(1), int64(5)}), nil
+	case strings.Contains(query, "FROM libbannotations WHERE BookId IN"):
+		return rows(
+			[]string{"BookId", "nid", "Title", "Body"},
+			[]driver.Value{int64(1), int64(10), "First annotation", "<p class=book>DB <strong>annotation</strong> 1.</p>"},
+			[]driver.Value{int64(1), int64(20), "Second annotation", "<p class=book>DB annotation 2.</p>"},
+		), nil
+	case strings.Contains(query, "FROM libbannotations WHERE BookId ="):
+		return rows(
+			[]string{"nid", "Title", "Body"},
+			[]driver.Value{int64(10), "First annotation", "<p class=book>DB <strong>annotation</strong> 1.</p>"},
+			[]driver.Value{int64(20), "Second annotation", "<p class=book>DB annotation 2.</p>"},
+		), nil
 	case strings.Contains(query, "FROM libfilename WHERE BookId IN"):
 		return rows([]string{"BookId", "FileName"}, []driver.Value{int64(1), "1.fb2"}), nil
 	case strings.Contains(query, "FROM libfilename WHERE BookId ="):
@@ -457,8 +489,8 @@ func translatorValues() []driver.Value {
 	return []driver.Value{int64(20), "Tr", "TM", "Person", "TNick", int64(21), "t@example.org", "https://example.net", "f", int64(22), int64(2)}
 }
 
-func rows(columns []string, row []driver.Value) testRows {
-	return testRows{columns: columns, values: [][]driver.Value{row}}
+func rows(columns []string, values ...[]driver.Value) testRows {
+	return testRows{columns: columns, values: values}
 }
 
 type testDriver struct{}

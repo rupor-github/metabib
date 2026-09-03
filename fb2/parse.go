@@ -13,6 +13,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	nethtml "golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 	unicodeenc "golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
@@ -60,6 +61,103 @@ func ParseWithOptions(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
 		return parseMetadataOnly(r, opts.PreserveDescription)
 	}
 	return parseWithBodyFingerprints(r, opts)
+}
+
+func AnnotationText(body string) (string, error) {
+	if strings.TrimSpace(body) == "" {
+		return "", nil
+	}
+	text, err := annotationXMLText(body)
+	if err == nil {
+		return text, nil
+	}
+	return annotationHTMLText(body)
+}
+
+func HTMLAnnotationText(body string) (string, error) {
+	if strings.TrimSpace(body) == "" {
+		return "", nil
+	}
+	return annotationHTMLText(body)
+}
+
+func annotationXMLText(body string) (string, error) {
+	dec, err := newXMLDecoder(strings.NewReader("<annotation>" + body + "</annotation>"))
+	if err != nil {
+		return "", err
+	}
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return "", fmt.Errorf("parse annotation body: %w", err)
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok {
+			continue
+		}
+		node, err := readElement(dec, start, 1, 0, &parseState{})
+		if err != nil {
+			return "", err
+		}
+		return collectText(node), nil
+	}
+}
+
+func annotationHTMLText(body string) (string, error) {
+	doc, err := nethtml.Parse(strings.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("parse annotation body as HTML: %w", err)
+	}
+	root := htmlBodyNode(doc)
+	if root == nil {
+		root = doc
+	}
+	var text strings.Builder
+	for node := root.FirstChild; node != nil; node = node.NextSibling {
+		value := htmlNodeText(node)
+		if value == "" {
+			continue
+		}
+		if !isInlineHTMLTextNode(node) && text.Len() > 0 {
+			text.WriteByte(' ')
+		}
+		text.WriteString(value)
+	}
+	return strings.Join(strings.Fields(text.String()), " "), nil
+}
+
+func htmlBodyNode(node *nethtml.Node) *nethtml.Node {
+	if node.Type == nethtml.ElementNode && strings.EqualFold(node.Data, "body") {
+		return node
+	}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		if body := htmlBodyNode(child); body != nil {
+			return body
+		}
+	}
+	return nil
+}
+
+func htmlNodeText(node *nethtml.Node) string {
+	if node.Type == nethtml.TextNode {
+		return node.Data
+	}
+	var text strings.Builder
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		value := htmlNodeText(child)
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		if !isInlineHTMLTextNode(child) && text.Len() > 0 {
+			text.WriteByte(' ')
+		}
+		text.WriteString(value)
+	}
+	return strings.TrimSpace(text.String())
+}
+
+func isInlineHTMLTextNode(node *nethtml.Node) bool {
+	return node.Type != nethtml.ElementNode || isInlineTextElement(strings.ToLower(node.Data))
 }
 
 func newXMLDecoder(r io.Reader) (*xml.Decoder, error) {

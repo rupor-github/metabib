@@ -38,7 +38,7 @@ import (
 	"metabib/model"
 )
 
-const recordSchema = "metabib.record/1"
+const recordSchema = "metabib.record/2"
 
 const progressInterval = 3000
 

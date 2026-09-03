@@ -51,7 +51,7 @@ Current schema versions:
 
 - merged datasets use a `metabib.dataset/1` header and `metabib.dataset_record/1`
   rows;
-- manifest payload records use `metabib.record/1`;
+- manifest payload records use `metabib.record/2`;
 - legacy FB2-only archive manifest headers may use `metabib.archive_manifest/1`,
   which remains accepted so existing manifests do not need costly rebuilds;
 - generated archive manifest headers use `metabib.archive_manifest/2`; this adds
@@ -480,6 +480,28 @@ For current Librusec dumps, only the tables required for FB2 metadata are
 imported. Unsupported or unrelated dump files in the SQL directory are ignored by
 the importer.
 
+When a Flibusta SQL dump includes the optional `libbannotations` table, database
+manifests record all annotations for each book as ordered `annotations` evidence.
+Each item keeps `nid`, `title`, and `body`; rows are ordered by `nid`. The `body`
+is extracted as plain text before it is written:
+
+- HTML is parsed first, element tags are discarded, and block boundaries become
+  whitespace. This matches FB2 `<annotation>` text flattening behavior.
+- Known forum markup is then removed. Formatting/layout tags such as `[b]`,
+  `[i]`, `[color]`, `[quote]`, `[collapse]`, and list tags keep their enclosed
+  text. Media tags such as `[img]`, `[image]`, `[video]`, and `[youtube]` drop
+  their enclosed content.
+- Link tags keep useful visible text but drop URL targets: `[a http://x]name[/a]`
+  and `[url=http://x]name[/url]` become `name`. `[url]http://x[/url]` is
+  dropped because the enclosed text is only a link target.
+- Unknown bracketed text is preserved to avoid deleting normal prose such as
+  `[a] good review` or `[a ridiculously modern town]`.
+- Placeholder-only bodies such as `---`, `--skip--`, `--snip--`, `отсутствует`,
+  and `Нет аннотации` are omitted from the annotations list.
+- Remaining whitespace is collapsed.
+
+When the table is absent, database manifest contents are unchanged.
+
 Database manifests also carry INPX-oriented author ambiguity metadata. Since the
 database cache pass now covers both FB2 and non-FB2 catalog rows, this metadata is
 stored in three scopes: all database books, FB2 books only, and USR/non-FB2 books
@@ -540,7 +562,7 @@ such as `all.jsonl.zst`. Existing output files are replaced; when that happens,
 The first JSONL value is a dataset header (`metabib.dataset/1`) with the database
 dump date, archive entry layout, processing options, and declared ordering. Every
 following value is a dataset record (`metabib.dataset_record/1`). INPX generation
-requires this dataset shape and rejects `metabib.record/1` input.
+requires this dataset shape and rejects raw `metabib.record/*` input.
 
 When a database manifest contains scoped INPX author ambiguity metadata, `merge`
 copies it into the dataset header. Regenerate the database manifest and run

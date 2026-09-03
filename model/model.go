@@ -55,6 +55,7 @@ type DatabaseSource struct {
 	Genres       []DBGenre      `json:"genres,omitempty"`
 	Sequences    []DBSequence   `json:"sequences,omitempty"`
 	Rating       *DBRating      `json:"rating,omitempty"`
+	Annotations  []DBAnnotation `json:"annotations,omitempty"`
 	Filenames    []string       `json:"filenames,omitempty"`
 	JoinedBooks  []DBJoinedBook `json:"joined_books,omitempty"`
 }
@@ -111,6 +112,12 @@ type DBRating struct {
 	Count   int64   `json:"count"`
 	Min     int64   `json:"min,omitempty"`
 	Max     int64   `json:"max,omitempty"`
+}
+
+type DBAnnotation struct {
+	NID   int64  `json:"nid"`
+	Title string `json:"title,omitempty"`
+	Body  string `json:"body,omitempty"`
 }
 
 type DBJoinedBook struct {

@@ -58,6 +58,10 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 				Number: 0,
 				Type:   0,
 			}},
+			Annotations: []model.DBAnnotation{
+				{NID: 10, Title: "First annotation", Body: "DB annotation 1."},
+				{NID: 20, Title: "Second annotation", Body: "DB annotation 2."},
+			},
 			Rating:      &model.DBRating{Average: 4.5, Count: 5, Min: 1, Max: 5},
 			Filenames:   []string{"42.fb2"},
 			JoinedBooks: []model.DBJoinedBook{{ID: 11, Time: "2026-07-14T06:00:00Z", BadID: 42, GoodID: 43, RealID: 44}},
@@ -105,6 +109,19 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 	}
 	if got := converted.Claims.Catalog.FileAuthor[0].Value; got != "file author" {
 		t.Fatalf("file author claim = %#v", got)
+	}
+	if len(converted.Claims.Bibliographic.Annotation) != 2 {
+		t.Fatalf("annotation claims = %#v", converted.Claims.Bibliographic.Annotation)
+	}
+	if got := converted.Claims.Bibliographic.Annotation[0].Value; got != "DB annotation 1." {
+		t.Fatalf("first annotation claim = %#v", got)
+	}
+	if got := converted.Claims.Bibliographic.Annotation[1].Value; got != "DB annotation 2." {
+		t.Fatalf("second annotation claim = %#v", got)
+	}
+	raw, ok := converted.Claims.Bibliographic.Annotation[0].Raw.(model.DBAnnotation)
+	if !ok || raw.NID != 10 || raw.Title != "First annotation" {
+		t.Fatalf("annotation raw = %#v", converted.Claims.Bibliographic.Annotation[0].Raw)
 	}
 	if len(converted.Artifacts) != 1 || len(converted.Artifacts[0].Checksums) != 1 || converted.Artifacts[0].Name != "42.fb2" {
 		t.Fatalf("artifacts = %#v", converted.Artifacts)

@@ -65,6 +65,44 @@ func TestParseTitleInfoOnly(t *testing.T) {
 	}
 }
 
+func TestAnnotationTextMatchesFB2AnnotationFlattening(t *testing.T) {
+	t.Parallel()
+
+	got, err := AnnotationText(`<p>Hello <strong>world</strong>.</p><p>Second line.</p>`)
+	if err != nil {
+		t.Fatalf("AnnotationText() error = %v", err)
+	}
+	if got != "Hello world. Second line." {
+		t.Fatalf("AnnotationText() = %q", got)
+	}
+}
+
+func TestAnnotationTextToleratesHTMLFragment(t *testing.T) {
+	t.Parallel()
+
+	got, err := HTMLAnnotationText(`<p class=book>Before<Кошмар начнется, когда <strong>текст</strong>.</p>`)
+	if err != nil {
+		t.Fatalf("AnnotationText() error = %v", err)
+	}
+	want := "Before<Кошмар начнется, когда текст."
+	if got != want {
+		t.Fatalf("AnnotationText() = %q, want %q", got, want)
+	}
+}
+
+func TestHTMLAnnotationTextLeavesBBCodeMarkup(t *testing.T) {
+	t.Parallel()
+
+	got, err := HTMLAnnotationText(`Before [i]italic[/i] [url=https://example.test]link text[/url] after`)
+	if err != nil {
+		t.Fatalf("HTMLAnnotationText() error = %v", err)
+	}
+	want := "Before [i]italic[/i] [url=https://example.test]link text[/url] after"
+	if got != want {
+		t.Fatalf("HTMLAnnotationText() = %q, want %q", got, want)
+	}
+}
+
 func TestParseUnicodeBOMEncodings(t *testing.T) {
 	t.Parallel()
 

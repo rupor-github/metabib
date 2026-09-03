@@ -1,17 +1,16 @@
 package model
 
 import (
+	jsonv2 "encoding/json/v2"
 	"strings"
 	"testing"
-
-	jsonv2 "encoding/json/v2"
 )
 
 func TestRecordJSONShape(t *testing.T) {
 	t.Parallel()
 
 	rec := Record{
-		Schema: "metabib.record/1",
+		Schema: "metabib.record/2",
 		ID:     RecordID{Library: "lib", BookID: 1},
 		Source: RecordSources{Database: DatabaseSource{
 			Present: true,
