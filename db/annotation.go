@@ -6,25 +6,10 @@ import (
 	"unicode/utf8"
 
 	"metabib/fb2"
+	"metabib/model"
 )
 
 var (
-	annotationPlaceholders = map[string]bool{
-		"annotation absent": true,
-		"html removed":      true,
-		"skip":              true,
-		"snip":              true,
-		"аннотации нет":     true,
-		"аннотация отсутствует":              true,
-		"без аннотации":                      true,
-		"без издательской аннотации":         true,
-		"введите сюда краткую аннотацию":     true,
-		"здесь могла бы быть ваша аннотация": true,
-		"нет аннотации":                      true,
-		"нет описания":                       true,
-		"описание отсутствует":               true,
-		"отсутствует":                        true,
-	}
 	bbcodeDropContentTags = map[string]bool{
 		"img":     true,
 		"image":   true,
@@ -67,24 +52,56 @@ var (
 )
 
 // AnnotationText extracts plain text from a database annotation body and removes forum markup.
-func AnnotationText(body string) (string, error) {
+func AnnotationText(body string, placeholders []string) (string, error) {
+	return annotationText(body, annotationPlaceholderSet(placeholders))
+}
+
+func annotationText(body string, placeholders map[string]bool) (string, error) {
 	text, err := fb2.HTMLAnnotationText(body)
 	if err != nil {
 		return "", err
 	}
 	text = cleanAnnotationMarkup(text)
-	if isEmptyAnnotationText(text) {
+	if isEmptyAnnotationText(text, placeholders) {
 		return "", nil
 	}
 	return text, nil
 }
 
-func isEmptyAnnotationText(text string) bool {
+func filterAnnotationTitles(annotations []model.DBAnnotation) []model.DBAnnotation {
+	if len(annotations) <= 1 {
+		return annotations
+	}
+	// Heuristic from database manifest analysis: when a book has several retained
+	// annotation rows, untitled rows are usually unrelated noise. Keep an untitled
+	// row only when it is the sole retained annotation for the book.
+	out := annotations[:0]
+	for _, annotation := range annotations {
+		if strings.TrimSpace(annotation.Title) != "" {
+			out = append(out, annotation)
+		}
+	}
+	return out
+}
+
+func annotationPlaceholderSet(placeholders []string) map[string]bool {
+	out := make(map[string]bool, len(placeholders))
+	for _, placeholder := range placeholders {
+		words := annotationWords(placeholder)
+		if len(words) == 0 {
+			continue
+		}
+		out[strings.Join(words, " ")] = true
+	}
+	return out
+}
+
+func isEmptyAnnotationText(text string, placeholders map[string]bool) bool {
 	words := annotationWords(text)
 	if len(words) == 0 {
 		return true
 	}
-	return annotationPlaceholders[strings.Join(words, " ")]
+	return placeholders[strings.Join(words, " ")]
 }
 
 func annotationWords(text string) []string {

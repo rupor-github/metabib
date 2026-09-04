@@ -496,8 +496,14 @@ is extracted as plain text before it is written:
   dropped because the enclosed text is only a link target.
 - Unknown bracketed text is preserved to avoid deleting normal prose such as
   `[a] good review` or `[a ridiculously modern town]`.
-- Placeholder-only bodies such as `---`, `--skip--`, `--snip--`, `отсутствует`,
-  and `Нет аннотации` are omitted from the annotations list.
+- Placeholder-only bodies are omitted from the annotations list. The configured
+  `database.annotation_body_placeholders` list contains defaults such as `skip`,
+  `snip`, `отсутствует`, and `Нет аннотации`; matching ignores case and
+  punctuation, so `--skip--` matches `skip`.
+- If a book has several retained database annotations, annotations without a
+  title are omitted. This heuristic comes from database manifest analysis where
+  untitled rows in multi-annotation books were usually unrelated noise. A single
+  retained untitled annotation is still kept.
 - Remaining whitespace is collapsed.
 
 When the table is absent, database manifest contents are unchanged.

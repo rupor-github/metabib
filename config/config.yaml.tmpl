@@ -44,6 +44,27 @@ database:
   client_path: ""
   admin_path: ""
 
+  # Database annotation bodies that should be omitted after markup removal and
+  # text normalization. Matching ignores case and punctuation, so "--skip--"
+  # matches "skip".
+  annotation_body_placeholders:
+    - annotation absent
+    - html removed
+    - skip
+    - snip
+    - аннотации нет
+    - аннотация отсутствует
+    - без аннотации
+    - без издательской аннотации
+    - введите сюда краткую аннотацию
+    - здесь могла бы быть ваша аннотация
+    - нет аннотации
+    - нет описания
+    - описание отсутствует
+    - отсутствует
+    - просто проверка
+    - qwdqd
+
   # Connection pool used by metabib while reading metadata. 0 lets database/sql
   # use its default for that particular setting.
   max_open_connections: 32

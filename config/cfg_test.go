@@ -79,6 +79,11 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Database.AdminPath != "" {
 		t.Fatalf("Database.AdminPath = %q, want empty", cfg.Database.AdminPath)
 	}
+	for _, placeholder := range []string{"skip", "snip", "просто проверка", "qwdqd"} {
+		if !containsString(cfg.Database.AnnotationBodyPlaceholders, placeholder) {
+			t.Fatalf("Database.AnnotationBodyPlaceholders missing %q: %#v", placeholder, cfg.Database.AnnotationBodyPlaceholders)
+		}
+	}
 	if !strings.Contains(cfg.INPX.CommentTemplate, "{{ .DatabaseName }}") {
 		t.Fatalf("CommentTemplate = %q, want unprocessed INPX template", cfg.INPX.CommentTemplate)
 	}
@@ -108,6 +113,15 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if len(cfg.INPX.Language.ContextRules) != 2 || cfg.INPX.Language.ContextRules[0].From != "ba" || cfg.INPX.Language.ContextRules[1].From != "xa" {
 		t.Fatalf("INPX language context rules = %#v", cfg.INPX.Language.ContextRules)
 	}
+}
+
+func containsString(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadConfigurationDefaultsMissingArchiveContentToFB2(t *testing.T) {

@@ -1,10 +1,15 @@
 package db
 
-import "testing"
+import (
+	"testing"
+
+	"metabib/model"
+)
 
 func TestAnnotationTextCleansBBCode(t *testing.T) {
 	t.Parallel()
 
+	placeholders := []string{"skip", "snip", "просто проверка", "qwdqd"}
 	tests := []struct {
 		name string
 		body string
@@ -65,17 +70,74 @@ func TestAnnotationTextCleansBBCode(t *testing.T) {
 			body: `Рассказ`,
 			want: "Рассказ",
 		},
+		{
+			name: "test phrase placeholder drops body",
+			body: `просто проверка`,
+			want: "",
+		},
+		{
+			name: "gibberish placeholder drops body",
+			body: `qwdqd`,
+			want: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := AnnotationText(tt.body)
+			got, err := AnnotationText(tt.body, placeholders)
 			if err != nil {
 				t.Fatalf("AnnotationText() error = %v", err)
 			}
 			if got != tt.want {
 				t.Fatalf("AnnotationText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFilterAnnotationTitles(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   []model.DBAnnotation
+		want []int64
+	}{
+		{
+			name: "single untitled stays",
+			in:   []model.DBAnnotation{{NID: 1, Body: "Annotation"}},
+			want: []int64{1},
+		},
+		{
+			name: "multiple drops untitled",
+			in: []model.DBAnnotation{
+				{NID: 1, Body: "Untitled"},
+				{NID: 2, Title: "Title", Body: "Titled"},
+			},
+			want: []int64{2},
+		},
+		{
+			name: "multiple all untitled drops all",
+			in: []model.DBAnnotation{
+				{NID: 1, Body: "First"},
+				{NID: 2, Body: "Second"},
+			},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := filterAnnotationTitles(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("filterAnnotationTitles() = %#v, want nids %v", got, tt.want)
+			}
+			for idx, annotation := range got {
+				if annotation.NID != tt.want[idx] {
+					t.Fatalf("filterAnnotationTitles()[%d].NID = %d, want %d", idx, annotation.NID, tt.want[idx])
+				}
 			}
 		})
 	}

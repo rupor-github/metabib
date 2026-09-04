@@ -37,26 +37,29 @@ type Config struct {
 }
 
 type DatabaseConfig struct {
-	DSN             string `yaml:"dsn"`
-	Host            string `yaml:"host" validate:"required"`
-	Port            int    `yaml:"port" validate:"min=0,max=65535"`
-	Protocol        string `yaml:"protocol" validate:"oneof=tcp unix"`
-	User            string `yaml:"user" validate:"required"`
-	Password        string `yaml:"password"`
-	Name            string `yaml:"name" validate:"required"`
-	Managed         bool   `yaml:"managed"`
-	DataDir         string `yaml:"data_dir" validate:"required"`
-	Temporary       bool   `yaml:"temporary"`
-	Socket          string `yaml:"socket"`
-	PIDFile         string `yaml:"pid_file"`
-	LogFile         string `yaml:"log_file"`
-	ServerPath      string `yaml:"server_path,omitempty"`
-	InstallDBPath   string `yaml:"install_db_path,omitempty"`
-	ClientPath      string `yaml:"client_path,omitempty"`
-	AdminPath       string `yaml:"admin_path,omitempty"`
-	MaxOpenConns    int    `yaml:"max_open_connections" validate:"min=0"`
-	MaxIdleConns    int    `yaml:"max_idle_connections" validate:"min=0"`
-	ConnMaxLifetime int    `yaml:"connection_max_lifetime_seconds" validate:"min=0"`
+	DSN           string `yaml:"dsn"`
+	Host          string `yaml:"host" validate:"required"`
+	Port          int    `yaml:"port" validate:"min=0,max=65535"`
+	Protocol      string `yaml:"protocol" validate:"oneof=tcp unix"`
+	User          string `yaml:"user" validate:"required"`
+	Password      string `yaml:"password"`
+	Name          string `yaml:"name" validate:"required"`
+	Managed       bool   `yaml:"managed"`
+	DataDir       string `yaml:"data_dir" validate:"required"`
+	Temporary     bool   `yaml:"temporary"`
+	Socket        string `yaml:"socket"`
+	PIDFile       string `yaml:"pid_file"`
+	LogFile       string `yaml:"log_file"`
+	ServerPath    string `yaml:"server_path,omitempty"`
+	InstallDBPath string `yaml:"install_db_path,omitempty"`
+	ClientPath    string `yaml:"client_path,omitempty"`
+	AdminPath     string `yaml:"admin_path,omitempty"`
+
+	AnnotationBodyPlaceholders []string `yaml:"annotation_body_placeholders" validate:"dive"`
+
+	MaxOpenConns    int `yaml:"max_open_connections" validate:"min=0"`
+	MaxIdleConns    int `yaml:"max_idle_connections" validate:"min=0"`
+	ConnMaxLifetime int `yaml:"connection_max_lifetime_seconds" validate:"min=0"`
 }
 
 type ProcessingConfig struct {

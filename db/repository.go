@@ -17,11 +17,12 @@ import (
 )
 
 type Repository struct {
-	db     *sql.DB
-	format Format
-	tables map[string]bool
-	cols   map[string]map[string]bool
-	tmu    sync.RWMutex
+	db                     *sql.DB
+	format                 Format
+	annotationPlaceholders map[string]bool
+	tables                 map[string]bool
+	cols                   map[string]map[string]bool
+	tmu                    sync.RWMutex
 }
 
 type FileIdentity struct {
@@ -51,7 +52,12 @@ func Open(ctx context.Context, cfg config.DatabaseConfig) (*Repository, error) {
 	if cfg.ConnMaxLifetime > 0 {
 		db.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetime) * time.Second)
 	}
-	repo := &Repository{db: db, tables: make(map[string]bool), cols: make(map[string]map[string]bool)}
+	repo := &Repository{
+		db:                     db,
+		annotationPlaceholders: annotationPlaceholderSet(cfg.AnnotationBodyPlaceholders),
+		tables:                 make(map[string]bool),
+		cols:                   make(map[string]map[string]bool),
+	}
 	if _, err := repo.DetectFormat(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -166,7 +172,10 @@ func (r *Repository) FileIdentitiesByIDs(ctx context.Context, ids []int64) (map[
 		out[id] = FileIdentity{FileName: stem, Extension: ext}
 		selected[id] = struct{}{}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *Repository) BookByID(ctx context.Context, id int64) (model.DatabaseSource, error) {
@@ -569,7 +578,7 @@ SELECT BookId, nid, Title, Body
 			return fmt.Errorf("scan annotation batch: %w", err)
 		}
 		var err error
-		annotation.Body, err = AnnotationText(body.String)
+		annotation.Body, err = annotationText(body.String, r.annotationPlaceholders)
 		if err != nil {
 			return fmt.Errorf("parse annotation body for book %d nid %d: %w", bookID, annotation.NID, err)
 		}
@@ -580,7 +589,14 @@ SELECT BookId, nid, Title, Body
 		src.Annotations = append(src.Annotations, annotation)
 		out[bookID] = src
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for bookID, src := range out {
+		src.Annotations = filterAnnotationTitles(src.Annotations)
+		out[bookID] = src
+	}
+	return nil
 }
 
 func (r *Repository) attachFilenames(ctx context.Context, ids []int64, out map[int64]model.DatabaseSource) error {
@@ -722,7 +738,10 @@ SELECT n.AvtorId, n.FirstName, n.MiddleName, n.LastName, n.NickName, n.uid,
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *Repository) librusecContributors(ctx context.Context, id int64, role string) ([]model.Contributor, error) {
@@ -752,7 +771,10 @@ SELECT cn.aid, cn.FirstName, cn.MiddleName, cn.LastName, cn.NickName, cn.uid,
 		}
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (r *Repository) useAuthorAliases(ctx context.Context, table string) (bool, error) {
@@ -918,7 +940,7 @@ SELECT nid, Title, Body
 			return nil, fmt.Errorf("scan annotation: %w", err)
 		}
 		var err error
-		annotation.Body, err = AnnotationText(body.String)
+		annotation.Body, err = annotationText(body.String, r.annotationPlaceholders)
 		if err != nil {
 			return nil, fmt.Errorf("parse annotation body for book %d nid %d: %w", id, annotation.NID, err)
 		}
@@ -927,7 +949,10 @@ SELECT nid, Title, Body
 		}
 		out = append(out, annotation)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return filterAnnotationTitles(out), nil
 }
 
 func (r *Repository) filenames(ctx context.Context, id int64) ([]string, error) {
