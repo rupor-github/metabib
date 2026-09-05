@@ -223,7 +223,7 @@ func inpxCommand() *cli.Command {
 			&cli.StringFlag{
 				Name:  "prefer-fb2",
 				Value: string(sliceinpx.PreferComplement),
-				Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)",
+				Usage: "FB2 metadata preference `MODE` (ignore, merge, complement, replace)",
 			},
 			&cli.StringFlag{
 				Name:  "fb2-flatten",
@@ -263,7 +263,7 @@ func mhlINPXCommand() *cli.Command {
 			&cli.StringFlag{
 				Name:  "prefer-fb2",
 				Value: string(mhlinpx.PreferComplement),
-				Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)",
+				Usage: "FB2 metadata preference `MODE` (ignore, merge, complement, replace)",
 			},
 		},
 		Action: runMHLINPX,
@@ -296,7 +296,7 @@ func flibINPXCommand() *cli.Command {
 			&cli.StringFlag{
 				Name:  "prefer-fb2",
 				Value: string(flibinpx.PreferComplement),
-				Usage: "FB2 sequence preference `MODE` (ignore, merge, complement, replace)",
+				Usage: "FB2 metadata preference `MODE` (ignore, merge, complement, replace)",
 			},
 			&cli.StringFlag{
 				Name:  "fb2-flatten",

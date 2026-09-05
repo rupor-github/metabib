@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	jsonstd "encoding/json"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 
-	jsonv2 "encoding/json/v2"
 	cli "github.com/urfave/cli/v3"
 
 	"metabib/internal/inpxutil"

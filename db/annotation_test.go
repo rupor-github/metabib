@@ -71,6 +71,11 @@ func TestAnnotationTextCleansBBCode(t *testing.T) {
 			want: "Рассказ",
 		},
 		{
+			name: "non-whitespace ascii controls are removed",
+			body: "по\x1fамерикански\nВикерне\x1cca",
+			want: "поамерикански Викернеca",
+		},
+		{
 			name: "test phrase placeholder drops body",
 			body: `просто проверка`,
 			want: "",

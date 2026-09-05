@@ -129,7 +129,7 @@ func annotationWords(text string) []string {
 
 func cleanAnnotationMarkup(text string) string {
 	if !strings.Contains(text, "[") {
-		return strings.Join(strings.Fields(text), " ")
+		return collapseAnnotationText(text)
 	}
 	var out strings.Builder
 	for idx := 0; idx < len(text); {
@@ -190,7 +190,32 @@ func cleanAnnotationMarkup(text string) string {
 		out.WriteString(text[idx:tag.end])
 		idx = tag.end
 	}
-	return strings.Join(strings.Fields(out.String()), " ")
+	return collapseAnnotationText(out.String())
+}
+
+func collapseAnnotationText(text string) string {
+	var out strings.Builder
+	changed := false
+	for idx, r := range text {
+		if isRemovableASCIIControl(r) {
+			if !changed {
+				out.WriteString(text[:idx])
+			}
+			changed = true
+			continue
+		}
+		if changed {
+			out.WriteRune(r)
+		}
+	}
+	if changed {
+		text = out.String()
+	}
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func isRemovableASCIIControl(r rune) bool {
+	return (r < ' ' && !unicode.IsSpace(r)) || r == 0x7f
 }
 
 type bbcodeTag struct {

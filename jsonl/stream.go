@@ -2,12 +2,11 @@ package jsonl
 
 import (
 	"context"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"iter"
-
-	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
 
 	"metabib/model"
 )

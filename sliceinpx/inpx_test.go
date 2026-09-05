@@ -186,6 +186,54 @@ func TestGenerateAdditionalUSRSidecarAnnotations(t *testing.T) {
 	}
 }
 
+func TestRecordAnnotationFB2PreferenceModes(t *testing.T) {
+	t.Parallel()
+
+	rec := sliceRecord("archive-0001", 0, 42, "ru")
+	rec.Claims.Bibliographic.Annotation = []model.Claim{
+		{Observation: "db", Value: "Database annotation"},
+		{Observation: "fb2", Value: "FB2 annotation"},
+		{Observation: "fbd", Value: "FBD annotation"},
+	}
+	tests := []struct {
+		preference FB2Preference
+		want       string
+	}{
+		{preference: PreferIgnore, want: "Database annotation"},
+		{preference: PreferComplement, want: "Database annotation"},
+		{preference: PreferMerge, want: "FB2 annotation"},
+		{preference: PreferReplace, want: "FB2 annotation"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.preference), func(t *testing.T) {
+			t.Parallel()
+
+			if got := recordAnnotation(rec, tt.preference); got != tt.want {
+				t.Fatalf("recordAnnotation() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordAnnotationWithoutDatabaseKeepsCurrentPreference(t *testing.T) {
+	t.Parallel()
+
+	rec := sliceRecord("archive-0001", 0, 42, "ru")
+	rec.Claims.Bibliographic.Annotation = []model.Claim{
+		{Observation: "fb2", Value: "FB2 annotation"},
+		{Observation: "fbd", Value: "FBD annotation"},
+	}
+	for _, preference := range []FB2Preference{PreferIgnore, PreferComplement, PreferMerge, PreferReplace} {
+		t.Run(string(preference), func(t *testing.T) {
+			t.Parallel()
+
+			if got := recordAnnotation(rec, preference); got != "FB2 annotation" {
+				t.Fatalf("recordAnnotation() = %q, want FB2 annotation", got)
+			}
+		})
+	}
+}
+
 func sliceAmbiguousAuthorMetadata() *model.INPXMetadata {
 	return &model.INPXMetadata{AmbiguousDBAuthors: []model.INPXAmbiguousDBAuthorGroup{{
 		Key: "Васильев,Сергей,Александрович",

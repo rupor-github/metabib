@@ -1,10 +1,9 @@
 package model
 
 import (
+	jsonv2 "encoding/json/v2"
 	"strings"
 	"testing"
-
-	jsonv2 "encoding/json/v2"
 )
 
 func TestArtifactFingerprintsJSONBinaryPayload(t *testing.T) {

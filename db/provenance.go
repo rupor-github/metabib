@@ -3,10 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
-
-	jsonv2 "encoding/json/v2"
 )
 
 const (

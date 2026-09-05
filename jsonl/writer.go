@@ -2,13 +2,13 @@ package jsonl
 
 import (
 	"bufio"
+	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	jsonv2 "encoding/json/v2"
 	"go.uber.org/zap"
 
 	"metabib/internal/fileutil"

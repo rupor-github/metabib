@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json/jsontext"
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"io"
 	"os"
@@ -13,8 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"encoding/json/jsontext"
-	jsonv2 "encoding/json/v2"
 	"github.com/klauspost/compress/zstd"
 	"go.uber.org/zap"
 

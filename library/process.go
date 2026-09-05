@@ -461,10 +461,13 @@ func ProcessDatabase(
 		log.Info(
 			"Database processed",
 			zap.Int64("records", processed),
+			zap.Int("workers", workers),
+			zap.Int("batches", totalBatches),
+			zap.Int("batch_size", batchSize),
 			zap.Duration("elapsed", time.Since(start)),
-			zap.Duration("db_load_elapsed", dbLoadElapsed),
-			zap.Duration("output_wait_elapsed", outputWaitElapsed),
-			zap.Duration("jsonl_write_elapsed", writeElapsed),
+			zap.Duration("db_load_cumulative_elapsed", dbLoadElapsed),
+			zap.Duration("output_wait_cumulative_elapsed", outputWaitElapsed),
+			zap.Duration("jsonl_write_cumulative_elapsed", writeElapsed),
 		)
 	}
 	return nil
@@ -782,11 +785,14 @@ func processArchive(
 				zap.String("archive", path),
 				zap.String("manifest", decision.ManifestPath),
 				zap.Int64("records", records),
+				zap.Int("workers", workers),
+				zap.Int("batches", totalBatches),
+				zap.Int("batch_size", batchSize),
 				zap.Int("usr_fb2_entries_ignored", ignoredUSRFB2Entries),
 				zap.Int("fb2_non_fb2_entries_ignored", ignoredFB2NonFB2Entries),
 				zap.Duration("elapsed", time.Since(start)),
 				zap.Duration("archive_md5_elapsed", archiveMD5Elapsed),
-				zap.Duration("nested_inspection_elapsed", nestedInspectionElapsed),
+				zap.Duration("nested_inspection_cumulative_elapsed", nestedInspectionElapsed),
 				zap.Duration("manifest_write_elapsed", manifestWriteElapsed),
 			)
 		}
@@ -797,17 +803,20 @@ func processArchive(
 			zap.String("archive", path),
 			zap.Int64("records", records),
 			zap.Int("entries", len(zr.File)),
+			zap.Int("workers", workers),
+			zap.Int("batches", totalBatches),
+			zap.Int("batch_size", batchSize),
 			zap.Int("usr_fb2_entries_ignored", ignoredUSRFB2Entries),
 			zap.Int("fb2_non_fb2_entries_ignored", ignoredFB2NonFB2Entries),
 			zap.Duration("elapsed", time.Since(start)),
 			zap.Duration("archive_md5_elapsed", archiveMD5Elapsed),
-			zap.Duration("db_load_elapsed", dbLoadElapsed),
-			zap.Duration("fb2_parse_elapsed", fb2ParseElapsed),
-			zap.Duration("md5_elapsed", md5Elapsed),
-			zap.Duration("nested_inspection_elapsed", nestedInspectionElapsed),
-			zap.Duration("fallback_lookup_elapsed", fallbackLookupElapsed),
-			zap.Duration("output_wait_elapsed", outputWaitElapsed),
-			zap.Duration("jsonl_write_elapsed", writeElapsed),
+			zap.Duration("db_load_cumulative_elapsed", dbLoadElapsed),
+			zap.Duration("fb2_parse_cumulative_elapsed", fb2ParseElapsed),
+			zap.Duration("md5_cumulative_elapsed", md5Elapsed),
+			zap.Duration("nested_inspection_cumulative_elapsed", nestedInspectionElapsed),
+			zap.Duration("fallback_lookup_cumulative_elapsed", fallbackLookupElapsed),
+			zap.Duration("output_wait_cumulative_elapsed", outputWaitElapsed),
+			zap.Duration("jsonl_write_cumulative_elapsed", writeElapsed),
 		)
 	}
 	return records, nil

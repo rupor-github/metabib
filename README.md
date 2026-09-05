@@ -500,6 +500,9 @@ is extracted as plain text before it is written:
   `database.annotation_body_placeholders` list contains defaults such as `skip`,
   `snip`, `отсутствует`, and `Нет аннотации`; matching ignores case and
   punctuation, so `--skip--` matches `skip`.
+- Non-whitespace ASCII control characters from source dumps, including `0x1c`,
+  `0x1f`, and `0x7f`, are removed. Normal whitespace controls such as newlines
+  and tabs are still handled by whitespace collapse.
 - If a book has several retained database annotations, annotations without a
   title are omitted. This heuristic comes from database manifest analysis where
   untitled rows in multi-annotation books were usually unrelated noise. A single
@@ -507,13 +510,6 @@ is extracted as plain text before it is written:
 - Remaining whitespace is collapsed.
 
 When the table is absent, database manifest contents are unchanged.
-
-During merge, database annotations are resolved to at most one bibliographic
-annotation claim. If only one database annotation exists, it is used as database
-evidence. If several exist, metabib selects annotations whose title matches the
-database book title case-insensitively and uses the one with the largest `nid`.
-If no annotation title matches, database annotation evidence is ignored and a
-debug log entry is emitted.
 
 Database manifests also carry INPX-oriented author ambiguity metadata. Since the
 database cache pass now covers both FB2 and non-FB2 catalog rows, this metadata is
@@ -588,6 +584,15 @@ per-book section fingerprints onto the FB2 artifact as `fp`. The value is a
 base64url-no-padding encoded binary payload containing the synthetic root plus
 compilation-relevant sections; sections with normalized word count below 100 are
 omitted to keep manifests small.
+
+During merge, database annotations are resolved to at most one bibliographic
+annotation claim. If only one database annotation exists, it is used as database
+evidence. If several exist, metabib selects annotations whose title matches the
+database book title case-insensitively and uses the one with the largest `nid`.
+If no annotation title matches, metabib falls back to the retained annotation
+with the largest `nid` and emits a debug log entry. The merged claim stores the
+selected body as `value` and the full selected database annotation (`nid`,
+`title`, and `body`) as `raw` provenance.
 
 Archive records are anchored by dataset archive ordinal and ZIP entry index.
 Physical record order is never inferred from entry filenames or database book IDs.
@@ -792,8 +797,10 @@ Available `flib-inpx` arguments:
   disabled, opaque containers keep their container extension, such as `.zip`, and
   still do not fall back to database `file_type` for archive content selection.
   Database `file_type` remains the fallback for database-only records.
-- `--prefer-fb2 MODE`: sequence source preference. Supported values are
-  `ignore`, `merge`, `complement`, and `replace`. Default is `complement`.
+- `--prefer-fb2 MODE`: how FB2-derived metadata is used relative to database
+  metadata for authors, sequences, and additional annotation artifacts. Supported
+  values are `ignore`, `merge`, `complement`, and `replace`. Default is
+  `complement`.
 - `--sequence MODE`: selected sequence class. Supported values are `author`,
   `publisher`, `all`, and `ignore`. Default is `author`.
 - `--fb2-flatten MODE`: FB2 nested sequence flattening. Supported values are
@@ -804,11 +811,14 @@ Available `flib-inpx` arguments:
   INPX output. Database-only inputs have no archive-derived additional source
   data, so this flag is ignored with a warning for those datasets.
 
-With `--additional`, `flib-inpx` writes `prefix-annotations.zip` from FB2
-annotations and FBD sidecar annotations for accepted archive records, including
-USR records selected by `--content usr` or `--content all`. FB2 annotations are
-preferred when both FB2 and FBD claims are present. When the input dataset has FB2
-body fingerprints and compilations are detected, it also writes
+With `--additional`, `flib-inpx` writes `prefix-annotations.zip` from DB, FB2,
+and FBD sidecar annotations for accepted archive records, including USR records
+selected by `--content usr` or `--content all`. When a record has no DB
+annotation, current behavior is preserved and FB2 annotations are preferred over
+FBD sidecar annotations. When DB annotation is present, `--prefer-fb2 ignore` and
+`complement` use DB annotation, while `merge` and `replace` use FB2/FBD when
+present and fall back to DB. When the input dataset has FB2 body fingerprints and
+compilations are detected, it also writes
 `prefix-compilations.zip` containing compact `compilations.json`. Partial
 fingerprint coverage is accepted with a warning; datasets without fingerprints
 skip the compilations artifact.
@@ -871,10 +881,12 @@ Available `inpx` arguments:
 - `--split-by-file FILE`: load the split template from a file. Mutually exclusive
   with `--split-by`.
 - `--prefer-fb2 MODE`, `--sequence MODE`, and `--fb2-flatten MODE`: same
-  sequence-source and FB2 flattening semantics as `flib-inpx`.
+  metadata preference, sequence-source, and FB2 flattening semantics as
+  `flib-inpx`.
 - `--additional`: write FLibrary-compatible additional artifacts for accepted
-  books only. Annotation artifacts use FB2 annotations first, then FBD sidecar
-  annotations for USR records.
+  books only. Annotation artifact source follows `--prefer-fb2` when DB
+  annotations are present; without DB annotation, FB2 annotations still win over
+  FBD sidecar annotations.
 
 Filter and split templates use Go `text/template` with slim-sprig functions plus
 `oneOf`, `containsValue`, and `rangeName` helpers:
@@ -1069,6 +1081,10 @@ Existing INPX output is replaced only after the new archive is fully written. If
 an existing file is overwritten, `metabib` logs a warning. During generation,
 `metabib` logs the selected dataset input, record loading progress, one live
 message per created `.inp` member, and final aggregate INPX statistics.
+
+Processing logs use `elapsed` for wall-clock time. Fields named
+`*_cumulative_elapsed` sum work done across batches, records, or parallel workers;
+they can be much larger than wall-clock `elapsed` when worker tasks overlap.
 
 Manifest cache files are zstd-compressed JSONL payloads named `.manifest.zst`,
 for example `lib.manifest.zst` or `database.manifest.zst`. When archive

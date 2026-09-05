@@ -1,12 +1,11 @@
 package inpxutil
 
 import (
+	jsonv2 "encoding/json/v2"
 	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	jsonv2 "encoding/json/v2"
 
 	"metabib/model"
 )

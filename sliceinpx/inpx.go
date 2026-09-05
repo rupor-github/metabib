@@ -646,7 +646,7 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 		if fields.Ext != "" {
 			name += "." + fields.Ext
 		}
-		if err := w.annotations.WriteRecord(archive.Meta.Name, name, recordAnnotation(rec)); err != nil {
+		if err := w.annotations.WriteRecord(archive.Meta.Name, name, recordAnnotation(rec, w.opts.FB2Preference)); err != nil {
 			return err
 		}
 	}
@@ -1418,18 +1418,43 @@ func compilationsOutputPathFor(outputPath string) string {
 	return strings.TrimSuffix(outputPath, ext) + "_compilations.zip"
 }
 
-func recordAnnotation(rec model.DatasetRecord) string {
+func recordAnnotation(rec model.DatasetRecord, preference FB2Preference) string {
 	if rec.Claims.Bibliographic == nil {
 		return ""
 	}
-	for _, observation := range []string{"fb2", "fbd"} {
-		for _, claim := range rec.Claims.Bibliographic.Annotation {
-			if claim.Observation != observation {
-				continue
-			}
-			if annotation, ok := claim.Value.(string); ok {
-				return annotation
-			}
+	dbAnnotation := annotationClaimValue(rec.Claims.Bibliographic.Annotation, "db")
+	fb2Annotation := annotationClaimValue(rec.Claims.Bibliographic.Annotation, "fb2")
+	fbdAnnotation := annotationClaimValue(rec.Claims.Bibliographic.Annotation, "fbd")
+	if dbAnnotation == "" {
+		return firstNonEmpty(fb2Annotation, fbdAnnotation)
+	}
+	switch preference {
+	case PreferIgnore, PreferComplement:
+		return dbAnnotation
+	case PreferMerge, PreferReplace:
+		return firstNonEmpty(fb2Annotation, fbdAnnotation, dbAnnotation)
+	default:
+		return firstNonEmpty(dbAnnotation, fb2Annotation, fbdAnnotation)
+	}
+}
+
+func annotationClaimValue(claims []model.Claim, observation string) string {
+	for _, claim := range claims {
+		if claim.Observation != observation {
+			continue
+		}
+		annotation, ok := claim.Value.(string)
+		if ok && strings.TrimSpace(annotation) != "" {
+			return annotation
+		}
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
 		}
 	}
 	return ""
