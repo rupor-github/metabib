@@ -5,11 +5,13 @@ import (
 	"strconv"
 	"strings"
 
+	"go.uber.org/zap"
+
 	"metabib/model"
 )
 
 func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
-	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false)
+	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false, nil)
 }
 
 func datasetRecordFromRecordWithMatch(
@@ -18,6 +20,7 @@ func datasetRecordFromRecordWithMatch(
 	databaseMatch *model.Match,
 	inferredBookID int64,
 	fb2NotCollected bool,
+	log *zap.Logger,
 ) (model.DatasetRecord, error) {
 	libraryName := rec.ID.Library
 	out := model.DatasetRecord{
@@ -75,7 +78,7 @@ func datasetRecordFromRecordWithMatch(
 			artifact.Fingerprints = rec.Source.FB2.Fingerprints
 		}
 		out.Artifacts = []model.Artifact{artifact}
-		appendDatabaseObservation(&out, rec, databaseMatch)
+		appendDatabaseObservation(&out, rec, databaseMatch, log)
 		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index, fb2NotCollected)
 		appendSidecarObservations(&out, rec, source, &index)
@@ -89,7 +92,7 @@ func datasetRecordFromRecordWithMatch(
 		Library: libraryName,
 		Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: positiveBookID(bookID)},
 	}
-	appendDatabaseObservation(&out, rec, nil)
+	appendDatabaseObservation(&out, rec, nil, log)
 	appendRecordIssues(&out, rec)
 	return out, nil
 }
@@ -110,7 +113,7 @@ func archiveArtifactName(id model.RecordID) string {
 	return id.FileName + "." + id.Extension
 }
 
-func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record, databaseMatch *model.Match) {
+func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record, databaseMatch *model.Match, log *zap.Logger) {
 	if !rec.Source.Database.Present {
 		if rec.ID.Archive != nil {
 			out.Observations = append(out.Observations, model.Observation{
@@ -137,7 +140,7 @@ func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record, datab
 		Match:    databaseMatch,
 	})
 	appendDatabaseIdentities(out, bookID)
-	appendDatabaseClaims(out, rec.Source.Database)
+	appendDatabaseClaims(out, rec.Source.Database, log)
 	appendDatabaseArtifacts(out, rec.Source.Database)
 	appendDatabaseRelations(out, rec.Source.Database)
 }
@@ -171,7 +174,7 @@ func appendDatabaseIdentities(out *model.DatasetRecord, bookID int64) {
 	})
 }
 
-func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource) {
+func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource, log *zap.Logger) {
 	if db.Book != nil {
 		appendDatabaseBookClaims(out, *db.Book)
 	}
@@ -217,10 +220,7 @@ func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource) {
 			model.Claim{Observation: "db", Value: ratingValue(*db.Rating)},
 		)
 	}
-	for _, annotation := range db.Annotations {
-		if annotation.Body == "" {
-			continue
-		}
+	if annotation, ok := selectDatabaseAnnotation(db, log); ok {
 		bib := bibliographicClaims(out)
 		bib.Annotation = append(
 			bib.Annotation,
@@ -234,6 +234,58 @@ func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource) {
 			model.Claim{Observation: "db", Value: aliasValues(db.Filenames)},
 		)
 	}
+}
+
+func selectDatabaseAnnotation(db model.DatabaseSource, log *zap.Logger) (model.DBAnnotation, bool) {
+	annotations := db.Annotations
+	if len(annotations) == 0 {
+		return model.DBAnnotation{}, false
+	}
+	if len(annotations) == 1 {
+		return annotations[0], annotations[0].Body != ""
+	}
+	title := ""
+	bookID := int64(0)
+	if db.Book != nil {
+		title = strings.TrimSpace(db.Book.Title)
+		bookID = db.Book.BookID
+	}
+	var selected model.DBAnnotation
+	found := false
+	for _, annotation := range annotations {
+		if annotation.Body == "" || !strings.EqualFold(strings.TrimSpace(annotation.Title), title) {
+			continue
+		}
+		if !found || annotation.NID > selected.NID {
+			selected = annotation
+			found = true
+		}
+	}
+	if found {
+		return selected, true
+	}
+	for _, annotation := range annotations {
+		if annotation.Body == "" {
+			continue
+		}
+		if !found || annotation.NID > selected.NID {
+			selected = annotation
+			found = true
+		}
+	}
+	if !found {
+		return model.DBAnnotation{}, false
+	}
+	if log != nil {
+		log.Debug(
+			"Selected highest-NID database annotation without title match",
+			zap.Int64("book_id", bookID),
+			zap.String("title", title),
+			zap.Int("annotations", len(annotations)),
+			zap.Int64("selected_nid", selected.NID),
+		)
+	}
+	return selected, true
 }
 
 func appendDatabaseBookClaims(out *model.DatasetRecord, book model.DBBook) {

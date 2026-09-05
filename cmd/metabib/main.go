@@ -1263,7 +1263,7 @@ func writeDatabaseManifestRecords(
 ) (int64, error) {
 	start := time.Now()
 	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
-		converted, err := datasetRecordFromRecord(rec, nil)
+		converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, log)
 		if err != nil {
 			return err
 		}
@@ -1371,6 +1371,7 @@ func mergeArchiveManifests(
 				databaseMatch,
 				inferredBookID,
 				fb2NotCollected,
+				log,
 			)
 			if err != nil {
 				return err

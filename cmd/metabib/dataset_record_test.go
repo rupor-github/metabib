@@ -3,6 +3,9 @@ package main
 import (
 	"testing"
 
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
 	"metabib/model"
 )
 
@@ -59,8 +62,7 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 				Type:   0,
 			}},
 			Annotations: []model.DBAnnotation{
-				{NID: 10, Title: "First annotation", Body: "DB annotation 1."},
-				{NID: 20, Title: "Second annotation", Body: "DB annotation 2."},
+				{NID: 10, Body: "DB annotation 1."},
 			},
 			Rating:      &model.DBRating{Average: 4.5, Count: 5, Min: 1, Max: 5},
 			Filenames:   []string{"42.fb2"},
@@ -110,17 +112,14 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 	if got := converted.Claims.Catalog.FileAuthor[0].Value; got != "file author" {
 		t.Fatalf("file author claim = %#v", got)
 	}
-	if len(converted.Claims.Bibliographic.Annotation) != 2 {
+	if len(converted.Claims.Bibliographic.Annotation) != 1 {
 		t.Fatalf("annotation claims = %#v", converted.Claims.Bibliographic.Annotation)
 	}
 	if got := converted.Claims.Bibliographic.Annotation[0].Value; got != "DB annotation 1." {
-		t.Fatalf("first annotation claim = %#v", got)
-	}
-	if got := converted.Claims.Bibliographic.Annotation[1].Value; got != "DB annotation 2." {
-		t.Fatalf("second annotation claim = %#v", got)
+		t.Fatalf("annotation claim = %#v", got)
 	}
 	raw, ok := converted.Claims.Bibliographic.Annotation[0].Raw.(model.DBAnnotation)
-	if !ok || raw.NID != 10 || raw.Title != "First annotation" {
+	if !ok || raw.NID != 10 {
 		t.Fatalf("annotation raw = %#v", converted.Claims.Bibliographic.Annotation[0].Raw)
 	}
 	if len(converted.Artifacts) != 1 || len(converted.Artifacts[0].Checksums) != 1 || converted.Artifacts[0].Name != "42.fb2" {
@@ -128,6 +127,70 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 	}
 	if len(converted.Relations) != 2 || converted.Relations[0].Type != "replaced_by" || converted.Relations[1].Type != "joined_books" {
 		t.Fatalf("relations = %#v", converted.Relations)
+	}
+}
+
+func TestDatasetRecordSelectsDatabaseAnnotationByTitleAndHighestNID(t *testing.T) {
+	t.Parallel()
+
+	rec := model.Record{
+		ID: model.RecordID{Library: "flibusta", BookID: 42},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: 42, Title: "Database Title"},
+			Annotations: []model.DBAnnotation{
+				{NID: 10, Title: "other", Body: "Other annotation."},
+				{NID: 20, Title: "database title", Body: "Older matching annotation."},
+				{NID: 30, Title: "DATABASE TITLE", Body: "Newest matching annotation."},
+			},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, nil)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	annotations := converted.Claims.Bibliographic.Annotation
+	if len(annotations) != 1 || annotations[0].Value != "Newest matching annotation." {
+		t.Fatalf("annotation claims = %#v", annotations)
+	}
+	raw, ok := annotations[0].Raw.(model.DBAnnotation)
+	if !ok || raw.NID != 30 {
+		t.Fatalf("annotation raw = %#v", annotations[0].Raw)
+	}
+}
+
+func TestDatasetRecordSelectsHighestNIDDatabaseAnnotationWithoutTitleMatch(t *testing.T) {
+	t.Parallel()
+
+	core, logs := observer.New(zap.DebugLevel)
+	log := zap.New(core)
+	rec := model.Record{
+		ID: model.RecordID{Library: "flibusta", BookID: 42},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: 42, Title: "Database title"},
+			Annotations: []model.DBAnnotation{
+				{NID: 10, Title: "First", Body: "First annotation."},
+				{NID: 20, Title: "Second", Body: "Second annotation."},
+			},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, log)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+	}
+	annotations := converted.Claims.Bibliographic.Annotation
+	if len(annotations) != 1 || annotations[0].Value != "Second annotation." {
+		t.Fatalf("annotation claims = %#v", annotations)
+	}
+	raw, ok := annotations[0].Raw.(model.DBAnnotation)
+	if !ok || raw.NID != 20 {
+		t.Fatalf("annotation raw = %#v", annotations[0].Raw)
+	}
+	if logs.FilterMessage("Selected highest-NID database annotation without title match").Len() != 1 {
+		t.Fatalf("debug logs = %#v", logs.All())
 	}
 }
 
@@ -459,6 +522,7 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 		match,
 		bookID,
 		false,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
@@ -517,6 +581,7 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
 		nil,
 		0,
 		true,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)

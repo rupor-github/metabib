@@ -508,6 +508,13 @@ is extracted as plain text before it is written:
 
 When the table is absent, database manifest contents are unchanged.
 
+During merge, database annotations are resolved to at most one bibliographic
+annotation claim. If only one database annotation exists, it is used as database
+evidence. If several exist, metabib selects annotations whose title matches the
+database book title case-insensitively and uses the one with the largest `nid`.
+If no annotation title matches, database annotation evidence is ignored and a
+debug log entry is emitted.
+
 Database manifests also carry INPX-oriented author ambiguity metadata. Since the
 database cache pass now covers both FB2 and non-FB2 catalog rows, this metadata is
 stored in three scopes: all database books, FB2 books only, and USR/non-FB2 books
