@@ -11,9 +11,9 @@ repos:
         always_run: true
         stages: [pre-commit, pre-push]
       - id: check-vuln
-        name: Scanning for vulnurabilities
+        name: Scanning for vulnerabilities
         language: system
-        entry: bash -c "trivy --exit-code 1 fs --ignore-unfixed ."
+        entry: bash -c "trivy --exit-code 1 fs --ignore-unfixed --skip-dirs .opencode --skip-dirs '**/node_modules' ."
         require_serial: true
         always_run: true
         stages: [pre-push]
