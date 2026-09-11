@@ -69,6 +69,7 @@ Current schema versions:
   - [Merge Dataset](#merge-dataset)
   - [Inspect Dataset](#inspect-dataset)
   - [INPX Generation](#inpx-generation)
+    - [INPX Record Construction](#inpx-record-construction)
     - [`mhl-inpx`](#mhl-inpx)
     - [`flib-inpx`](#flib-inpx)
     - [`inpx`](#inpx)
@@ -719,6 +720,82 @@ matching decode support to resolve such archive entries during import or
 extraction. Literal `~04`, `~0D`, and `~0A` in archive names are ambiguous escape
 sequences; generators warn when such names are encountered.
 
+#### INPX Record Construction
+
+All INPX generators read merged dataset records, not raw SQL dumps or FB2 files.
+Each dataset record may contain database claims, FB2 description claims, FBD
+sidecar claims, archive inventory, and database match metadata. Generation first
+selects records by content, then renders metadata fields, then writes one or more
+INPX rows depending on the target format.
+
+The most important behavioral split is between `mhl-inpx` and the
+FLibrary-compatible generators:
+
+| Topic | `mhl-inpx` | `flib-inpx` and `inpx` |
+| --- | --- | --- |
+| Target layout | MyHomeLib historical row layout. | FLibrary-compatible row layout with `FOLDER`, `YEAR`, and source-library fields. |
+| Sequence output | One `SERIES`/`SERNO` pair per book. If several sources exist, selection collapses them to one pair. | One row per selected flat sequence. If no sequence is selected, one row is still written with empty `SERIES`/`SERNO`. |
+| `--sequence all` | Not supported. | Selects both author and publisher sequence classes. |
+| FB2 nested sequences | No flattening; only the first FB2 title sequence can be used. | Controlled by `--fb2-flatten`; nested FB2 sequences can become several flat rows. |
+| Filtering and splitting | Not supported. | Generic `inpx` evaluates `--where` per rendered row and uses the first accepted row for `--split-by`. |
+| Additional artifacts | Not supported. | `flib-inpx` and `inpx --additional` can write annotations and compilations. |
+
+Metadata source selection is mostly shared, but authors are intentionally simpler
+than sequences:
+
+| `--prefer-fb2` | Rendered authors | `mhl-inpx` sequence | `flib-inpx` / `inpx` sequences | Additional annotations |
+| --- | --- | --- | --- | --- |
+| `ignore` | DB authors. FB2 authors are ignored unless no DB record exists. | DB sequence only. | DB sequences only. | DB annotation when present; otherwise FB2/FBD fallback remains available. |
+| `complement` | DB authors. FB2 authors are used only when no DB authors are selected. | DB sequence if present, otherwise first FB2 title sequence. | DB sequences if any are selected, otherwise FB2 sequences. | DB annotation when present; otherwise FB2/FBD. |
+| `merge` | DB authors. Authors are not concatenated with FB2 authors. | First FB2 title sequence if present, otherwise DB sequence. | DB sequences followed by FB2 sequences, then deduplicated. | FB2/FBD annotation when present, otherwise DB. |
+| `replace` | FB2 authors if present, otherwise DB authors. | First FB2 title sequence if present, otherwise DB sequence. | FB2 sequences if present, otherwise DB sequences. | FB2/FBD annotation when present, otherwise DB. |
+
+For author rendering, a present database record with no selected authors emits the
+standard unknown-author value `неизвестный,автор,:` unless `--prefer-fb2 replace`
+has FB2 authors to use. Database author disambiguation applies only when DB
+authors are selected.
+
+Database sequence classes use FLibrary type values: author sequence is type `0`,
+publisher sequence is type `1`. `flib-inpx` and `inpx` filter DB sequences by the
+selected class; `mhl-inpx` keeps one sequence field and treats `author` or
+`publisher` as the preferred class when choosing a single DB sequence. For all
+generators, `--sequence ignore` suppresses DB sequences, but FB2 title sequences
+can still be selected by `complement`, `merge`, or `replace`. To suppress all
+series output, use `--sequence ignore --prefer-fb2 ignore`.
+
+FB2 sequences have two sources. `title-info/sequence` behaves like an author
+series. `publish-info/sequence` behaves like a publisher series. In `flib-inpx`
+and `inpx`, `--sequence author` uses FB2 title sequences, `publisher` uses FB2
+publish sequences, `all` uses both, and `ignore` still leaves FB2 title sequences
+available for the preference modes above.
+
+`--fb2-flatten` applies only to `flib-inpx` and `inpx`:
+
+| `--fb2-flatten` | Nested FB2 sequence `Universe > Cycle #2` becomes |
+| --- | --- |
+| `all` | `Universe`, then `Cycle #2` |
+| `leaf` | `Cycle #2` |
+| `path` | `Universe / Cycle #2` using `inpx.flibrary.fb2_path_separator` |
+| `path-leaf` | `Universe / Cycle #2`, then `Cycle #2` |
+
+Sequence deduplication for `flib-inpx` and `inpx` happens after source selection
+and flattening. `inpx.flibrary.sequence_dedup: case-insensitive` keeps the first
+sequence with a matching name ignoring case, so DB sequences win over FB2
+duplicates in `merge` mode because DB sequences are appended first.
+
+Examples for a book with DB author `DB Author`, FB2 author `FB2 Author`, DB author
+sequence `Cycle #1`, DB publisher sequence `Publisher #10`, and nested FB2 title
+sequence `Universe / Cycle #2`:
+
+| Command and options | Result |
+| --- | --- |
+| `mhl-inpx --sequence author --prefer-fb2 complement` | one row; DB author; DB `Cycle #1` |
+| `mhl-inpx --sequence author --prefer-fb2 merge` | one row; DB author; FB2 `Universe` because MHL has one sequence field and does not flatten |
+| `mhl-inpx --sequence ignore --prefer-fb2 ignore` | one row; DB author; empty series fields |
+| `flib-inpx --sequence all --prefer-fb2 merge --fb2-flatten path` | DB-author rows for DB `Cycle #1`, DB `Publisher #10`, and FB2 `Universe / Cycle #2` after deduplication |
+| `flib-inpx --sequence author --prefer-fb2 replace --fb2-flatten leaf` | FB2-author rows for FB2 leaf `Cycle #2` when FB2 title sequences exist |
+| `inpx --sequence all --prefer-fb2 merge --where '{{eq .Series "Cycle"}}'` | filtering sees each rendered sequence row and can keep only the row whose `SERIES` is `Cycle` |
+
 #### `mhl-inpx`
 
 Build a MyHomeLib-compatible "historical" INPX from merged dataset JSONL:
@@ -754,13 +831,31 @@ Available `mhl-inpx` arguments:
   Database `file_type` remains the fallback for database-only records.
 - `--format MODE`: INPX record layout. Supported values are `2x` and `ruks`.
   Default is `2x`. `ruks` appends MD5 and replacement fields when available.
-- `--sequence MODE`: database sequence selection. Supported values are `author`,
-  `publisher`, and `ignore`. Default is `author`.
+- `--sequence MODE`: preferred database sequence class. Supported values are
+  `author`, `publisher`, and `ignore`. Default is `author`.
 - `--prefer-fb2 MODE`: how FB2 metadata is used relative to database metadata for
   authors and sequences. Supported values are `ignore`, `merge`, `complement`,
-  and `replace`. Default is `complement`: database authors and sequence data are
-  preferred when present, and FB2 metadata fills missing values. Use `replace`
-  when FB2 author order should win.
+  and `replace`. Default is `complement`. See
+  [INPX Record Construction](#inpx-record-construction) for source-selection
+  details.
+
+`mhl-inpx` record construction details:
+
+- One accepted dataset record produces one INPX row. The historical layout has
+  only one `SERIES`/`SERNO` pair, so sequence choices are collapsed before the row
+  is written.
+- Titles, genres, language, dates, keywords, file size, deletion state, and rating
+  prefer database claims and fall back to FB2/archive claims when the database
+  value is missing.
+- `--sequence author` prefers DB type `0`; `publisher` prefers DB type `1`;
+  `ignore` removes DB sequences from consideration.
+- `--prefer-fb2 merge` does not produce multiple sequence rows in MHL output. It
+  means "use the first FB2 title sequence when one exists, otherwise use the DB
+  sequence".
+- `--prefer-fb2 replace` is the only mode where FB2 authors replace DB authors
+  when both are present.
+- `--sequence ignore --prefer-fb2 complement` can still emit the first FB2 title
+  sequence. Use `--sequence ignore --prefer-fb2 ignore` for blank series fields.
 
 #### `flib-inpx`
 
@@ -800,7 +895,8 @@ Available `flib-inpx` arguments:
 - `--prefer-fb2 MODE`: how FB2-derived metadata is used relative to database
   metadata for authors, sequences, and additional annotation artifacts. Supported
   values are `ignore`, `merge`, `complement`, and `replace`. Default is
-  `complement`.
+  `complement`. See [INPX Record Construction](#inpx-record-construction) for
+  source-selection details.
 - `--sequence MODE`: selected sequence class. Supported values are `author`,
   `publisher`, `all`, and `ignore`. Default is `author`.
 - `--fb2-flatten MODE`: FB2 nested sequence flattening. Supported values are
@@ -810,6 +906,26 @@ Available `flib-inpx` arguments:
 - `--additional`: also write supported FLibrary additional artifacts next to the
   INPX output. Database-only inputs have no archive-derived additional source
   data, so this flag is ignored with a warning for those datasets.
+
+`flib-inpx` record construction details:
+
+- One accepted dataset record produces one row when no sequence is selected, or
+  one row per selected sequence when `SERIES`/`SERNO` values are available.
+- Rows for the same book keep the same `FOLDER + FILE + EXT` and differ only in
+  sequence fields. This is intentional: FLibrary imports them as several series
+  links for one physical file.
+- `--sequence author` selects DB type `0` and FB2 `title-info` sequences;
+  `publisher` selects DB type `1` and FB2 `publish-info` sequences; `all` selects
+  both classes; `ignore` suppresses DB sequences but still lets FB2 title
+  sequences participate unless `--prefer-fb2 ignore` is also set.
+- `--prefer-fb2 complement` keeps DB sequences whenever at least one DB sequence
+  survives `--sequence`; FB2 sequences are used only when the selected DB list is
+  empty.
+- `--prefer-fb2 merge` appends FB2 sequences after DB sequences, then applies
+  configured deduplication. With case-insensitive deduplication, a DB sequence
+  named `Cycle` keeps its row and drops an FB2 sequence named `cycle`.
+- `--fb2-flatten` applies before deduplication and can turn one nested FB2
+  sequence tree into several flat sequence rows.
 
 With `--additional`, `flib-inpx` writes `prefix-annotations.zip` from DB, FB2,
 and FBD sidecar annotations for accepted archive records, including USR records
@@ -882,11 +998,28 @@ Available `inpx` arguments:
   with `--split-by`.
 - `--prefer-fb2 MODE`, `--sequence MODE`, and `--fb2-flatten MODE`: same
   metadata preference, sequence-source, and FB2 flattening semantics as
-  `flib-inpx`.
+  `flib-inpx`. See [INPX Record Construction](#inpx-record-construction) for
+  source-selection details.
 - `--additional`: write FLibrary-compatible additional artifacts for accepted
   books only. Annotation artifact source follows `--prefer-fb2` when DB
   annotations are present; without DB annotation, FB2 annotations still win over
   FBD sidecar annotations.
+
+`inpx` record construction details:
+
+- Only archive-backed records are candidates. Database-only records are rejected
+  at dataset level or skipped when archives are present.
+- Content selection runs before row construction. `--content fb2` keeps logical
+  FB2 artifacts, `usr` keeps non-FB2 artifacts, and `all` keeps both.
+- Sequence selection, `--prefer-fb2`, `--fb2-flatten`, and deduplication match
+  `flib-inpx`. One dataset record may therefore produce several candidate rows.
+- `--where` is evaluated once per candidate row after all INPX fields are
+  rendered. A filter can keep one sequence row for a book and drop another.
+- `--split-by` is evaluated once per accepted book using the first accepted row.
+  All accepted rows for that book are written to the same `.inp` entry.
+- `.BookRow` identifies the current row within the book before filtering.
+  `.AcceptedBook` and `.AcceptedRow` are filled after filtering, so they are `0`
+  during `--where` evaluation and non-zero during `--split-by` evaluation.
 
 Filter and split templates use Go `text/template` with slim-sprig functions plus
 `oneOf`, `containsValue`, and `rangeName` helpers:
