@@ -140,38 +140,6 @@ func TestImportFixupSkipsAlterDatabase(t *testing.T) {
 	}
 }
 
-func TestFilterImportDumps(t *testing.T) {
-	t.Parallel()
-
-	dumps := []DumpFile{
-		{Name: "libbook.sql"},
-		{Name: "libavtor.sql"},
-		{Name: "libavtors.sql"},
-		{Name: "libgenre.sql"},
-		{Name: "libgenres.sql"},
-		{Name: "libseq.sql"},
-		{Name: "libseqs.sql"},
-		{Name: "librate.sql"},
-		{Name: "libpolka.sql"},
-		{Name: "libmag.sql"},
-		{Name: "libmags.sql"},
-		{Name: "libquality.sql"},
-	}
-	filtered := filterImportDumps(dumps, FormatLibrusecCurrent)
-	if len(filtered) != 8 {
-		t.Fatalf("librusec filtered dumps = %v, want 8 required dumps", filtered)
-	}
-	for _, dump := range filtered {
-		if !librusecImportDump(dump.Name) {
-			t.Fatalf("unexpected dump selected for Librusec import: %s", dump.Name)
-		}
-	}
-	unfiltered := filterImportDumps(dumps, FormatFlibustaCurrent)
-	if len(unfiltered) != len(dumps) {
-		t.Fatalf("flibusta filtered dumps = %d, want %d", len(unfiltered), len(dumps))
-	}
-}
-
 func TestHelpers(t *testing.T) {
 	t.Parallel()
 

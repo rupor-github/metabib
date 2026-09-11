@@ -140,13 +140,8 @@ func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
 	if len(dumps) == 0 {
 		return errors.New("no SQL dumps found")
 	}
-	format, err := DetectDumpFormat(dumps)
-	if err != nil {
+	if _, err := DetectDumpFormat(dumps); err != nil {
 		return err
-	}
-	dumps = filterImportDumps(dumps, format)
-	if len(dumps) == 0 {
-		return fmt.Errorf("no SQL dumps selected for import format %q", format)
 	}
 	client := i.client
 	if client == "" {
@@ -180,35 +175,6 @@ func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
 		i.log.Info("SQL import completed", zap.Int("files", len(dumps)), zap.Duration("elapsed", time.Since(start)))
 	}
 	return nil
-}
-
-func filterImportDumps(dumps []DumpFile, format Format) []DumpFile {
-	if format != FormatLibrusecCurrent {
-		return dumps
-	}
-	out := make([]DumpFile, 0, len(dumps))
-	for _, dump := range dumps {
-		if librusecImportDump(dump.Name) {
-			out = append(out, dump)
-		}
-	}
-	return out
-}
-
-func librusecImportDump(name string) bool {
-	switch strings.ToLower(filepath.Base(name)) {
-	case "libbook.sql",
-		"libavtor.sql",
-		"libavtors.sql",
-		"libgenre.sql",
-		"libgenres.sql",
-		"libseq.sql",
-		"libseqs.sql",
-		"librate.sql":
-		return true
-	default:
-		return false
-	}
 }
 
 func (i *Importer) importDump(ctx context.Context, client string, dump DumpFile) error {

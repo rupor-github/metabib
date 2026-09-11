@@ -312,9 +312,10 @@ SELECT %s, FileSize, Time, Title, Lang, SrcLang,
 	for rows.Next() {
 		var b model.DBBook
 		var tm, modified sql.NullTime
+		var keywords, md5 sql.NullString
 		dest := []any{&b.BookID, &b.FileSize, &tm, &b.Title, &b.Lang,
 			&b.SrcLang, &b.FileType, &b.Year, &b.Deleted, &b.FileAuthor,
-			&b.Keywords, &b.MD5, &modified}
+			&keywords, &md5, &modified}
 		if replacedBy {
 			dest = append(dest, &b.ReplacedBy)
 		}
@@ -323,6 +324,8 @@ SELECT %s, FileSize, Time, Title, Lang, SrcLang,
 		}
 		b.Time = formatTime(tm)
 		b.Modified = formatTime(modified)
+		b.Keywords = nullableString(keywords)
+		b.MD5 = nullableString(md5)
 		b.MD5 = strings.TrimRight(b.MD5, "\x00")
 		out[b.BookID] = &b
 	}
@@ -689,9 +692,10 @@ SELECT %s, FileSize, Time, Title, Lang, SrcLang,
 
 	var b model.DBBook
 	var tm, modified sql.NullTime
+	var keywords, md5 sql.NullString
 	dest := []any{&b.BookID, &b.FileSize, &tm, &b.Title, &b.Lang,
 		&b.SrcLang, &b.FileType, &b.Year, &b.Deleted, &b.FileAuthor,
-		&b.Keywords, &b.MD5, &modified}
+		&keywords, &md5, &modified}
 	if replacedBy {
 		dest = append(dest, &b.ReplacedBy)
 	}
@@ -703,6 +707,8 @@ SELECT %s, FileSize, Time, Title, Lang, SrcLang,
 	}
 	b.Time = formatTime(tm)
 	b.Modified = formatTime(modified)
+	b.Keywords = nullableString(keywords)
+	b.MD5 = nullableString(md5)
 	b.MD5 = strings.TrimRight(b.MD5, "\x00")
 	return &b, true, nil
 }
@@ -1054,6 +1060,13 @@ func formatTime(v sql.NullTime) string {
 		return ""
 	}
 	return v.Time.Format(time.RFC3339)
+}
+
+func nullableString(v sql.NullString) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
 }
 
 func sequenceNumber(value string) (int64, error) {

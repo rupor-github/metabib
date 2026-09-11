@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -51,6 +52,20 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 		}
 		if lib.ArchiveContent == "" {
 			t.Fatalf("default %s fetch profile archive_content is empty", name)
+		}
+	}
+	for _, name := range []string{"librusec", "librusec-usr", "librusec-all"} {
+		lib, _ := cfg.Fetch.FindLibrary(name)
+		re := regexp.MustCompile(lib.SQLPattern)
+		for _, sqlDump := range []string{"libbook", "libavtor", "libavtors", "libgenre", "libgenres", "librate", "libseq", "libseqs"} {
+			if !re.MatchString(`<a href="` + sqlDump + `.sql.gz">`) {
+				t.Fatalf("default %s SQLPattern does not match %s.sql.gz", name, sqlDump)
+			}
+		}
+		for _, sqlDump := range []string{"libpolka", "libmag", "libmags", "libquality"} {
+			if re.MatchString(`<a href="` + sqlDump + `.sql.gz">`) {
+				t.Fatalf("default %s SQLPattern matches unused %s.sql.gz", name, sqlDump)
+			}
 		}
 	}
 	if cfg.Rollup.ValidateCRC {

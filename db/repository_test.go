@@ -201,6 +201,36 @@ func TestBookByIDPopulatesAllDatabaseFields(t *testing.T) {
 	assertFullDatabaseSource(t, source)
 }
 
+func TestRepositoryBooksAllowNullKeywords(t *testing.T) {
+	ctx := context.Background()
+	repo := newNullKeywordsTestRepository(t)
+
+	books, err := repo.books(ctx, []int64{1})
+	if err != nil {
+		t.Fatalf("books() error = %v", err)
+	}
+	if books[1].Keywords != "" {
+		t.Fatalf("batch keywords = %q, want empty", books[1].Keywords)
+	}
+	if books[1].MD5 != "" {
+		t.Fatalf("batch md5 = %q, want empty", books[1].MD5)
+	}
+
+	book, ok, err := repo.book(ctx, 1)
+	if err != nil {
+		t.Fatalf("book() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("book() missing row")
+	}
+	if book.Keywords != "" {
+		t.Fatalf("single keywords = %q, want empty", book.Keywords)
+	}
+	if book.MD5 != "" {
+		t.Fatalf("single md5 = %q, want empty", book.MD5)
+	}
+}
+
 func TestBookSourcesByIDsSkipsMissingAnnotations(t *testing.T) {
 	repo := newTestRepository(t)
 	repo.tables["libbannotations"] = false
@@ -363,6 +393,29 @@ func newLibrusecTestRepository(t *testing.T) *Repository {
 	}
 }
 
+func newNullKeywordsTestRepository(t *testing.T) *Repository {
+	t.Helper()
+	dsn := t.Name()
+	testDriverMu.Lock()
+	testDriverHandlers[dsn] = nullKeywordsRepositoryTestRows
+	testDriverMu.Unlock()
+	t.Cleanup(func() {
+		testDriverMu.Lock()
+		delete(testDriverHandlers, dsn)
+		testDriverMu.Unlock()
+	})
+	db, err := sql.Open(testDriverName, dsn)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return &Repository{
+		db:     db,
+		tables: map[string]bool{"libbook": true},
+		cols:   map[string]map[string]bool{"libbook": {"ReplacedBy": true}},
+	}
+}
+
 func librusecRepositoryTestRows(query string, args []driver.NamedValue) (testRows, error) {
 	query = strings.Join(strings.Fields(query), " ")
 	bookTime := time.Date(2026, 7, 12, 1, 2, 3, 0, time.UTC)
@@ -470,6 +523,31 @@ func repositoryTestRows(query string, _ []driver.NamedValue) (testRows, error) {
 		return rows([]string{"Id", "Time", "BadId", "GoodId", "realId"}, []driver.Value{int64(50), joinedTime, int64(1), int64(2), int64(3)}), nil
 	default:
 		return testRows{}, fmt.Errorf("unexpected query: %s", query)
+	}
+}
+
+func nullKeywordsRepositoryTestRows(query string, _ []driver.NamedValue) (testRows, error) {
+	query = strings.Join(strings.Fields(query), " ")
+	bookTime := time.Date(2026, 6, 22, 1, 2, 3, 0, time.UTC)
+	modifiedTime := time.Date(2026, 6, 23, 4, 5, 6, 0, time.UTC)
+	bookRow := []driver.Value{
+		int64(1), int64(123), bookTime, "DB title", "ru", "en", "fb2", int64(1972), "0", "file author",
+		nil, nil, modifiedTime, int64(2),
+	}
+	switch {
+	case strings.Contains(query, "FROM libbook WHERE BookId IN"):
+		return rows(bookColumns(), bookRow), nil
+	case strings.Contains(query, "FROM libbook WHERE BookId ="):
+		return rows(bookColumns(), bookRow), nil
+	default:
+		return testRows{}, fmt.Errorf("unexpected query: %s", query)
+	}
+}
+
+func bookColumns() []string {
+	return []string{
+		"BookId", "FileSize", "Time", "Title", "Lang", "SrcLang", "FileType", "Year", "Deleted",
+		"FileAuthor", "keywords", "md5", "Modified", "ReplacedBy",
 	}
 }
 
