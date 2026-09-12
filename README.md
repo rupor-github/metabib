@@ -1006,6 +1006,16 @@ compilations are detected, it also writes
 fingerprint coverage is accepted with a warning; datasets without fingerprints
 skip the compilations artifact.
 
+`--additional` intentionally stays limited to artifacts derived from the merged
+book dataset. FLibrary also understands external user reviews and author
+annotations, but that data is currently used for presentation only and is kept by
+FLibrary in lazy on-disk structures optimized for its own lookup paths, including
+month-bucketed review archives, MD5-hashed rendered author names, and optional
+picture archives. Supporting those artifacts is possible, but it would require
+Flibusta-only `libreviews` and `lib.a.*` inputs plus FLibrary-specific identity
+and layout coupling that does not meaningfully improve metabib's reusable catalog
+dataset.
+
 FLibrary-specific settings that are not command-line arguments live under
 `inpx.flibrary`:
 
