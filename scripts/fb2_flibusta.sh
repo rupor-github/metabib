@@ -231,6 +231,7 @@ build_flib_inpx() {
 	log_phase "Building FLibrary INPX"
 
 	"${metabib}" "${metabib_args[@]}" flib-inpx \
+        --sequence all \
 		--input "${merge_prefix}" \
 		--output "${odir}/${name}_flib" \
 		--source-lib "${name}" \
