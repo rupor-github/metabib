@@ -444,85 +444,116 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 	if jsonOutput {
 		return writeJSON(out, summary)
 	}
+	style := terminalOutputStyle(out)
 	_, err := fmt.Fprintf(
 		out,
-		"Dataset\n"+
-			"  input: %s\n"+
-			"  schema: %s\n"+
-			"  record schema: %s\n"+
-			"  id: %s\n"+
-			"  library: %s\n"+
-			"  created: %s\n"+
-			"  records: %d\n"+
-			"  generator: %s\n"+
-			"  database: %s\n"+
-			"  dump date: %s\n"+
-			"  scoped db author ambiguity: %t\n"+
-			"  ambiguous db author groups: %d\n"+
-			"  ambiguous db authors: %d\n"+
-			"  ambiguous db author groups fb2: %d\n"+
-			"  ambiguous db authors fb2: %d\n"+
-			"  ambiguous db author groups usr: %d\n"+
-			"  ambiguous db authors usr: %d\n"+
-			"  archives: %d\n"+
-			"  archive entries: %d\n"+
-			"  fb2 entries: %d\n"+
-			"  ordering: %s\n"+
-			"  parse fb2: %t\n"+
-			"  fb2 coverage: %s\n"+
-			"  fb2 body fingerprints: %s\n"+
-			"  content checksum: %s\n",
+		"%s\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %d\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %t\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %d\n"+
+			"  %s %s\n"+
+			"  %s %t\n"+
+			"  %s %s\n"+
+			"  %s %s\n"+
+			"  %s %s\n",
+		style.header("Dataset"),
+		style.label("input:"),
 		summary.Input,
+		style.label("schema:"),
 		summary.Schema,
+		style.label("record schema:"),
 		summary.RecordSchema,
+		style.label("id:"),
 		summary.ID,
+		style.label("library:"),
 		summary.Library,
+		style.label("created:"),
 		summary.Created,
+		style.label("records:"),
 		summary.Records,
+		style.label("generator:"),
 		summary.Generator,
+		style.label("database:"),
 		summary.Database,
+		style.label("dump date:"),
 		summary.DumpDate,
+		style.label("scoped db author ambiguity:"),
 		summary.ScopedDBAuthorAmbiguity,
+		style.label("ambiguous db author groups:"),
 		summary.AmbiguousDBAuthorGroups,
+		style.label("ambiguous db authors:"),
 		summary.AmbiguousDBAuthors,
+		style.label("ambiguous db author groups fb2:"),
 		summary.AmbiguousDBAuthorGroupsFB2,
+		style.label("ambiguous db authors fb2:"),
 		summary.AmbiguousDBAuthorsFB2,
+		style.label("ambiguous db author groups usr:"),
 		summary.AmbiguousDBAuthorGroupsUSR,
+		style.label("ambiguous db authors usr:"),
 		summary.AmbiguousDBAuthorsUSR,
+		style.label("archives:"),
 		summary.Archives,
+		style.label("archive entries:"),
 		summary.ArchiveEntries,
+		style.label("fb2 entries:"),
 		summary.FB2Entries,
+		style.label("ordering:"),
 		summary.Ordering,
+		style.label("parse fb2:"),
 		summary.ParseFB2,
+		style.label("fb2 coverage:"),
 		summary.FB2Coverage,
+		style.label("fb2 body fingerprints:"),
 		summary.FB2BodyFingerprints,
+		style.label("content checksum:"),
 		summary.ContentChecksum,
 	)
 	if err != nil {
 		return err
 	}
 	if len(summary.AmbiguousDBAuthorMap) > 0 {
-		if err := writeInspectAmbiguousDBAuthors(out, "  ambiguous db author map:", summary.AmbiguousDBAuthorMap); err != nil {
+		if err := writeInspectAmbiguousDBAuthors(out, "ambiguous db author map", summary.AmbiguousDBAuthorMap); err != nil {
 			return err
 		}
 	}
 	if len(summary.AmbiguousDBAuthorMapFB2) > 0 {
-		if err := writeInspectAmbiguousDBAuthors(out, "  ambiguous db author map fb2:", summary.AmbiguousDBAuthorMapFB2); err != nil {
+		if err := writeInspectAmbiguousDBAuthors(out, "ambiguous db author map fb2", summary.AmbiguousDBAuthorMapFB2); err != nil {
 			return err
 		}
 	}
 	if len(summary.AmbiguousDBAuthorMapUSR) > 0 {
-		if err := writeInspectAmbiguousDBAuthors(out, "  ambiguous db author map usr:", summary.AmbiguousDBAuthorMapUSR); err != nil {
+		if err := writeInspectAmbiguousDBAuthors(out, "ambiguous db author map usr", summary.AmbiguousDBAuthorMapUSR); err != nil {
 			return err
 		}
 	}
 	if summary.Validation != "" {
 		if _, err = fmt.Fprintf(
 			out,
-			"  validation: %s\n  records read: %d\n  issue records: %d\n  issues: %d\n",
-			summary.Validation,
+			"  %s %s\n  %s %d\n  %s %d\n  %s %d\n",
+			style.label("validation:"),
+			style.status(summary.Validation),
+			style.label("records read:"),
 			summary.RecordsRead,
+			style.label("issue records:"),
 			summary.IssueRecords,
+			style.label("issues:"),
 			summary.Issues,
 		); err != nil {
 			return err
@@ -558,18 +589,19 @@ func writeIssueCounts(out io.Writer, title string, counts map[string]int64) erro
 }
 
 func writeInspectAmbiguousDBAuthors(out io.Writer, title string, groups []model.INPXAmbiguousDBAuthorGroup) error {
-	if _, err := fmt.Fprintln(out, title); err != nil {
+	style := terminalOutputStyle(out)
+	if _, err := fmt.Fprintf(out, "\n%s\n", style.header("--- "+title+" ---")); err != nil {
 		return err
 	}
 	for _, group := range groups {
-		if _, err := fmt.Fprintf(out, "    %s\n", group.Key); err != nil {
+		if _, err := fmt.Fprintf(out, "    %s\n", style.label(group.Key)); err != nil {
 			return err
 		}
 		for _, author := range group.Authors {
 			if _, err := fmt.Fprintf(
 				out,
-				"      %s: %s, %s, %s (%s)\n",
-				author.ID,
+				"      %s %s, %s, %s (%s)\n",
+				style.label(author.ID+":"),
 				author.LastName,
 				author.FirstName,
 				author.MiddleName,
@@ -586,11 +618,22 @@ func writeInspectRecord(out io.Writer, result inspectRecordResult, jsonOutput bo
 	if jsonOutput {
 		return writeJSON(out, result)
 	}
+	style := terminalOutputStyle(out)
 	data, err := jsonstd.MarshalIndent(result.Record, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal inspect record: %w", err)
 	}
-	if _, err = fmt.Fprintf(out, "Record\n  input: %s\n  record number: %d\n%s\n", result.Input, result.RecordNumber, data); err != nil {
+	if _, err = fmt.Fprintf(
+		out,
+		"%s\n  %s %s\n  %s %d\n\n%s\n%s\n",
+		style.header("Record"),
+		style.label("input:"),
+		result.Input,
+		style.label("record number:"),
+		result.RecordNumber,
+		style.header("--- dataset record ---"),
+		style.json(data),
+	); err != nil {
 		return err
 	}
 	if len(result.DecodedFingerprints) > 0 {
@@ -603,12 +646,18 @@ func writeInspectIssues(out io.Writer, result inspectIssuesResult, jsonOutput bo
 	if jsonOutput {
 		return writeJSON(out, result)
 	}
+	style := terminalOutputStyle(out)
 	if _, err := fmt.Fprintf(
 		out,
-		"Issue Records\n  input: %s\n  records read: %d\n  issue records: %d\n  issues: %d\n",
+		"%s\n  %s %s\n  %s %d\n  %s %d\n  %s %d\n",
+		style.header("Issue Records"),
+		style.label("input:"),
 		result.Input,
+		style.label("records read:"),
 		result.RecordsRead,
+		style.label("issue records:"),
 		result.IssueRecords,
+		style.label("issues:"),
 		result.Issues,
 	); err != nil {
 		return err
@@ -624,11 +673,11 @@ func writeInspectIssues(out io.Writer, result inspectIssuesResult, jsonOutput bo
 		return err
 	}
 	for _, rec := range result.Records {
-		if _, err := fmt.Fprintf(out, "  record %d: %s\n", rec.RecordNumber, inspectLocatorString(rec.Locator)); err != nil {
+		if _, err := fmt.Fprintf(out, "  %s %d: %s\n", style.label("record"), rec.RecordNumber, inspectLocatorString(rec.Locator)); err != nil {
 			return err
 		}
 		if len(rec.Artifacts) > 0 {
-			if _, err := fmt.Fprintf(out, "    artifacts: %s\n", strings.Join(rec.Artifacts, ", ")); err != nil {
+			if _, err := fmt.Fprintf(out, "    %s %s\n", style.label("artifacts:"), strings.Join(rec.Artifacts, ", ")); err != nil {
 				return err
 			}
 		}
@@ -693,11 +742,12 @@ func fingerprintKeyHex(key string) string {
 }
 
 func writeInspectDecodedFingerprints(out io.Writer, fingerprints []inspectDecodedFingerprint) error {
-	if _, err := fmt.Fprintln(out, "Decoded fingerprints"); err != nil {
+	style := terminalOutputStyle(out)
+	if _, err := fmt.Fprintln(out, style.header("Decoded fingerprints")); err != nil {
 		return err
 	}
 	for _, fingerprint := range fingerprints {
-		if _, err := fmt.Fprintf(out, "  artifact: %s\n", fingerprint.Artifact); err != nil {
+		if _, err := fmt.Fprintf(out, "  %s %s\n", style.label("artifact:"), fingerprint.Artifact); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintln(out, "  DEPTH  LEAF  KEY"); err != nil {
@@ -720,7 +770,8 @@ func writeInspectArchives(out io.Writer, result inspectArchivesResult, jsonOutpu
 	if jsonOutput {
 		return writeJSON(out, result)
 	}
-	if _, err := fmt.Fprintf(out, "Archives\n  input: %s\n", result.Input); err != nil {
+	style := terminalOutputStyle(out)
+	if _, err := fmt.Fprintf(out, "%s\n  %s %s\n", style.header("Archives"), style.label("input:"), result.Input); err != nil {
 		return err
 	}
 	if len(result.Archives) == 0 {

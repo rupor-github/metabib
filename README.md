@@ -68,6 +68,7 @@ Current schema versions:
   - [Build Cache Manifests](#build-cache-manifests)
   - [Merge Dataset](#merge-dataset)
   - [Inspect Dataset](#inspect-dataset)
+  - [Trace Dataset Provenance](#trace-dataset-provenance)
   - [INPX Generation](#inpx-generation)
     - [INPX Record Construction](#inpx-record-construction)
     - [`mhl-inpx`](#mhl-inpx)
@@ -94,6 +95,8 @@ Current schema versions:
   `metabib.dataset/1` header and `metabib.dataset_record/1` rows;
 - `inspect` summarizes and validates merged dataset JSONL or locates individual
   records without producing another artifact;
+- `trace` starts from a merged dataset record and walks back through cache
+  manifests and source files as far as possible for debugging provenance;
 - `mhl-inpx` consumes the merged dataset JSONL to produce a MyHomeLib-compatible
   INPX without coupling the main extraction pipeline to INPX output constraints;
 - `flib-inpx` consumes the same merged dataset JSONL to produce a
@@ -162,12 +165,12 @@ binaries explicitly, for example:
 version: 1
 processing:
   manifests:
-    archive_dir: "/volume4/backup/library/manifests"
+    archive_dir: "/path/to/library/manifests"
 database:
-  server_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadbd"
-  install_db_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb-install-db"
-  client_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb"
-  admin_path: "/volume4/@appstore/MariaDB10/usr/local/mariadb10.11/bin/mariadb-admin"
+  server_path: "/path/to/MariaDB10/bin/mariadbd"
+  install_db_path: "/path/to/MariaDB10/bin/mariadb-install-db"
+  client_path: "/path/to/MariaDB10/bin/mariadb"
+  admin_path: "/path/to/MariaDB10/bin/mariadb-admin"
 ```
 
 ## Usage
@@ -699,6 +702,10 @@ Available modes and options:
 - `--json`: emit the selected summary, archive list, validation result, or record
   as machine-readable JSON.
 
+Human output is colorized only when writing to an interactive terminal; colors are
+disabled for redirected output and when `NO_COLOR` is set. JSON output is never
+colorized.
+
 Only one of `--archives`, `--issues`, `--book-id`, `--archive`/`--index`, and
 `--file` may be used at a time. `--validate` cannot be combined with any of those
 modes, while `--json` can be used with every mode. A lookup that finds no matching
@@ -706,6 +713,66 @@ record exits with status `4`; other failures use status `1`.
 
 Archive source IDs are local to one merged dataset. Use archive names, path hints,
 and checksums for long-term correlation across regenerated datasets.
+
+### Trace Dataset Provenance
+
+Use `trace` when investigation starts from a merged dataset JSONL record and needs
+to walk back to the raw cache manifests and source files that produced it:
+
+```sh
+metabib trace --input combined --book-id 12345
+metabib trace --input combined --file 12345.fb2
+metabib trace --input combined --archive archive-0001 --index 42
+metabib trace --input combined --issues
+```
+
+`trace` uses the same dataset selectors as `inspect`, but non-issue selectors must
+match exactly one merged record. If a selector matches several records, `trace`
+prints candidate locators and exits with an error instead of guessing. `--issues`
+is batch mode and traces every record that contains issues.
+
+For each matched record, `trace` reports a step chain with `found`, `missing`,
+`not_applicable`, or `error` status. Missing upstream cache or source files are
+reported in the chain without failing the command as long as the merged dataset
+record was found.
+
+By default, output is compact and human-oriented. Use `--records-full` to include
+the full merged dataset record plus raw archive/database manifest records. Use
+`--json` for stable machine-readable output with schema `metabib.trace/1`.
+Terminal output is colorized only when writing to an interactive terminal; colors
+are disabled for redirected output and when `NO_COLOR` is set.
+
+Manifest and source paths are inferred from the dataset header and current
+configuration when possible. Use directory overrides when datasets or manifests
+were moved after merge:
+
+```sh
+metabib trace \
+  --input /path/to/library/inpx/flibusta_20260910.jsonl.zst \
+  --book-id 867527 \
+  --archive-dir /path/to/library/flibusta \
+  --archive-manifest-dir /path/to/library/manifests \
+  --database-manifest-dir /path/to/library/flibusta_20260910_080033
+```
+
+Path override options:
+
+- `--archive-path FILE`: use an exact source archive path for the traced record.
+- `--archive-dir DIR`: rewrite dataset archive path hints by basename under `DIR`.
+- `--archive-manifest FILE`: use an exact archive manifest path.
+- `--archive-manifest-dir DIR`: derive and scan archive manifests under `DIR`.
+- `--database-manifest FILE`: use an exact database manifest path.
+- `--database-manifest-dir DIR`: derive and scan the database manifest under
+  `DIR`; if `DIR/database.manifest.zst` exists, database dump paths from the
+  manifest are also rewritten by basename under `DIR`.
+- `--database-dump-dir DIR`: explicitly rewrite database dump paths by basename
+  under `DIR`.
+
+Use `--deep` to open the source archive and verify physical archive evidence when
+supported. The current deep verifier supports ZIP archives: it checks the traced
+entry, sizes, content MD5 when present, and direct sidecar entries from the raw
+archive manifest record. Non-ZIP archives are reported as `not_applicable` for
+deep verification while the manifest trace still works.
 
 ### INPX Generation
 
@@ -1275,23 +1342,23 @@ executable is expected to be in the same directory as the script; if
 Run the full update workflow:
 
 ```sh
-scripts/fb2_flibusta.sh /volume4/backup/library full mhl
-scripts/fb2_flibusta.sh /volume4/backup/library full flib
-scripts/fb2_flibusta.sh /volume4/backup/library full both
+scripts/fb2_flibusta.sh /path/to/library full mhl
+scripts/fb2_flibusta.sh /path/to/library full flib
+scripts/fb2_flibusta.sh /path/to/library full both
 ```
 
 Run indexing only from existing local archives and the latest existing SQL dump
 directory matching `<library-root>/flibusta_*`:
 
 ```sh
-scripts/fb2_flibusta.sh /volume4/backup/library reindex both
+scripts/fb2_flibusta.sh /path/to/library reindex both
 ```
 
 Both modes accept an optional user account whose home directory should be used as
 the working directory. This is useful for Synology Task Scheduler setups:
 
 ```sh
-scripts/fb2_flibusta.sh /volume4/backup/library full both myuser
+scripts/fb2_flibusta.sh /path/to/library full both myuser
 ```
 
 The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and the selected INPX

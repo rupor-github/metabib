@@ -121,6 +121,7 @@ func main() {
 			cacheCommand(),
 			mergeCommand(),
 			inspectCommand(),
+			traceCommand(),
 			inpxCommand(),
 			mhlINPXCommand(),
 			flibINPXCommand(),
