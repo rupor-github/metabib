@@ -807,6 +807,16 @@ FLibrary-compatible generators:
 | Filtering and splitting | Not supported. | Generic `inpx` evaluates `--where` per rendered row and uses the first accepted row for `--split-by`. |
 | Additional artifacts | Not supported. | `flib-inpx` and `inpx --additional` can write annotations and compilations. |
 
+`--additional` for FLibrary-compatible generators intentionally stays limited to
+artifacts derived from the merged book dataset. FLibrary also understands external
+user reviews and author annotations, but that data is currently used for
+presentation only and is kept by FLibrary in lazy on-disk structures optimized for
+its own lookup paths, including month-bucketed review archives, MD5-hashed
+rendered author names, and optional picture archives. Supporting those artifacts
+is possible, but it would require Flibusta-only `libreviews` and `lib.a.*` inputs
+plus FLibrary-specific identity and layout coupling that does not meaningfully
+improve metabib's reusable catalog dataset.
+
 Metadata source selection is mostly shared, but authors are intentionally simpler
 than sequences:
 
@@ -972,7 +982,9 @@ Available `flib-inpx` arguments:
   library name.
 - `--additional`: also write supported FLibrary additional artifacts next to the
   INPX output. Database-only inputs have no archive-derived additional source
-  data, so this flag is ignored with a warning for those datasets.
+  data, so this flag is ignored with a warning for those datasets. See
+  [INPX Record Construction](#inpx-record-construction) for the shared scope
+  limit.
 
 `flib-inpx` record construction details:
 
@@ -1005,16 +1017,6 @@ compilations are detected, it also writes
 `prefix-compilations.zip` containing compact `compilations.json`. Partial
 fingerprint coverage is accepted with a warning; datasets without fingerprints
 skip the compilations artifact.
-
-`--additional` intentionally stays limited to artifacts derived from the merged
-book dataset. FLibrary also understands external user reviews and author
-annotations, but that data is currently used for presentation only and is kept by
-FLibrary in lazy on-disk structures optimized for its own lookup paths, including
-month-bucketed review archives, MD5-hashed rendered author names, and optional
-picture archives. Supporting those artifacts is possible, but it would require
-Flibusta-only `libreviews` and `lib.a.*` inputs plus FLibrary-specific identity
-and layout coupling that does not meaningfully improve metabib's reusable catalog
-dataset.
 
 FLibrary-specific settings that are not command-line arguments live under
 `inpx.flibrary`:
@@ -1080,7 +1082,9 @@ Available `inpx` arguments:
 - `--additional`: write FLibrary-compatible additional artifacts for accepted
   books only. Annotation artifact source follows `--prefer-fb2` when DB
   annotations are present; without DB annotation, FB2 annotations still win over
-  FBD sidecar annotations.
+  FBD sidecar annotations. See
+  [INPX Record Construction](#inpx-record-construction) for the shared scope
+  limit.
 
 `inpx` record construction details:
 
