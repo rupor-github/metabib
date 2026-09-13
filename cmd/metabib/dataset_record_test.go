@@ -177,7 +177,7 @@ func TestDatasetRecordSelectsHighestNIDDatabaseAnnotationWithoutTitleMatch(t *te
 		}},
 	}
 
-	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, log)
+	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, log)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
 	}
@@ -356,6 +356,93 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 	}
 }
 
+func TestDatasetRecordFromArchiveRecordSuppressesReplacementOnlyFB2Claims(t *testing.T) {
+	t.Parallel()
+
+	corrupt := "\uFFFD\uFFFD"
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			FileName:  "book",
+			Extension: "fb2",
+			Archive:   &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "book.fb2", Index: 5},
+		},
+		Source: model.RecordSources{FB2: model.FB2Source{
+			Present: true,
+			Description: &model.FB2Description{TitleInfo: &model.FB2TitleInfo{
+				Authors:  []model.FB2Person{{ID: "author-id", FirstName: corrupt, LastName: corrupt, Emails: []string{"author@example.org"}}},
+				Title:    corrupt + " " + corrupt,
+				Keywords: corrupt,
+				Language: "en",
+			}},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if converted.Claims.Bibliographic == nil {
+		t.Fatalf("bibliographic claims missing")
+	}
+	if len(converted.Claims.Bibliographic.Title) != 0 || len(converted.Claims.Bibliographic.Authors) != 0 ||
+		len(converted.Claims.Bibliographic.Keywords) != 0 {
+		t.Fatalf("corrupted FB2 claims were not suppressed: %#v", converted.Claims.Bibliographic)
+	}
+	if len(converted.Claims.Bibliographic.Language) != 1 || converted.Claims.Bibliographic.Language[0].Value != "en" {
+		t.Fatalf("language claim = %#v, want valid language preserved", converted.Claims.Bibliographic.Language)
+	}
+	for _, path := range []string{
+		"description.title_info.title",
+		"description.title_info.authors[0].first_name",
+		"description.title_info.authors[0].last_name",
+		"description.title_info.keywords",
+	} {
+		if !hasIssuePath(converted.Issues, "unicode_replacement_only", path) {
+			t.Fatalf("issues = %#v, missing unicode_replacement_only at %s", converted.Issues, path)
+		}
+	}
+}
+
+func TestDatasetRecordFromArchiveRecordKeepsReplacementOnlyFB2ClaimsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	corrupt := "\uFFFD\uFFFD"
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID: model.RecordID{
+			Library:   "flibusta",
+			FileName:  "book",
+			Extension: "fb2",
+			Archive:   &model.ArchiveInfo{Path: "/archives/books.zip", Entry: "book.fb2", Index: 5},
+		},
+		Source: model.RecordSources{FB2: model.FB2Source{
+			Present:     true,
+			Description: &model.FB2Description{TitleInfo: &model.FB2TitleInfo{Title: corrupt}},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecordWithMatch(
+		rec,
+		map[string]string{"/archives/books.zip": "archive-0001"},
+		nil,
+		rec.ID.BookID,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+	}
+	if got := converted.Claims.Bibliographic.Title[0].Value; got != corrupt {
+		t.Fatalf("title claim = %#v, want corrupted value preserved", got)
+	}
+	if len(converted.Issues) != 0 {
+		t.Fatalf("issues = %#v, want none", converted.Issues)
+	}
+}
+
 func TestDatasetRecordFromArchiveRecordPopulatesFBDSidecarClaims(t *testing.T) {
 	t.Parallel()
 
@@ -400,6 +487,15 @@ func TestDatasetRecordFromArchiveRecordPopulatesFBDSidecarClaims(t *testing.T) {
 	if converted.Claims.Bibliographic.Language[0].Observation != "fbd" {
 		t.Fatalf("language claims = %#v", converted.Claims.Bibliographic.Language)
 	}
+}
+
+func hasIssuePath(issues []model.Issue, code string, path string) bool {
+	for _, issue := range issues {
+		if issue.Code == code && issue.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDatasetRecordFromArchiveRecordUsesLogicalArtifactName(t *testing.T) {
@@ -522,6 +618,7 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 		match,
 		bookID,
 		false,
+		true,
 		nil,
 	)
 	if err != nil {
@@ -580,6 +677,7 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
 		map[string]string{"/archives/books.zip": "archive-0001"},
 		nil,
 		0,
+		true,
 		true,
 		nil,
 	)

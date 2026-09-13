@@ -78,7 +78,12 @@ func TestDatasetForArchiveOutput(t *testing.T) {
 			ArchiveMD5:   "abc123",
 			Records:      2,
 		}},
-		config.ProcessingConfig{ParseFB2: true, FB2DescriptionTree: true, ArchiveContentMD5: true},
+		config.ProcessingConfig{
+			ParseFB2:                   true,
+			FB2DescriptionTree:         true,
+			FB2ReplacementQualityCheck: true,
+			ArchiveContentMD5:          true,
+		},
 		"1.2.3",
 	)
 	if err != nil {
@@ -110,6 +115,9 @@ func TestDatasetForArchiveOutput(t *testing.T) {
 	}
 	if !dataset.Processing.ParseFB2 || dataset.Processing.FB2Coverage != "description" {
 		t.Fatalf("Processing = %#v", dataset.Processing)
+	}
+	if !dataset.Processing.FB2ReplacementQualityCheck {
+		t.Fatalf("FB2ReplacementQualityCheck = false, want true")
 	}
 	if !dataset.Processing.ArchiveContentChecksum.Enabled ||
 		dataset.Processing.ArchiveContentChecksum.Algorithm != "md5" {

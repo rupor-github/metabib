@@ -94,10 +94,11 @@ type DatasetOrdering struct {
 }
 
 type DatasetProcessing struct {
-	ParseFB2               bool                        `json:"parse_fb2"`
-	FB2Coverage            string                      `json:"fb2_coverage,omitempty"`
-	ArchiveContentChecksum DatasetChecksumOption       `json:"archive_content_checksum"`
-	FB2BodyFingerprints    *DatasetFB2BodyFingerprints `json:"fb2_body_fingerprints,omitempty"`
+	ParseFB2                   bool                        `json:"parse_fb2"`
+	FB2Coverage                string                      `json:"fb2_coverage,omitempty"`
+	FB2ReplacementQualityCheck bool                        `json:"fb2_replacement_quality_check"`
+	ArchiveContentChecksum     DatasetChecksumOption       `json:"archive_content_checksum"`
+	FB2BodyFingerprints        *DatasetFB2BodyFingerprints `json:"fb2_body_fingerprints,omitempty"`
 }
 
 type DatasetChecksumOption struct {

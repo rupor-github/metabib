@@ -195,6 +195,56 @@ func TestGenerateDatabaseOnlyWritesOnlineINP(t *testing.T) {
 	}
 }
 
+func TestGenerateWritesDummyForArchiveRecordWithoutTitle(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "fb2-0000000001-0000000001.zip")
+	prefix := filepath.Join(dir, "all")
+	rec := mhlDatasetRecord("archive-0001", 0, "1.fb2", 1)
+	rec.Claims.Bibliographic.Title = nil
+	writeDataset(t, prefix, model.Dataset{
+		Schema:       model.DatasetSchemaV1,
+		RecordSchema: model.DatasetRecordSchemaV1,
+		Library:      "flibusta",
+		Records:      1,
+		Database:     &model.DatasetDatabase{DumpDate: "20260603"},
+		Archives: []model.DatasetArchive{{
+			ID:       "archive-0001",
+			Name:     filepath.Base(archivePath),
+			PathHint: archivePath,
+			Entries:  1,
+		}},
+	}, rec)
+
+	stats, err := Generate(context.Background(), Options{
+		InputPrefix:   prefix,
+		OutputPrefix:  filepath.Join(dir, "flibusta"),
+		Format:        Format2X,
+		SequenceMode:  SequenceAuthor,
+		FB2Preference: PreferComplement,
+		QuickFix:      true,
+		Limits:        DefaultLimits(),
+		CommentTemplate: strings.Join([]string{
+			"{{ .DatabaseName }} {{ .DisplayDate }}",
+			"{{ .DatabaseName }}_{{ .DumpDate }}",
+			"65536",
+			"{{ .DatabaseName }}",
+		}, "\r\n"),
+		VersionTemplate: "{{ .DumpDate }}\r\n",
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v", err)
+	}
+	if stats.Records != 0 || stats.Dummy != 1 {
+		t.Fatalf("stats = %#v, want dummy only", stats)
+	}
+	entries, _ := readZipEntries(t, stats.OutputPath)
+	if !strings.Contains(entries["fb2-0000000001-0000000001.inp"], "dummy record") {
+		t.Fatalf("inp = %q, want dummy record", entries["fb2-0000000001-0000000001.inp"])
+	}
+}
+
 func TestGenerateSkipsDummyOnlyArchive(t *testing.T) {
 	t.Parallel()
 

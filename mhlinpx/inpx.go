@@ -430,7 +430,10 @@ func (w *streamINPXWriter) writeRecordAt(rec model.DatasetRecord, index int) err
 		return err
 	}
 	if line == "" {
-		if err := w.writeDummy(index); err != nil {
+		if err := w.ensureActiveWriter(); err != nil {
+			return err
+		}
+		if err := w.writeDummyToActive(index); err != nil {
 			return err
 		}
 		w.activeIndex++
@@ -577,6 +580,9 @@ func recordLine(rec model.DatasetRecord, opts Options) (string, inpxutil.Dataset
 	title := view.Database.Title
 	if title == "" {
 		title = view.FB2.Title
+	}
+	if title == "" {
+		return "", view, diagnostics, nil
 	}
 	authors := authorsString(view.HasDatabase, view.Database.Authors, view.FB2.Authors, opts)
 	if count := logDisambiguatedDBAuthors(rec, view, authors, opts); count > 0 {

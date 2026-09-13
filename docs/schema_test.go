@@ -219,6 +219,7 @@ func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
 		`"ignored"`,
 		`"dummy"`,
 		`"archive_content_checksum"`,
+		`"fb2_replacement_quality_check"`,
 	} {
 		assertSchemaContains(t, schema, want)
 	}

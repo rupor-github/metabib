@@ -38,6 +38,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Processing.DatabaseWorkers < 1 || cfg.Processing.ArchiveWorkers < 1 {
 		t.Fatalf("workers were not expanded: database=%d archive=%d", cfg.Processing.DatabaseWorkers, cfg.Processing.ArchiveWorkers)
 	}
+	if !cfg.Processing.FB2ReplacementQualityCheck {
+		t.Fatal("Processing.FB2ReplacementQualityCheck = false, want true")
+	}
 	if cfg.Processing.Manifests.ArchiveDir != "" {
 		t.Fatalf("ArchiveDir = %q, want empty", cfg.Processing.Manifests.ArchiveDir)
 	}
@@ -182,6 +185,7 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"  validate_crc: true",
 		"processing:",
 		"  parse_fb2: false",
+		"  fb2_replacement_quality_check: false",
 		"  fb2_body_fingerprints: false",
 		"inpx:",
 		"  language:",
@@ -209,6 +213,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Processing.ParseFB2 {
 		t.Fatal("Processing.ParseFB2 = true, want false")
+	}
+	if cfg.Processing.FB2ReplacementQualityCheck {
+		t.Fatal("Processing.FB2ReplacementQualityCheck = true, want false")
 	}
 	if !cfg.Rollup.ValidateCRC {
 		t.Fatal("Rollup.ValidateCRC = false, want true")

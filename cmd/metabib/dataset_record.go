@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"go.uber.org/zap"
 
@@ -11,7 +13,7 @@ import (
 )
 
 func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
-	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false, nil)
+	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false, true, nil)
 }
 
 func datasetRecordFromRecordWithMatch(
@@ -20,6 +22,7 @@ func datasetRecordFromRecordWithMatch(
 	databaseMatch *model.Match,
 	inferredBookID int64,
 	fb2NotCollected bool,
+	fb2ReplacementQualityCheck bool,
 	log *zap.Logger,
 ) (model.DatasetRecord, error) {
 	libraryName := rec.ID.Library
@@ -82,8 +85,8 @@ func datasetRecordFromRecordWithMatch(
 		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index, fb2NotCollected)
 		appendSidecarObservations(&out, rec, source, &index)
-		appendFB2Claims(&out, rec.Source.FB2)
-		appendSidecarClaims(&out, rec.Source.Sidecars)
+		appendFB2Claims(&out, rec.Source.FB2, fb2ReplacementQualityCheck)
+		appendSidecarClaims(&out, rec.Source.Sidecars, fb2ReplacementQualityCheck)
 		appendRecordIssues(&out, rec)
 		return out, nil
 	}
@@ -661,32 +664,33 @@ func fb2ObservationCoverage(desc *model.FB2Description) string {
 	return "title_info"
 }
 
-func appendFB2Claims(out *model.DatasetRecord, src model.FB2Source) {
+func appendFB2Claims(out *model.DatasetRecord, src model.FB2Source, fb2ReplacementQualityCheck bool) {
 	if !src.Present || src.Description == nil {
 		return
 	}
-	appendDescriptionClaims(out, src.Description, "fb2")
+	appendDescriptionClaims(out, src.Description, "fb2", fb2ReplacementQualityCheck)
 }
 
-func appendSidecarClaims(out *model.DatasetRecord, sidecars []model.SidecarSource) {
+func appendSidecarClaims(out *model.DatasetRecord, sidecars []model.SidecarSource, fb2ReplacementQualityCheck bool) {
 	for _, sidecar := range sidecars {
 		if !sidecar.Present || sidecar.Description == nil {
 			continue
 		}
-		appendDescriptionClaims(out, sidecar.Description, sidecar.Kind)
+		appendDescriptionClaims(out, sidecar.Description, sidecar.Kind, fb2ReplacementQualityCheck)
 	}
 }
 
-func appendDescriptionClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string) {
+func appendDescriptionClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string, fb2ReplacementQualityCheck bool) {
+	quality := fb2MetadataQuality{enabled: fb2ReplacementQualityCheck, observation: observation, out: out}
 	appendFB2Identities(out, desc, observation)
 	if hasFB2TitleInfoClaims(desc.TitleInfo) {
-		appendFB2TitleInfoClaims(desc.TitleInfo, bibliographicClaims(out), observation)
+		appendFB2TitleInfoClaims(desc.TitleInfo, bibliographicClaims(out), observation, quality, "description.title_info")
 	}
 	if hasFB2TitleInfoClaims(desc.SrcTitleInfo) {
-		appendFB2TitleInfoClaims(desc.SrcTitleInfo, originalClaims(out), observation)
+		appendFB2TitleInfoClaims(desc.SrcTitleInfo, originalClaims(out), observation, quality, "description.src_title_info")
 	}
-	appendFB2DocumentClaims(out, desc, observation)
-	appendFB2PublicationClaims(out, desc.PublishInfo, observation)
+	appendFB2DocumentClaims(out, desc, observation, quality)
+	appendFB2PublicationClaims(out, desc.PublishInfo, observation, quality)
 }
 
 func appendFB2Identities(out *model.DatasetRecord, desc *model.FB2Description, observation string) {
@@ -725,24 +729,30 @@ func hasFB2TitleInfoClaims(titleInfo *model.FB2TitleInfo) bool {
 		titleInfo.Language != "" || titleInfo.SourceLang != "" || len(titleInfo.Sequences) > 0)
 }
 
-func appendFB2TitleInfoClaims(titleInfo *model.FB2TitleInfo, claims *model.BibliographicClaims, observation string) {
-	if titleInfo.Title != "" {
-		claims.Title = append(claims.Title, model.Claim{Observation: observation, Value: titleInfo.Title})
+func appendFB2TitleInfoClaims(
+	titleInfo *model.FB2TitleInfo,
+	claims *model.BibliographicClaims,
+	observation string,
+	quality fb2MetadataQuality,
+	path string,
+) {
+	if title := quality.text(path+".title", titleInfo.Title); title != "" {
+		claims.Title = append(claims.Title, model.Claim{Observation: observation, Value: title})
 	}
-	if len(titleInfo.Authors) > 0 {
-		claims.Authors = append(claims.Authors, model.Claim{Observation: observation, Value: fb2PersonValues(titleInfo.Authors)})
+	if authors := fb2PersonValues(titleInfo.Authors, quality, path+".authors"); len(authors) > 0 {
+		claims.Authors = append(claims.Authors, model.Claim{Observation: observation, Value: authors})
 	}
-	if len(titleInfo.Translators) > 0 {
-		claims.Translators = append(claims.Translators, model.Claim{Observation: observation, Value: fb2PersonValues(titleInfo.Translators)})
+	if translators := fb2PersonValues(titleInfo.Translators, quality, path+".translators"); len(translators) > 0 {
+		claims.Translators = append(claims.Translators, model.Claim{Observation: observation, Value: translators})
 	}
 	if len(titleInfo.Genres) > 0 {
 		claims.Genres = append(claims.Genres, model.Claim{Observation: observation, Value: fb2GenreValues(titleInfo.Genres)})
 	}
-	if titleInfo.Annotation != "" {
-		claims.Annotation = append(claims.Annotation, model.Claim{Observation: observation, Value: titleInfo.Annotation})
+	if annotation := quality.text(path+".annotation", titleInfo.Annotation); annotation != "" {
+		claims.Annotation = append(claims.Annotation, model.Claim{Observation: observation, Value: annotation})
 	}
-	if titleInfo.Keywords != "" {
-		claims.Keywords = append(claims.Keywords, model.Claim{Observation: observation, Value: titleInfo.Keywords})
+	if keywords := quality.text(path+".keywords", titleInfo.Keywords); keywords != "" {
+		claims.Keywords = append(claims.Keywords, model.Claim{Observation: observation, Value: keywords})
 	}
 	if titleInfo.Date != nil {
 		claims.BibliographicDate = append(claims.BibliographicDate, model.Claim{Observation: observation, Value: fb2DateValue(*titleInfo.Date)})
@@ -753,17 +763,17 @@ func appendFB2TitleInfoClaims(titleInfo *model.FB2TitleInfo, claims *model.Bibli
 	if titleInfo.SourceLang != "" {
 		claims.SourceLanguage = append(claims.SourceLanguage, model.Claim{Observation: observation, Value: titleInfo.SourceLang})
 	}
-	if len(titleInfo.Sequences) > 0 {
-		claims.Sequences = append(claims.Sequences, model.Claim{Observation: observation, Value: fb2SequenceValues(titleInfo.Sequences)})
+	if sequences := fb2SequenceValues(titleInfo.Sequences, quality, path+".sequences"); len(sequences) > 0 {
+		claims.Sequences = append(claims.Sequences, model.Claim{Observation: observation, Value: sequences})
 	}
 }
 
-func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string) {
+func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string, quality fb2MetadataQuality) {
 	if desc.DocumentInfo != nil {
 		docInfo := desc.DocumentInfo
-		if len(docInfo.Authors) > 0 {
+		if authors := fb2PersonValues(docInfo.Authors, quality, "description.document_info.authors"); len(authors) > 0 {
 			claims := documentClaims(out)
-			claims.Authors = append(claims.Authors, model.Claim{Observation: observation, Value: fb2PersonValues(docInfo.Authors)})
+			claims.Authors = append(claims.Authors, model.Claim{Observation: observation, Value: authors})
 		}
 		if docInfo.ProgramUsed != "" {
 			claims := documentClaims(out)
@@ -777,21 +787,21 @@ func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Descriptio
 			claims := documentClaims(out)
 			claims.SourceURLs = append(claims.SourceURLs, model.Claim{Observation: observation, Value: docInfo.SrcURLs})
 		}
-		if docInfo.SrcOCR != "" {
+		if srcOCR := quality.text("description.document_info.src_ocr", docInfo.SrcOCR); srcOCR != "" {
 			claims := documentClaims(out)
-			claims.SourceOCR = append(claims.SourceOCR, model.Claim{Observation: observation, Value: docInfo.SrcOCR})
+			claims.SourceOCR = append(claims.SourceOCR, model.Claim{Observation: observation, Value: srcOCR})
 		}
 		if docInfo.Version != "" {
 			claims := documentClaims(out)
 			claims.Version = append(claims.Version, model.Claim{Observation: observation, Value: docInfo.Version})
 		}
-		if docInfo.History != "" {
+		if history := quality.text("description.document_info.history", docInfo.History); history != "" {
 			claims := documentClaims(out)
-			claims.History = append(claims.History, model.Claim{Observation: observation, Value: docInfo.History})
+			claims.History = append(claims.History, model.Claim{Observation: observation, Value: history})
 		}
-		if len(docInfo.Publishers) > 0 {
+		if publishers := fb2PersonValues(docInfo.Publishers, quality, "description.document_info.publishers"); len(publishers) > 0 {
 			claims := documentClaims(out)
-			claims.Publishers = append(claims.Publishers, model.Claim{Observation: observation, Value: fb2PersonValues(docInfo.Publishers)})
+			claims.Publishers = append(claims.Publishers, model.Claim{Observation: observation, Value: publishers})
 		}
 	}
 	if len(desc.CustomInfo) > 0 {
@@ -804,21 +814,21 @@ func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Descriptio
 	}
 }
 
-func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2PublishInfo, observation string) {
+func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2PublishInfo, observation string, quality fb2MetadataQuality) {
 	if publishInfo == nil {
 		return
 	}
-	if publishInfo.BookName != "" {
+	if bookName := quality.text("description.publish_info.book_name", publishInfo.BookName); bookName != "" {
 		claims := publicationClaims(out)
-		claims.BookName = append(claims.BookName, model.Claim{Observation: observation, Value: publishInfo.BookName})
+		claims.BookName = append(claims.BookName, model.Claim{Observation: observation, Value: bookName})
 	}
-	if publishInfo.Publisher != "" {
+	if publisher := quality.text("description.publish_info.publisher", publishInfo.Publisher); publisher != "" {
 		claims := publicationClaims(out)
-		claims.Publisher = append(claims.Publisher, model.Claim{Observation: observation, Value: publishInfo.Publisher})
+		claims.Publisher = append(claims.Publisher, model.Claim{Observation: observation, Value: publisher})
 	}
-	if publishInfo.City != "" {
+	if city := quality.text("description.publish_info.city", publishInfo.City); city != "" {
 		claims := publicationClaims(out)
-		claims.City = append(claims.City, model.Claim{Observation: observation, Value: publishInfo.City})
+		claims.City = append(claims.City, model.Claim{Observation: observation, Value: city})
 	}
 	if publishInfo.Year != "" {
 		claims := publicationClaims(out)
@@ -828,21 +838,22 @@ func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2
 		claims := publicationClaims(out)
 		claims.ISBN = append(claims.ISBN, model.Claim{Observation: observation, Value: publishInfo.ISBN})
 	}
-	if len(publishInfo.Sequences) > 0 {
+	if sequences := fb2SequenceValues(publishInfo.Sequences, quality, "description.publish_info.sequences"); len(sequences) > 0 {
 		claims := publicationClaims(out)
-		claims.Sequences = append(claims.Sequences, model.Claim{Observation: observation, Value: fb2SequenceValues(publishInfo.Sequences)})
+		claims.Sequences = append(claims.Sequences, model.Claim{Observation: observation, Value: sequences})
 	}
 }
 
-func fb2PersonValues(people []model.FB2Person) []model.PersonValue {
+func fb2PersonValues(people []model.FB2Person, quality fb2MetadataQuality, path string) []model.PersonValue {
 	values := make([]model.PersonValue, 0, len(people))
 	for i, person := range people {
 		position := int64(i + 1)
+		personPath := fmt.Sprintf("%s[%d]", path, i)
 		value := model.PersonValue{
-			FirstName:  person.FirstName,
-			MiddleName: person.MiddleName,
-			LastName:   person.LastName,
-			NickName:   person.NickName,
+			FirstName:  quality.text(personPath+".first_name", person.FirstName),
+			MiddleName: quality.text(personPath+".middle_name", person.MiddleName),
+			LastName:   quality.text(personPath+".last_name", person.LastName),
+			NickName:   quality.text(personPath+".nick_name", person.NickName),
 			Emails:     person.Emails,
 			Homepages:  person.HomePages,
 			Position:   &position,
@@ -850,9 +861,15 @@ func fb2PersonValues(people []model.FB2Person) []model.PersonValue {
 		if person.ID != "" {
 			value.Identities = append(value.Identities, model.IdentityTarget{Scheme: "fb2.person", Value: person.ID})
 		}
-		values = append(values, value)
+		if hasRenderablePersonName(value) {
+			values = append(values, value)
+		}
 	}
 	return values
+}
+
+func hasRenderablePersonName(value model.PersonValue) bool {
+	return value.FirstName != "" || value.MiddleName != "" || value.LastName != ""
 }
 
 func fb2GenreValues(genres []model.FB2Genre) []model.GenreValue {
@@ -863,21 +880,67 @@ func fb2GenreValues(genres []model.FB2Genre) []model.GenreValue {
 	return values
 }
 
-func fb2SequenceValues(sequences []model.FB2Sequence) []model.SequenceValue {
+func fb2SequenceValues(sequences []model.FB2Sequence, quality fb2MetadataQuality, path string) []model.SequenceValue {
 	values := make([]model.SequenceValue, 0, len(sequences))
-	for _, sequence := range sequences {
-		values = append(values, fb2SequenceValue(sequence))
+	for i, sequence := range sequences {
+		value := fb2SequenceValue(sequence, quality, fmt.Sprintf("%s[%d]", path, i))
+		if value.Name != "" || len(value.Sequences) > 0 {
+			values = append(values, value)
+		}
 	}
 	return values
 }
 
-func fb2SequenceValue(sequence model.FB2Sequence) model.SequenceValue {
+func fb2SequenceValue(sequence model.FB2Sequence, quality fb2MetadataQuality, path string) model.SequenceValue {
 	return model.SequenceValue{
-		Name:      sequence.Name,
+		Name:      quality.text(path+".name", sequence.Name),
 		Number:    numberValue(sequence.Number),
 		Language:  sequence.Lang,
-		Sequences: fb2SequenceValues(sequence.Nested),
+		Sequences: fb2SequenceValues(sequence.Nested, quality, path+".sequences"),
 	}
+}
+
+type fb2MetadataQuality struct {
+	enabled     bool
+	observation string
+	out         *model.DatasetRecord
+}
+
+func (q fb2MetadataQuality) text(path string, value string) string {
+	if !q.enabled || value == "" {
+		return value
+	}
+	meaningful, replacement := replacementOnlyTextStats(value)
+	if meaningful == 0 || meaningful != replacement {
+		return value
+	}
+	q.out.Issues = append(q.out.Issues, model.Issue{
+		Observation: q.observation,
+		Stage:       "quality",
+		Code:        "unicode_replacement_only",
+		Path:        path,
+		Message:     "FB2 metadata field contains only Unicode replacement characters",
+		Details: map[string]any{
+			"replacement_characters": replacement,
+		},
+		Retryable: false,
+	})
+	return ""
+}
+
+func replacementOnlyTextStats(value string) (int, int) {
+	meaningful := 0
+	replacement := 0
+	for _, r := range value {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			continue
+		}
+		meaningful++
+		if r == utf8.RuneError {
+			replacement++
+		}
+	}
+	return meaningful, replacement
 }
 
 func fb2DateValue(date model.FB2Date) model.DateValue {

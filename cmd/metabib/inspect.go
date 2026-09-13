@@ -67,6 +67,7 @@ type inspectSummary struct {
 	Ordering                   string                             `json:"ordering,omitempty"`
 	ParseFB2                   bool                               `json:"parse_fb2"`
 	FB2Coverage                string                             `json:"fb2_coverage,omitempty"`
+	FB2ReplacementQualityCheck bool                               `json:"fb2_replacement_quality_check"`
 	FB2BodyFingerprints        string                             `json:"fb2_body_fingerprints,omitempty"`
 	ContentChecksum            string                             `json:"content_checksum,omitempty"`
 	RecordsRead                int64                              `json:"records_read,omitempty"`
@@ -420,6 +421,7 @@ func datasetInspectSummary(inputPath string, dataset model.Dataset, verbose bool
 		Ordering:                   dataset.Ordering.Mode,
 		ParseFB2:                   dataset.Processing.ParseFB2,
 		FB2Coverage:                dataset.Processing.FB2Coverage,
+		FB2ReplacementQualityCheck: dataset.Processing.FB2ReplacementQualityCheck,
 		FB2BodyFingerprints:        fb2BodyFingerprintCoverage(dataset),
 		ContentChecksum:            dataset.Processing.ArchiveContentChecksum.Algorithm,
 	}
@@ -471,6 +473,7 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 			"  %s %s\n"+
 			"  %s %t\n"+
 			"  %s %s\n"+
+			"  %s %t\n"+
 			"  %s %s\n"+
 			"  %s %s\n",
 		style.header("Dataset"),
@@ -520,6 +523,8 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 		summary.ParseFB2,
 		style.label("fb2 coverage:"),
 		summary.FB2Coverage,
+		style.label("fb2 replacement quality check:"),
+		summary.FB2ReplacementQualityCheck,
 		style.label("fb2 body fingerprints:"),
 		summary.FB2BodyFingerprints,
 		style.label("content checksum:"),

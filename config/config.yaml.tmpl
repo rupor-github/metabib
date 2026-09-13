@@ -179,6 +179,10 @@ processing:
   # title-info and is faster, but loses document-info/publish-info/custom-info.
   fb2_description_tree: true
 
+  # Detect FB2 metadata fields made only of Unicode replacement characters and
+  # omit those corrupted values from dataset claims while recording issues.
+  fb2_replacement_quality_check: true
+
   # Calculate FB2 body/section fingerprints for later FLibrary compilation
   # detection. Requires parse_fb2 because it extends the same XML parse pass.
   fb2_body_fingerprints: true

@@ -493,6 +493,7 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 		databaseIndex{},
 		map[string]string{currentPath: "archive-0001"},
 		false,
+		true,
 		out,
 		nil,
 	); err != nil {
@@ -554,6 +555,7 @@ func TestMergeArchiveManifestsRecordsFilenameMatch(t *testing.T) {
 		},
 		map[string]string{archivePath: "archive-0001"},
 		false,
+		true,
 		out,
 		nil,
 	); err != nil {
@@ -629,6 +631,7 @@ func TestMergeArchiveManifestsRecordsJoinedFilenameAliasOwner(t *testing.T) {
 		},
 		map[string]string{archivePath: "archive-0001"},
 		false,
+		true,
 		out,
 		nil,
 	); err != nil {
@@ -688,6 +691,7 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 		},
 		map[string]string{archivePath: "archive-0001"},
 		false,
+		true,
 		out,
 		nil,
 	); err != nil {
@@ -758,6 +762,7 @@ func TestMergeArchiveManifestsPrefersConflictingFilenameAliasOverNumericStem(t *
 		},
 		map[string]string{archivePath: "archive-0001"},
 		false,
+		true,
 		out,
 		nil,
 	); err != nil {

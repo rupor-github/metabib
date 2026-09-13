@@ -33,6 +33,7 @@ func TestInspectDatasetSummary(t *testing.T) {
 		"ambiguous db authors usr: 2",
 		"archives: 1",
 		"parse fb2: true",
+		"fb2 replacement quality check: true",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("inspect summary = %q, missing %q", text, want)
@@ -237,7 +238,11 @@ func TestInspectDatasetDecodesFingerprintsAsJSON(t *testing.T) {
 
 	prefix := writeInspectDataset(t)
 	var out bytes.Buffer
-	if err := inspectDataset(context.Background(), inspectOptions{Input: prefix, File: "42.fb2", Index: -1, DecodeFP: true, JSON: true}, &out); err != nil {
+	if err := inspectDataset(
+		context.Background(),
+		inspectOptions{Input: prefix, File: "42.fb2", Index: -1, DecodeFP: true, JSON: true},
+		&out,
+	); err != nil {
 		t.Fatalf("inspectDataset(decode fp json) error = %v", err)
 	}
 	text := out.String()
@@ -331,9 +336,10 @@ func inspectTestDataset() model.Dataset {
 			FB2Entries: 1,
 		}},
 		Processing: model.DatasetProcessing{
-			ParseFB2:               true,
-			FB2Coverage:            "description",
-			ArchiveContentChecksum: model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
+			ParseFB2:                   true,
+			FB2Coverage:                "description",
+			FB2ReplacementQualityCheck: true,
+			ArchiveContentChecksum:     model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
 		},
 	}
 }

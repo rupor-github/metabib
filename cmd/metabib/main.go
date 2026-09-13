@@ -692,6 +692,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 				dbIndex,
 				datasetArchiveSources(dataset),
 				!dataset.Processing.ParseFB2,
+				dataset.Processing.FB2ReplacementQualityCheck,
 				out,
 				env.Log,
 			)
@@ -1264,7 +1265,7 @@ func writeDatabaseManifestRecords(
 ) (int64, error) {
 	start := time.Now()
 	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
-		converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, log)
+		converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, log)
 		if err != nil {
 			return err
 		}
@@ -1290,6 +1291,7 @@ func mergeArchiveManifests(
 	dbIndex databaseIndex,
 	archiveSources map[string]string,
 	fb2NotCollected bool,
+	fb2ReplacementQualityCheck bool,
 	out *jsonl.Writer,
 	log *zap.Logger,
 ) (int64, error) {
@@ -1372,6 +1374,7 @@ func mergeArchiveManifests(
 				databaseMatch,
 				inferredBookID,
 				fb2NotCollected,
+				fb2ReplacementQualityCheck,
 				log,
 			)
 			if err != nil {
