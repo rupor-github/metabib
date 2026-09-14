@@ -693,11 +693,18 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 				datasetArchiveSources(dataset),
 				!dataset.Processing.ParseFB2,
 				dataset.Processing.FB2ReplacementQualityCheck,
+				dataset.Processing.DatabaseReplacementQualityCheck,
 				out,
 				env.Log,
 			)
 		} else {
-			records, mergeErr = writeDatabaseManifestRecords(ctx, databaseManifest.ManifestPath, out, env.Log)
+			records, mergeErr = writeDatabaseManifestRecords(
+				ctx,
+				databaseManifest.ManifestPath,
+				dataset.Processing.DatabaseReplacementQualityCheck,
+				out,
+				env.Log,
+			)
 		}
 		if mergeErr != nil {
 			return mergeErr
@@ -1260,12 +1267,13 @@ func matchIssue(code string, path string, message string) *model.Issue {
 func writeDatabaseManifestRecords(
 	ctx context.Context,
 	manifestPath string,
+	databaseReplacementQualityCheck bool,
 	out *jsonl.Writer,
 	log *zap.Logger,
 ) (int64, error) {
 	start := time.Now()
 	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
-		converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, log)
+		converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, databaseReplacementQualityCheck, log)
 		if err != nil {
 			return err
 		}
@@ -1292,6 +1300,7 @@ func mergeArchiveManifests(
 	archiveSources map[string]string,
 	fb2NotCollected bool,
 	fb2ReplacementQualityCheck bool,
+	databaseReplacementQualityCheck bool,
 	out *jsonl.Writer,
 	log *zap.Logger,
 ) (int64, error) {
@@ -1375,6 +1384,7 @@ func mergeArchiveManifests(
 				inferredBookID,
 				fb2NotCollected,
 				fb2ReplacementQualityCheck,
+				databaseReplacementQualityCheck,
 				log,
 			)
 			if err != nil {

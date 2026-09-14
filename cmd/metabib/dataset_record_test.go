@@ -177,7 +177,7 @@ func TestDatasetRecordSelectsHighestNIDDatabaseAnnotationWithoutTitleMatch(t *te
 		}},
 	}
 
-	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, log)
+	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, true, log)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
 	}
@@ -430,8 +430,92 @@ func TestDatasetRecordFromArchiveRecordKeepsReplacementOnlyFB2ClaimsWhenDisabled
 		rec.ID.BookID,
 		false,
 		false,
+		true,
 		nil,
 	)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+	}
+	if got := converted.Claims.Bibliographic.Title[0].Value; got != corrupt {
+		t.Fatalf("title claim = %#v, want corrupted value preserved", got)
+	}
+	if len(converted.Issues) != 0 {
+		t.Fatalf("issues = %#v, want none", converted.Issues)
+	}
+}
+
+func TestDatasetRecordFromDatabaseRecordSuppressesReplacementOnlyClaims(t *testing.T) {
+	t.Parallel()
+
+	corrupt := "\uFFFD\uFFFD"
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID:     model.RecordID{Library: "flibusta", BookID: 42, FileName: "42", Extension: "fb2"},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book: &model.DBBook{
+				BookID:   42,
+				Title:    corrupt,
+				Lang:     "ru",
+				Keywords: corrupt,
+			},
+			Authors:     []model.Contributor{{ID: 7, FirstName: corrupt, LastName: corrupt, Email: "author@example.org"}},
+			Sequences:   []model.DBSequence{{ID: 10, Name: corrupt}},
+			Annotations: []model.DBAnnotation{{NID: 11, Body: corrupt}},
+			Filenames:   []string{corrupt},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecord(rec, nil)
+	if err != nil {
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
+	}
+	if converted.Claims.Bibliographic == nil {
+		t.Fatalf("bibliographic claims missing")
+	}
+	if len(converted.Claims.Bibliographic.Title) != 0 || len(converted.Claims.Bibliographic.Authors) != 0 ||
+		len(converted.Claims.Bibliographic.Keywords) != 0 || len(converted.Claims.Bibliographic.Sequences) != 0 ||
+		len(converted.Claims.Bibliographic.Annotation) != 0 {
+		t.Fatalf("corrupted database claims were not suppressed: %#v", converted.Claims.Bibliographic)
+	}
+	if len(converted.Claims.Bibliographic.Language) != 1 || converted.Claims.Bibliographic.Language[0].Value != "ru" {
+		t.Fatalf("language claim = %#v, want valid language preserved", converted.Claims.Bibliographic.Language)
+	}
+	if converted.Claims.Catalog != nil && len(converted.Claims.Catalog.Aliases) != 0 {
+		t.Fatalf("corrupted database aliases were not suppressed: %#v", converted.Claims.Catalog.Aliases)
+	}
+	if len(converted.Artifacts) != 0 {
+		t.Fatalf("corrupted database artifact metadata was not suppressed: %#v", converted.Artifacts)
+	}
+	for _, path := range []string{
+		"book.title",
+		"book.keywords",
+		"authors[0].first_name",
+		"authors[0].last_name",
+		"sequences[0].name",
+		"annotations[0].body",
+		"filenames[0]",
+	} {
+		if !hasIssuePath(converted.Issues, "unicode_replacement_only", path) {
+			t.Fatalf("issues = %#v, missing unicode_replacement_only at %s", converted.Issues, path)
+		}
+	}
+}
+
+func TestDatasetRecordFromDatabaseRecordKeepsReplacementOnlyClaimsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	corrupt := "\uFFFD\uFFFD"
+	rec := model.Record{
+		Schema: "metabib.record/1",
+		ID:     model.RecordID{Library: "flibusta", BookID: 42},
+		Source: model.RecordSources{Database: model.DatabaseSource{
+			Present: true,
+			Book:    &model.DBBook{BookID: 42, Title: corrupt},
+		}},
+	}
+
+	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, false, nil)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
 	}
@@ -619,6 +703,7 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 		bookID,
 		false,
 		true,
+		true,
 		nil,
 	)
 	if err != nil {
@@ -677,6 +762,7 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
 		map[string]string{"/archives/books.zip": "archive-0001"},
 		nil,
 		0,
+		true,
 		true,
 		true,
 		nil,

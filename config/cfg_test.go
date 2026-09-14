@@ -41,6 +41,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if !cfg.Processing.FB2ReplacementQualityCheck {
 		t.Fatal("Processing.FB2ReplacementQualityCheck = false, want true")
 	}
+	if !cfg.Processing.DatabaseReplacementQualityCheck {
+		t.Fatal("Processing.DatabaseReplacementQualityCheck = false, want true")
+	}
 	if cfg.Processing.Manifests.ArchiveDir != "" {
 		t.Fatalf("ArchiveDir = %q, want empty", cfg.Processing.Manifests.ArchiveDir)
 	}
@@ -186,6 +189,7 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"processing:",
 		"  parse_fb2: false",
 		"  fb2_replacement_quality_check: false",
+		"  database_replacement_quality_check: false",
 		"  fb2_body_fingerprints: false",
 		"inpx:",
 		"  language:",
@@ -216,6 +220,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Processing.FB2ReplacementQualityCheck {
 		t.Fatal("Processing.FB2ReplacementQualityCheck = true, want false")
+	}
+	if cfg.Processing.DatabaseReplacementQualityCheck {
+		t.Fatal("Processing.DatabaseReplacementQualityCheck = true, want false")
 	}
 	if !cfg.Rollup.ValidateCRC {
 		t.Fatal("Rollup.ValidateCRC = false, want true")

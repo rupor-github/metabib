@@ -220,6 +220,7 @@ func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
 		`"dummy"`,
 		`"archive_content_checksum"`,
 		`"fb2_replacement_quality_check"`,
+		`"database_replacement_quality_check"`,
 	} {
 		assertSchemaContains(t, schema, want)
 	}
@@ -594,8 +595,14 @@ func fullRecord() model.Record {
 					Modified:   "2026-06-22T00:00:00Z",
 					ReplacedBy: 2,
 				},
-				Authors:      []model.Contributor{{ID: 1, FirstName: "First", MiddleName: "Middle", LastName: "Last", NickName: "Nick", UID: 2, Email: "a@example.org", Homepage: "https://example.org", Gender: "m", MasterID: 3, Position: 4}},
-				Translators:  []model.Contributor{{ID: 5, FirstName: "Tr", MiddleName: "M", LastName: "Person", NickName: "TrNick", UID: 6, Email: "t@example.org", Homepage: "https://example.net", Gender: "f", MasterID: 7, Position: 8}},
+				Authors: []model.Contributor{{
+					ID: 1, FirstName: "First", MiddleName: "Middle", LastName: "Last", NickName: "Nick",
+					UID: 2, Email: "a@example.org", Homepage: "https://example.org", Gender: "m", MasterID: 3, Position: 4,
+				}},
+				Translators: []model.Contributor{{
+					ID: 5, FirstName: "Tr", MiddleName: "M", LastName: "Person", NickName: "TrNick",
+					UID: 6, Email: "t@example.org", Homepage: "https://example.net", Gender: "f", MasterID: 7, Position: 8,
+				}},
 				Illustrators: []model.Contributor{{ID: 6, FirstName: "Il", LastName: "Artist"}},
 				Genres:       []model.DBGenre{{ID: 9, Code: "sf", TranslatedCode: "sci-fi", Description: "Science fiction", Meta: "meta"}},
 				Sequences:    []model.DBSequence{{ID: 10, Name: "Cycle", Number: 1, Level: 2, Type: 3}},
@@ -606,8 +613,11 @@ func fullRecord() model.Record {
 			},
 			FB2: model.FB2Source{Present: true, Description: &model.FB2Description{
 				TitleInfo: &model.FB2TitleInfo{
-					Genres:      []model.FB2Genre{{Code: "sf", Match: "80"}},
-					Authors:     []model.FB2Person{{ID: "a1", FirstName: "Arkady", MiddleName: "N", LastName: "Strugatsky", NickName: "ABS", HomePages: []string{"https://example.org/a"}, Emails: []string{"a@example.org"}}},
+					Genres: []model.FB2Genre{{Code: "sf", Match: "80"}},
+					Authors: []model.FB2Person{{
+						ID: "a1", FirstName: "Arkady", MiddleName: "N", LastName: "Strugatsky", NickName: "ABS",
+						HomePages: []string{"https://example.org/a"}, Emails: []string{"a@example.org"},
+					}},
 					Title:       "FB2 title",
 					Annotation:  "Annotation text",
 					Keywords:    "fb2 keywords",
@@ -629,9 +639,19 @@ func fullRecord() model.Record {
 					History:     "history",
 					Publishers:  []model.FB2Person{{NickName: "publisher"}},
 				},
-				PublishInfo: &model.FB2PublishInfo{BookName: "Paper", Publisher: "Pub", City: "City", Year: "1973", ISBN: "isbn", Sequences: []model.FB2Sequence{{Name: "PaperSeq", Number: "3"}}},
-				CustomInfo:  []model.FB2CustomInfo{{Type: "source", Text: "custom"}},
-				Output:      []model.FB2Output{{Mode: "free", IncludeAll: "allow", Price: "1.25", Currency: "USD", Parts: []model.FB2OutputPart{{Type: "simple", Href: "#part", Include: "require"}}, OutputDocumentClasses: []model.FB2OutputDocumentClass{{Name: "reader", Create: "allow", Price: "0", Parts: []model.FB2OutputPart{{Href: "#part2", Include: "deny"}}}}}},
+				PublishInfo: &model.FB2PublishInfo{
+					BookName: "Paper", Publisher: "Pub", City: "City", Year: "1973", ISBN: "isbn",
+					Sequences: []model.FB2Sequence{{Name: "PaperSeq", Number: "3"}},
+				},
+				CustomInfo: []model.FB2CustomInfo{{Type: "source", Text: "custom"}},
+				Output: []model.FB2Output{{
+					Mode: "free", IncludeAll: "allow", Price: "1.25", Currency: "USD",
+					Parts: []model.FB2OutputPart{{Type: "simple", Href: "#part", Include: "require"}},
+					OutputDocumentClasses: []model.FB2OutputDocumentClass{{
+						Name: "reader", Create: "allow", Price: "0",
+						Parts: []model.FB2OutputPart{{Href: "#part2", Include: "deny"}},
+					}},
+				}},
 			}, Fingerprints: &model.ArtifactFingerprints{FB2Body: &model.FB2BodyFingerprint{Sections: []model.FB2BodySectionFingerprint{
 				{Depth: 0, Key: "gL5vU79DxqcbTqk3lTY5dw"},
 			}}}},

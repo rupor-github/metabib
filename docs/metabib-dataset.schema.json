@@ -128,6 +128,7 @@
         "parse_fb2": {"type": "boolean"},
         "fb2_coverage": {"enum": ["title_info", "description"]},
         "fb2_replacement_quality_check": {"type": "boolean"},
+        "database_replacement_quality_check": {"type": "boolean"},
         "archive_content_checksum": {"$ref": "#/$defs/checksum_option"},
         "fb2_body_fingerprints": {"$ref": "#/$defs/fb2_body_fingerprints"}
       },

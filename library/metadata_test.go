@@ -79,10 +79,11 @@ func TestDatasetForArchiveOutput(t *testing.T) {
 			Records:      2,
 		}},
 		config.ProcessingConfig{
-			ParseFB2:                   true,
-			FB2DescriptionTree:         true,
-			FB2ReplacementQualityCheck: true,
-			ArchiveContentMD5:          true,
+			ParseFB2:                        true,
+			FB2DescriptionTree:              true,
+			FB2ReplacementQualityCheck:      true,
+			DatabaseReplacementQualityCheck: true,
+			ArchiveContentMD5:               true,
 		},
 		"1.2.3",
 	)
@@ -118,6 +119,9 @@ func TestDatasetForArchiveOutput(t *testing.T) {
 	}
 	if !dataset.Processing.FB2ReplacementQualityCheck {
 		t.Fatalf("FB2ReplacementQualityCheck = false, want true")
+	}
+	if !dataset.Processing.DatabaseReplacementQualityCheck {
+		t.Fatalf("DatabaseReplacementQualityCheck = false, want true")
 	}
 	if !dataset.Processing.ArchiveContentChecksum.Enabled ||
 		dataset.Processing.ArchiveContentChecksum.Algorithm != "md5" {

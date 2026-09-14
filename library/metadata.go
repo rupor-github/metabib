@@ -39,9 +39,10 @@ func DatasetFor(
 		Normalization: model.DatasetNormalization{Model: "metabib.claims/1"},
 		Ordering:      datasetOrdering(archives),
 		Processing: model.DatasetProcessing{
-			ParseFB2:                   processing.ParseFB2,
-			FB2Coverage:                datasetFB2Coverage(processing),
-			FB2ReplacementQualityCheck: processing.FB2ReplacementQualityCheck,
+			ParseFB2:                        processing.ParseFB2,
+			FB2Coverage:                     datasetFB2Coverage(processing),
+			FB2ReplacementQualityCheck:      processing.FB2ReplacementQualityCheck,
+			DatabaseReplacementQualityCheck: processing.DatabaseReplacementQualityCheck,
 			ArchiveContentChecksum: model.DatasetChecksumOption{
 				Enabled:   processing.ArchiveContentMD5,
 				Algorithm: checksumAlgorithm(processing.ArchiveContentMD5),

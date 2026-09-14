@@ -41,41 +41,42 @@ type inspectOptions struct {
 }
 
 type inspectSummary struct {
-	Input                      string                             `json:"input"`
-	Schema                     string                             `json:"schema"`
-	ID                         string                             `json:"id,omitempty"`
-	RecordSchema               string                             `json:"record_schema"`
-	Library                    string                             `json:"library,omitempty"`
-	Created                    string                             `json:"created,omitempty"`
-	Records                    int64                              `json:"records"`
-	Generator                  string                             `json:"generator,omitempty"`
-	Database                   string                             `json:"database,omitempty"`
-	DumpDate                   string                             `json:"dump_date,omitempty"`
-	ScopedDBAuthorAmbiguity    bool                               `json:"scoped_db_author_ambiguity,omitempty"`
-	AmbiguousDBAuthorGroups    int                                `json:"ambiguous_db_author_groups"`
-	AmbiguousDBAuthors         int                                `json:"ambiguous_db_authors"`
-	AmbiguousDBAuthorGroupsFB2 int                                `json:"ambiguous_db_author_groups_fb2"`
-	AmbiguousDBAuthorsFB2      int                                `json:"ambiguous_db_authors_fb2"`
-	AmbiguousDBAuthorGroupsUSR int                                `json:"ambiguous_db_author_groups_usr"`
-	AmbiguousDBAuthorsUSR      int                                `json:"ambiguous_db_authors_usr"`
-	AmbiguousDBAuthorMap       []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map,omitempty"`
-	AmbiguousDBAuthorMapFB2    []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map_fb2,omitempty"`
-	AmbiguousDBAuthorMapUSR    []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map_usr,omitempty"`
-	Archives                   int                                `json:"archives"`
-	ArchiveEntries             int                                `json:"archive_entries"`
-	FB2Entries                 int                                `json:"fb2_entries"`
-	Ordering                   string                             `json:"ordering,omitempty"`
-	ParseFB2                   bool                               `json:"parse_fb2"`
-	FB2Coverage                string                             `json:"fb2_coverage,omitempty"`
-	FB2ReplacementQualityCheck bool                               `json:"fb2_replacement_quality_check"`
-	FB2BodyFingerprints        string                             `json:"fb2_body_fingerprints,omitempty"`
-	ContentChecksum            string                             `json:"content_checksum,omitempty"`
-	RecordsRead                int64                              `json:"records_read,omitempty"`
-	Validation                 string                             `json:"validation,omitempty"`
-	IssueRecords               int64                              `json:"issue_records,omitempty"`
-	Issues                     int64                              `json:"issues,omitempty"`
-	IssuesByStage              map[string]int64                   `json:"issues_by_stage,omitempty"`
-	IssuesByCode               map[string]int64                   `json:"issues_by_code,omitempty"`
+	Input                           string                             `json:"input"`
+	Schema                          string                             `json:"schema"`
+	ID                              string                             `json:"id,omitempty"`
+	RecordSchema                    string                             `json:"record_schema"`
+	Library                         string                             `json:"library,omitempty"`
+	Created                         string                             `json:"created,omitempty"`
+	Records                         int64                              `json:"records"`
+	Generator                       string                             `json:"generator,omitempty"`
+	Database                        string                             `json:"database,omitempty"`
+	DumpDate                        string                             `json:"dump_date,omitempty"`
+	ScopedDBAuthorAmbiguity         bool                               `json:"scoped_db_author_ambiguity,omitempty"`
+	AmbiguousDBAuthorGroups         int                                `json:"ambiguous_db_author_groups"`
+	AmbiguousDBAuthors              int                                `json:"ambiguous_db_authors"`
+	AmbiguousDBAuthorGroupsFB2      int                                `json:"ambiguous_db_author_groups_fb2"`
+	AmbiguousDBAuthorsFB2           int                                `json:"ambiguous_db_authors_fb2"`
+	AmbiguousDBAuthorGroupsUSR      int                                `json:"ambiguous_db_author_groups_usr"`
+	AmbiguousDBAuthorsUSR           int                                `json:"ambiguous_db_authors_usr"`
+	AmbiguousDBAuthorMap            []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map,omitempty"`
+	AmbiguousDBAuthorMapFB2         []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map_fb2,omitempty"`
+	AmbiguousDBAuthorMapUSR         []model.INPXAmbiguousDBAuthorGroup `json:"ambiguous_db_author_map_usr,omitempty"`
+	Archives                        int                                `json:"archives"`
+	ArchiveEntries                  int                                `json:"archive_entries"`
+	FB2Entries                      int                                `json:"fb2_entries"`
+	Ordering                        string                             `json:"ordering,omitempty"`
+	ParseFB2                        bool                               `json:"parse_fb2"`
+	FB2Coverage                     string                             `json:"fb2_coverage,omitempty"`
+	FB2ReplacementQualityCheck      bool                               `json:"fb2_replacement_quality_check"`
+	DatabaseReplacementQualityCheck bool                               `json:"database_replacement_quality_check"`
+	FB2BodyFingerprints             string                             `json:"fb2_body_fingerprints,omitempty"`
+	ContentChecksum                 string                             `json:"content_checksum,omitempty"`
+	RecordsRead                     int64                              `json:"records_read,omitempty"`
+	Validation                      string                             `json:"validation,omitempty"`
+	IssueRecords                    int64                              `json:"issue_records,omitempty"`
+	Issues                          int64                              `json:"issues,omitempty"`
+	IssuesByStage                   map[string]int64                   `json:"issues_by_stage,omitempty"`
+	IssuesByCode                    map[string]int64                   `json:"issues_by_code,omitempty"`
 }
 
 type inspectRecordResult struct {
@@ -395,35 +396,36 @@ func datasetInspectSummary(inputPath string, dataset model.Dataset, verbose bool
 		fb2Entries += archive.FB2Entries
 	}
 	return inspectSummary{
-		Input:                      inputPath,
-		Schema:                     dataset.Schema,
-		ID:                         dataset.ID,
-		RecordSchema:               dataset.RecordSchema,
-		Library:                    dataset.Library,
-		Created:                    dataset.Created,
-		Records:                    dataset.Records,
-		Generator:                  strings.TrimSpace(dataset.Generator.Name + " " + dataset.Generator.Version),
-		Database:                   database,
-		DumpDate:                   dumpDate,
-		ScopedDBAuthorAmbiguity:    scoped,
-		AmbiguousDBAuthorGroups:    ambiguousGroups,
-		AmbiguousDBAuthors:         ambiguousAuthors,
-		AmbiguousDBAuthorGroupsFB2: ambiguousGroupsFB2,
-		AmbiguousDBAuthorsFB2:      ambiguousAuthorsFB2,
-		AmbiguousDBAuthorGroupsUSR: ambiguousGroupsUSR,
-		AmbiguousDBAuthorsUSR:      ambiguousAuthorsUSR,
-		AmbiguousDBAuthorMap:       ambiguousMap,
-		AmbiguousDBAuthorMapFB2:    ambiguousMapFB2,
-		AmbiguousDBAuthorMapUSR:    ambiguousMapUSR,
-		Archives:                   len(dataset.Archives),
-		ArchiveEntries:             entries,
-		FB2Entries:                 fb2Entries,
-		Ordering:                   dataset.Ordering.Mode,
-		ParseFB2:                   dataset.Processing.ParseFB2,
-		FB2Coverage:                dataset.Processing.FB2Coverage,
-		FB2ReplacementQualityCheck: dataset.Processing.FB2ReplacementQualityCheck,
-		FB2BodyFingerprints:        fb2BodyFingerprintCoverage(dataset),
-		ContentChecksum:            dataset.Processing.ArchiveContentChecksum.Algorithm,
+		Input:                           inputPath,
+		Schema:                          dataset.Schema,
+		ID:                              dataset.ID,
+		RecordSchema:                    dataset.RecordSchema,
+		Library:                         dataset.Library,
+		Created:                         dataset.Created,
+		Records:                         dataset.Records,
+		Generator:                       strings.TrimSpace(dataset.Generator.Name + " " + dataset.Generator.Version),
+		Database:                        database,
+		DumpDate:                        dumpDate,
+		ScopedDBAuthorAmbiguity:         scoped,
+		AmbiguousDBAuthorGroups:         ambiguousGroups,
+		AmbiguousDBAuthors:              ambiguousAuthors,
+		AmbiguousDBAuthorGroupsFB2:      ambiguousGroupsFB2,
+		AmbiguousDBAuthorsFB2:           ambiguousAuthorsFB2,
+		AmbiguousDBAuthorGroupsUSR:      ambiguousGroupsUSR,
+		AmbiguousDBAuthorsUSR:           ambiguousAuthorsUSR,
+		AmbiguousDBAuthorMap:            ambiguousMap,
+		AmbiguousDBAuthorMapFB2:         ambiguousMapFB2,
+		AmbiguousDBAuthorMapUSR:         ambiguousMapUSR,
+		Archives:                        len(dataset.Archives),
+		ArchiveEntries:                  entries,
+		FB2Entries:                      fb2Entries,
+		Ordering:                        dataset.Ordering.Mode,
+		ParseFB2:                        dataset.Processing.ParseFB2,
+		FB2Coverage:                     dataset.Processing.FB2Coverage,
+		FB2ReplacementQualityCheck:      dataset.Processing.FB2ReplacementQualityCheck,
+		DatabaseReplacementQualityCheck: dataset.Processing.DatabaseReplacementQualityCheck,
+		FB2BodyFingerprints:             fb2BodyFingerprintCoverage(dataset),
+		ContentChecksum:                 dataset.Processing.ArchiveContentChecksum.Algorithm,
 	}
 }
 
@@ -473,6 +475,7 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 			"  %s %s\n"+
 			"  %s %t\n"+
 			"  %s %s\n"+
+			"  %s %t\n"+
 			"  %s %t\n"+
 			"  %s %s\n"+
 			"  %s %s\n",
@@ -525,6 +528,8 @@ func writeInspectSummary(out io.Writer, summary inspectSummary, jsonOutput bool)
 		summary.FB2Coverage,
 		style.label("fb2 replacement quality check:"),
 		summary.FB2ReplacementQualityCheck,
+		style.label("database replacement quality check:"),
+		summary.DatabaseReplacementQualityCheck,
 		style.label("fb2 body fingerprints:"),
 		summary.FB2BodyFingerprints,
 		style.label("content checksum:"),

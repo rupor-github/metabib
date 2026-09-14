@@ -475,12 +475,14 @@ section fingerprints while archive manifests are built. This requires
 `processing.parse_fb2: true`. Archive manifests built with different fingerprint
 settings, model, or section encoding are rejected and must be rebuilt.
 
-`processing.fb2_replacement_quality_check` defaults to `true`. During dataset
-merge, metabib detects parsed FB2 metadata fields whose meaningful characters are
-only Unicode replacement characters (`�`). Those values are omitted from emitted
-dataset claims and recorded as `quality/unicode_replacement_only` issues. The raw
-parsed FB2 source in manifests is not rewritten, and changing this setting does
-not require rebuilding archive manifests.
+`processing.fb2_replacement_quality_check` and
+`processing.database_replacement_quality_check` default to `true`. During dataset
+merge, metabib detects FB2 and database metadata fields whose meaningful
+characters are only Unicode replacement characters (`�`). Those values are
+omitted from emitted dataset claims and recorded as
+`quality/unicode_replacement_only` issues. Raw parsed FB2 and database source
+data in manifests is not rewritten, and changing these settings does not require
+rebuilding manifests.
 
 By default, `cache` requires all SQL dump files to report the same dump date
 before import. Use `cache --allow-dump-date-mismatch` to accept mixed dump dates;
@@ -839,10 +841,10 @@ standard unknown-author value `неизвестный,автор,:` unless `--pr
 has FB2 authors to use. Database author disambiguation applies only when DB
 authors are selected.
 
-When `processing.fb2_replacement_quality_check` suppresses corrupted FB2 title or
-author claims, INPX generation treats those fields as absent. This lets database
-metadata remain available even with `--prefer-fb2 replace`; FB2 people without a
-renderable first, middle, or last name are ignored for author replacement. If no
+When replacement quality checks suppress corrupted title or author claims, INPX
+generation treats those fields as absent. This lets database metadata remain
+available even with `--prefer-fb2 replace`; people are ignored for author
+replacement only when first, middle, and last name are all non-renderable. If no
 usable title remains, `mhl-inpx` emits a dummy row for archive records, while
 `flib-inpx` and `inpx` omit the record.
 

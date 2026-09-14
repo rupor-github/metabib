@@ -34,6 +34,7 @@ func TestInspectDatasetSummary(t *testing.T) {
 		"archives: 1",
 		"parse fb2: true",
 		"fb2 replacement quality check: true",
+		"database replacement quality check: true",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("inspect summary = %q, missing %q", text, want)
@@ -336,10 +337,11 @@ func inspectTestDataset() model.Dataset {
 			FB2Entries: 1,
 		}},
 		Processing: model.DatasetProcessing{
-			ParseFB2:                   true,
-			FB2Coverage:                "description",
-			FB2ReplacementQualityCheck: true,
-			ArchiveContentChecksum:     model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
+			ParseFB2:                        true,
+			FB2Coverage:                     "description",
+			FB2ReplacementQualityCheck:      true,
+			DatabaseReplacementQualityCheck: true,
+			ArchiveContentChecksum:          model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
 		},
 	}
 }

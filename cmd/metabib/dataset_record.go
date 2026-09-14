@@ -13,7 +13,7 @@ import (
 )
 
 func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
-	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false, true, nil)
+	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false, true, true, nil)
 }
 
 func datasetRecordFromRecordWithMatch(
@@ -23,6 +23,7 @@ func datasetRecordFromRecordWithMatch(
 	inferredBookID int64,
 	fb2NotCollected bool,
 	fb2ReplacementQualityCheck bool,
+	databaseReplacementQualityCheck bool,
 	log *zap.Logger,
 ) (model.DatasetRecord, error) {
 	libraryName := rec.ID.Library
@@ -81,7 +82,7 @@ func datasetRecordFromRecordWithMatch(
 			artifact.Fingerprints = rec.Source.FB2.Fingerprints
 		}
 		out.Artifacts = []model.Artifact{artifact}
-		appendDatabaseObservation(&out, rec, databaseMatch, log)
+		appendDatabaseObservation(&out, rec, databaseMatch, databaseReplacementQualityCheck, log)
 		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index, fb2NotCollected)
 		appendSidecarObservations(&out, rec, source, &index)
@@ -95,7 +96,7 @@ func datasetRecordFromRecordWithMatch(
 		Library: libraryName,
 		Locator: model.RecordLocator{Kind: "database_book", Source: "database", BookID: positiveBookID(bookID)},
 	}
-	appendDatabaseObservation(&out, rec, nil, log)
+	appendDatabaseObservation(&out, rec, nil, databaseReplacementQualityCheck, log)
 	appendRecordIssues(&out, rec)
 	return out, nil
 }
@@ -116,7 +117,13 @@ func archiveArtifactName(id model.RecordID) string {
 	return id.FileName + "." + id.Extension
 }
 
-func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record, databaseMatch *model.Match, log *zap.Logger) {
+func appendDatabaseObservation(
+	out *model.DatasetRecord,
+	rec model.Record,
+	databaseMatch *model.Match,
+	databaseReplacementQualityCheck bool,
+	log *zap.Logger,
+) {
 	if !rec.Source.Database.Present {
 		if rec.ID.Archive != nil {
 			out.Observations = append(out.Observations, model.Observation{
@@ -142,9 +149,16 @@ func appendDatabaseObservation(out *model.DatasetRecord, rec model.Record, datab
 		Coverage: "complete",
 		Match:    databaseMatch,
 	})
+	quality := metadataQuality{
+		enabled:     databaseReplacementQualityCheck,
+		observation: "db",
+		source:      "Database",
+		out:         out,
+		seen:        make(map[string]struct{}),
+	}
 	appendDatabaseIdentities(out, bookID)
-	appendDatabaseClaims(out, rec.Source.Database, log)
-	appendDatabaseArtifacts(out, rec.Source.Database)
+	appendDatabaseClaims(out, rec.Source.Database, quality, log)
+	appendDatabaseArtifacts(out, rec.Source.Database, quality)
 	appendDatabaseRelations(out, rec.Source.Database)
 }
 
@@ -177,43 +191,43 @@ func appendDatabaseIdentities(out *model.DatasetRecord, bookID int64) {
 	})
 }
 
-func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource, log *zap.Logger) {
+func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource, quality metadataQuality, log *zap.Logger) {
 	if db.Book != nil {
-		appendDatabaseBookClaims(out, *db.Book)
+		appendDatabaseBookClaims(out, *db.Book, quality)
 	}
-	if len(db.Authors) > 0 {
+	if authors := contributorValues(db.Authors, quality, "authors"); len(authors) > 0 {
 		bib := bibliographicClaims(out)
 		bib.Authors = append(
 			bib.Authors,
-			model.Claim{Observation: "db", Value: contributorValues(db.Authors)},
+			model.Claim{Observation: "db", Value: authors},
 		)
 	}
-	if len(db.Translators) > 0 {
+	if translators := contributorValues(db.Translators, quality, "translators"); len(translators) > 0 {
 		bib := bibliographicClaims(out)
 		bib.Translators = append(
 			bib.Translators,
-			model.Claim{Observation: "db", Value: contributorValues(db.Translators)},
+			model.Claim{Observation: "db", Value: translators},
 		)
 	}
-	if len(db.Illustrators) > 0 {
+	if illustrators := contributorValues(db.Illustrators, quality, "illustrators"); len(illustrators) > 0 {
 		bib := bibliographicClaims(out)
 		bib.Illustrators = append(
 			bib.Illustrators,
-			model.Claim{Observation: "db", Value: contributorValues(db.Illustrators)},
+			model.Claim{Observation: "db", Value: illustrators},
 		)
 	}
-	if len(db.Genres) > 0 {
+	if genres := genreValues(db.Genres, quality); len(genres) > 0 {
 		bib := bibliographicClaims(out)
 		bib.Genres = append(
 			bib.Genres,
-			model.Claim{Observation: "db", Value: genreValues(db.Genres)},
+			model.Claim{Observation: "db", Value: genres},
 		)
 	}
-	if len(db.Sequences) > 0 {
+	if sequences := sequenceValues(db.Sequences, quality); len(sequences) > 0 {
 		bib := bibliographicClaims(out)
 		bib.Sequences = append(
 			bib.Sequences,
-			model.Claim{Observation: "db", Value: sequenceValues(db.Sequences)},
+			model.Claim{Observation: "db", Value: sequences},
 		)
 	}
 	if db.Rating != nil {
@@ -223,29 +237,34 @@ func appendDatabaseClaims(out *model.DatasetRecord, db model.DatabaseSource, log
 			model.Claim{Observation: "db", Value: ratingValue(*db.Rating)},
 		)
 	}
-	if annotation, ok := selectDatabaseAnnotation(db, log); ok {
-		bib := bibliographicClaims(out)
-		bib.Annotation = append(
-			bib.Annotation,
-			model.Claim{Observation: "db", Value: annotation.Body, Raw: annotation},
-		)
+	if annotation, annotationIndex, ok := selectDatabaseAnnotation(db, log); ok {
+		annotationPath := fmt.Sprintf("annotations[%d]", annotationIndex)
+		annotation.Title = quality.text(annotationPath+".title", annotation.Title)
+		if body := quality.text(annotationPath+".body", annotation.Body); body != "" {
+			annotation.Body = body
+			bib := bibliographicClaims(out)
+			bib.Annotation = append(
+				bib.Annotation,
+				model.Claim{Observation: "db", Value: body, Raw: annotation},
+			)
+		}
 	}
-	if len(db.Filenames) > 0 {
+	if aliases := aliasValues(db.Filenames, quality); len(aliases) > 0 {
 		catalog := catalogClaims(out)
 		catalog.Aliases = append(
 			catalog.Aliases,
-			model.Claim{Observation: "db", Value: aliasValues(db.Filenames)},
+			model.Claim{Observation: "db", Value: aliases},
 		)
 	}
 }
 
-func selectDatabaseAnnotation(db model.DatabaseSource, log *zap.Logger) (model.DBAnnotation, bool) {
+func selectDatabaseAnnotation(db model.DatabaseSource, log *zap.Logger) (model.DBAnnotation, int, bool) {
 	annotations := db.Annotations
 	if len(annotations) == 0 {
-		return model.DBAnnotation{}, false
+		return model.DBAnnotation{}, 0, false
 	}
 	if len(annotations) == 1 {
-		return annotations[0], annotations[0].Body != ""
+		return annotations[0], 0, annotations[0].Body != ""
 	}
 	title := ""
 	bookID := int64(0)
@@ -254,30 +273,33 @@ func selectDatabaseAnnotation(db model.DatabaseSource, log *zap.Logger) (model.D
 		bookID = db.Book.BookID
 	}
 	var selected model.DBAnnotation
+	selectedIndex := 0
 	found := false
-	for _, annotation := range annotations {
+	for i, annotation := range annotations {
 		if annotation.Body == "" || !strings.EqualFold(strings.TrimSpace(annotation.Title), title) {
 			continue
 		}
 		if !found || annotation.NID > selected.NID {
 			selected = annotation
+			selectedIndex = i
 			found = true
 		}
 	}
 	if found {
-		return selected, true
+		return selected, selectedIndex, true
 	}
-	for _, annotation := range annotations {
+	for i, annotation := range annotations {
 		if annotation.Body == "" {
 			continue
 		}
 		if !found || annotation.NID > selected.NID {
 			selected = annotation
+			selectedIndex = i
 			found = true
 		}
 	}
 	if !found {
-		return model.DBAnnotation{}, false
+		return model.DBAnnotation{}, 0, false
 	}
 	if log != nil {
 		log.Debug(
@@ -288,29 +310,29 @@ func selectDatabaseAnnotation(db model.DatabaseSource, log *zap.Logger) (model.D
 			zap.Int64("selected_nid", selected.NID),
 		)
 	}
-	return selected, true
+	return selected, selectedIndex, true
 }
 
-func appendDatabaseBookClaims(out *model.DatasetRecord, book model.DBBook) {
-	if book.Title != "" {
+func appendDatabaseBookClaims(out *model.DatasetRecord, book model.DBBook, quality metadataQuality) {
+	if title := quality.text("book.title", book.Title); title != "" {
 		bib := bibliographicClaims(out)
 		bib.Title = append(
 			bib.Title,
-			model.Claim{Observation: "db", Value: book.Title},
+			model.Claim{Observation: "db", Value: title},
 		)
 	}
-	if book.Lang != "" {
+	if lang := quality.text("book.lang", book.Lang); lang != "" {
 		bib := bibliographicClaims(out)
 		bib.Language = append(
 			bib.Language,
-			model.Claim{Observation: "db", Value: book.Lang},
+			model.Claim{Observation: "db", Value: lang},
 		)
 	}
-	if book.SrcLang != "" {
+	if srcLang := quality.text("book.src_lang", book.SrcLang); srcLang != "" {
 		bib := bibliographicClaims(out)
 		bib.SourceLanguage = append(
 			bib.SourceLanguage,
-			model.Claim{Observation: "db", Value: book.SrcLang},
+			model.Claim{Observation: "db", Value: srcLang},
 		)
 	}
 	if book.Year != 0 {
@@ -321,57 +343,60 @@ func appendDatabaseBookClaims(out *model.DatasetRecord, book model.DBBook) {
 			model.Claim{Observation: "db", Value: model.YearValue{Value: &year}},
 		)
 	}
-	if book.Time != "" {
+	if bookTime := quality.text("book.time", book.Time); bookTime != "" {
 		catalog := catalogClaims(out)
-		catalog.Time = append(catalog.Time, model.Claim{Observation: "db", Value: book.Time})
+		catalog.Time = append(catalog.Time, model.Claim{Observation: "db", Value: bookTime})
 	}
-	if book.Modified != "" {
+	if modified := quality.text("book.modified", book.Modified); modified != "" {
 		catalog := catalogClaims(out)
 		catalog.Modified = append(
 			catalog.Modified,
-			model.Claim{Observation: "db", Value: book.Modified},
+			model.Claim{Observation: "db", Value: modified},
 		)
 	}
-	if book.Deleted != "" {
+	if deleted := quality.text("book.deleted", book.Deleted); deleted != "" {
 		catalog := catalogClaims(out)
 		catalog.Deleted = append(
 			catalog.Deleted,
-			model.Claim{Observation: "db", Value: deletionValue(book.Deleted)},
+			model.Claim{Observation: "db", Value: deletionValue(deleted)},
 		)
 	}
-	if book.FileAuthor != "" {
+	if fileAuthor := quality.text("book.file_author", book.FileAuthor); fileAuthor != "" {
 		catalog := catalogClaims(out)
 		catalog.FileAuthor = append(
 			catalog.FileAuthor,
-			model.Claim{Observation: "db", Value: book.FileAuthor},
+			model.Claim{Observation: "db", Value: fileAuthor},
 		)
 	}
-	if book.FileType != "" || book.MD5 != "" {
+	fileType := quality.text("book.file_type", book.FileType)
+	md5 := quality.text("book.md5", book.MD5)
+	if fileType != "" || md5 != "" {
 		catalog := catalogClaims(out)
 		catalog.Status = append(catalog.Status, model.Claim{
 			Observation: "db",
-			Value:       model.CatalogStatusValue{FileType: book.FileType, MD5: book.MD5},
+			Value:       model.CatalogStatusValue{FileType: fileType, MD5: md5},
 		})
 	}
-	if book.Keywords != "" {
+	if keywords := quality.text("book.keywords", book.Keywords); keywords != "" {
 		bib := bibliographicClaims(out)
 		bib.Keywords = append(
 			bib.Keywords,
-			model.Claim{Observation: "db", Value: book.Keywords},
+			model.Claim{Observation: "db", Value: keywords},
 		)
 	}
 }
 
-func appendDatabaseArtifacts(out *model.DatasetRecord, db model.DatabaseSource) {
+func appendDatabaseArtifacts(out *model.DatasetRecord, db model.DatabaseSource, quality metadataQuality) {
 	if db.Book == nil {
 		return
 	}
 	book := *db.Book
 	name := ""
 	if len(db.Filenames) > 0 {
-		name = db.Filenames[0]
+		name = quality.text("filenames[0]", db.Filenames[0])
 	}
-	artifact := model.Artifact{Name: name, MediaType: mediaType(book.FileType)}
+	fileType := quality.text("book.file_type", book.FileType)
+	artifact := model.Artifact{Name: name, MediaType: mediaType(fileType)}
 	if book.FileSize > 0 {
 		artifact.Size = append(artifact.Size, model.ArtifactSize{
 			Observation: "db",
@@ -379,13 +404,13 @@ func appendDatabaseArtifacts(out *model.DatasetRecord, db model.DatabaseSource) 
 			Kind:        "reported",
 		})
 	}
-	if book.MD5 != "" {
+	if md5 := quality.text("book.md5", book.MD5); md5 != "" {
 		artifact.Checksums = append(artifact.Checksums, model.ArtifactChecksum{
 			Observation: "db",
 			Algorithm:   "md5",
 			Scope:       "content",
 			Origin:      "reported",
-			Value:       book.MD5,
+			Value:       md5,
 		})
 	}
 	if artifact.Name != "" || len(artifact.Size) > 0 || len(artifact.Checksums) > 0 {
@@ -447,18 +472,19 @@ func documentClaims(out *model.DatasetRecord) *model.DocumentClaims {
 	return out.Claims.Document
 }
 
-func contributorValues(contributors []model.Contributor) []model.PersonValue {
+func contributorValues(contributors []model.Contributor, quality metadataQuality, path string) []model.PersonValue {
 	values := make([]model.PersonValue, 0, len(contributors))
-	for _, contributor := range contributors {
+	for i, contributor := range contributors {
+		contributorPath := fmt.Sprintf("%s[%d]", path, i)
 		position := contributor.Position
 		value := model.PersonValue{
-			FirstName:  contributor.FirstName,
-			MiddleName: contributor.MiddleName,
-			LastName:   contributor.LastName,
-			NickName:   contributor.NickName,
-			Email:      contributor.Email,
-			Homepage:   contributor.Homepage,
-			Gender:     contributor.Gender,
+			FirstName:  quality.text(contributorPath+".first_name", contributor.FirstName),
+			MiddleName: quality.text(contributorPath+".middle_name", contributor.MiddleName),
+			LastName:   quality.text(contributorPath+".last_name", contributor.LastName),
+			NickName:   quality.text(contributorPath+".nick_name", contributor.NickName),
+			Email:      quality.text(contributorPath+".email", contributor.Email),
+			Homepage:   quality.text(contributorPath+".homepage", contributor.Homepage),
+			Gender:     quality.text(contributorPath+".gender", contributor.Gender),
 			Position:   positiveInt64(position),
 		}
 		if contributor.ID > 0 {
@@ -476,31 +502,47 @@ func contributorValues(contributors []model.Contributor) []model.PersonValue {
 		if contributor.MasterID > 0 {
 			value.MasterID = strconv.FormatInt(contributor.MasterID, 10)
 		}
-		values = append(values, value)
+		rawRenderable := contributor.FirstName != "" || contributor.MiddleName != "" || contributor.LastName != ""
+		if hasRenderablePersonName(value) || !rawRenderable {
+			values = append(values, value)
+		}
 	}
 	return values
 }
 
-func genreValues(genres []model.DBGenre) []model.GenreValue {
+func genreValues(genres []model.DBGenre, quality metadataQuality) []model.GenreValue {
 	values := make([]model.GenreValue, 0, len(genres))
-	for _, genre := range genres {
+	for i, genre := range genres {
+		genrePath := fmt.Sprintf("genres[%d]", i)
+		code := quality.text(genrePath+".code", genre.Code)
+		translatedCode := quality.text(genrePath+".translated_code", genre.TranslatedCode)
+		description := quality.text(genrePath+".description", genre.Description)
+		meta := quality.text(genrePath+".meta", genre.Meta)
+		rawText := genre.Code != "" || genre.TranslatedCode != "" || genre.Description != "" || genre.Meta != ""
+		if rawText && code == "" && translatedCode == "" && description == "" && meta == "" {
+			continue
+		}
 		values = append(values, model.GenreValue{
-			Code:           genre.Code,
-			TranslatedCode: genre.TranslatedCode,
-			Description:    genre.Description,
-			Meta:           genre.Meta,
+			Code:           code,
+			TranslatedCode: translatedCode,
+			Description:    description,
+			Meta:           meta,
 		})
 	}
 	return values
 }
 
-func sequenceValues(sequences []model.DBSequence) []model.SequenceValue {
+func sequenceValues(sequences []model.DBSequence, quality metadataQuality) []model.SequenceValue {
 	values := make([]model.SequenceValue, 0, len(sequences))
-	for _, sequence := range sequences {
+	for i, sequence := range sequences {
+		name := quality.text(fmt.Sprintf("sequences[%d].name", i), sequence.Name)
+		if sequence.Name != "" && name == "" {
+			continue
+		}
 		number := float64(sequence.Number)
 		sequenceType := sequence.Type
 		value := model.SequenceValue{
-			Name:   sequence.Name,
+			Name:   name,
 			Number: &model.NumberValue{Value: &number},
 			Level:  positiveInt64(sequence.Level),
 			Type:   &sequenceType,
@@ -526,10 +568,13 @@ func ratingValue(rating model.DBRating) model.RatingValue {
 	}
 }
 
-func aliasValues(names []string) []model.AliasValue {
+func aliasValues(names []string, quality metadataQuality) []model.AliasValue {
 	values := make([]model.AliasValue, 0, len(names))
-	for _, name := range names {
-		values = append(values, model.AliasValue{Name: name})
+	for i, name := range names {
+		alias := quality.text(fmt.Sprintf("filenames[%d]", i), name)
+		if name == "" || alias != "" {
+			values = append(values, model.AliasValue{Name: alias})
+		}
 	}
 	return values
 }
@@ -681,7 +726,7 @@ func appendSidecarClaims(out *model.DatasetRecord, sidecars []model.SidecarSourc
 }
 
 func appendDescriptionClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string, fb2ReplacementQualityCheck bool) {
-	quality := fb2MetadataQuality{enabled: fb2ReplacementQualityCheck, observation: observation, out: out}
+	quality := metadataQuality{enabled: fb2ReplacementQualityCheck, observation: observation, source: "FB2", out: out}
 	appendFB2Identities(out, desc, observation)
 	if hasFB2TitleInfoClaims(desc.TitleInfo) {
 		appendFB2TitleInfoClaims(desc.TitleInfo, bibliographicClaims(out), observation, quality, "description.title_info")
@@ -733,7 +778,7 @@ func appendFB2TitleInfoClaims(
 	titleInfo *model.FB2TitleInfo,
 	claims *model.BibliographicClaims,
 	observation string,
-	quality fb2MetadataQuality,
+	quality metadataQuality,
 	path string,
 ) {
 	if title := quality.text(path+".title", titleInfo.Title); title != "" {
@@ -768,7 +813,7 @@ func appendFB2TitleInfoClaims(
 	}
 }
 
-func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string, quality fb2MetadataQuality) {
+func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Description, observation string, quality metadataQuality) {
 	if desc.DocumentInfo != nil {
 		docInfo := desc.DocumentInfo
 		if authors := fb2PersonValues(docInfo.Authors, quality, "description.document_info.authors"); len(authors) > 0 {
@@ -814,7 +859,7 @@ func appendFB2DocumentClaims(out *model.DatasetRecord, desc *model.FB2Descriptio
 	}
 }
 
-func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2PublishInfo, observation string, quality fb2MetadataQuality) {
+func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2PublishInfo, observation string, quality metadataQuality) {
 	if publishInfo == nil {
 		return
 	}
@@ -844,7 +889,7 @@ func appendFB2PublicationClaims(out *model.DatasetRecord, publishInfo *model.FB2
 	}
 }
 
-func fb2PersonValues(people []model.FB2Person, quality fb2MetadataQuality, path string) []model.PersonValue {
+func fb2PersonValues(people []model.FB2Person, quality metadataQuality, path string) []model.PersonValue {
 	values := make([]model.PersonValue, 0, len(people))
 	for i, person := range people {
 		position := int64(i + 1)
@@ -880,7 +925,7 @@ func fb2GenreValues(genres []model.FB2Genre) []model.GenreValue {
 	return values
 }
 
-func fb2SequenceValues(sequences []model.FB2Sequence, quality fb2MetadataQuality, path string) []model.SequenceValue {
+func fb2SequenceValues(sequences []model.FB2Sequence, quality metadataQuality, path string) []model.SequenceValue {
 	values := make([]model.SequenceValue, 0, len(sequences))
 	for i, sequence := range sequences {
 		value := fb2SequenceValue(sequence, quality, fmt.Sprintf("%s[%d]", path, i))
@@ -891,7 +936,7 @@ func fb2SequenceValues(sequences []model.FB2Sequence, quality fb2MetadataQuality
 	return values
 }
 
-func fb2SequenceValue(sequence model.FB2Sequence, quality fb2MetadataQuality, path string) model.SequenceValue {
+func fb2SequenceValue(sequence model.FB2Sequence, quality metadataQuality, path string) model.SequenceValue {
 	return model.SequenceValue{
 		Name:      quality.text(path+".name", sequence.Name),
 		Number:    numberValue(sequence.Number),
@@ -900,13 +945,15 @@ func fb2SequenceValue(sequence model.FB2Sequence, quality fb2MetadataQuality, pa
 	}
 }
 
-type fb2MetadataQuality struct {
+type metadataQuality struct {
 	enabled     bool
 	observation string
+	source      string
 	out         *model.DatasetRecord
+	seen        map[string]struct{}
 }
 
-func (q fb2MetadataQuality) text(path string, value string) string {
+func (q metadataQuality) text(path string, value string) string {
 	if !q.enabled || value == "" {
 		return value
 	}
@@ -914,12 +961,19 @@ func (q fb2MetadataQuality) text(path string, value string) string {
 	if meaningful == 0 || meaningful != replacement {
 		return value
 	}
+	if q.seen != nil {
+		key := q.observation + "\x00" + path
+		if _, ok := q.seen[key]; ok {
+			return ""
+		}
+		q.seen[key] = struct{}{}
+	}
 	q.out.Issues = append(q.out.Issues, model.Issue{
 		Observation: q.observation,
 		Stage:       "quality",
 		Code:        "unicode_replacement_only",
 		Path:        path,
-		Message:     "FB2 metadata field contains only Unicode replacement characters",
+		Message:     q.source + " metadata field contains only Unicode replacement characters",
 		Details: map[string]any{
 			"replacement_characters": replacement,
 		},
