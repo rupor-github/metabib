@@ -4,12 +4,10 @@ import (
 	"archive/zip"
 	"bufio"
 	"context"
-	jsonv2 "encoding/json/v2"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -23,38 +21,38 @@ import (
 
 const structureInfo = "AUTHOR;GENRE;TITLE;SERIES;SERNO;FILE;SIZE;LIBID;DEL;EXT;DATE;LANG;LIBRATE;KEYWORDS;YEAR;SOURCELIB;"
 
-type SequenceMode string
+type SequenceMode = inpxutil.SequenceMode
 
 const (
-	SequenceAuthor    SequenceMode = "author"
-	SequencePublisher SequenceMode = "publisher"
-	SequenceAll       SequenceMode = "all"
-	SequenceIgnore    SequenceMode = "ignore"
+	SequenceAuthor    = inpxutil.SequenceAuthor
+	SequencePublisher = inpxutil.SequencePublisher
+	SequenceAll       = inpxutil.SequenceAll
+	SequenceIgnore    = inpxutil.SequenceIgnore
 )
 
-type FB2Preference string
+type FB2Preference = inpxutil.FB2Preference
 
 const (
-	PreferIgnore     FB2Preference = "ignore"
-	PreferMerge      FB2Preference = "merge"
-	PreferComplement FB2Preference = "complement"
-	PreferReplace    FB2Preference = "replace"
+	PreferIgnore     = inpxutil.PreferIgnore
+	PreferMerge      = inpxutil.PreferMerge
+	PreferComplement = inpxutil.PreferComplement
+	PreferReplace    = inpxutil.PreferReplace
 )
 
-type FlattenMode string
+type FlattenMode = inpxutil.FlattenMode
 
 const (
-	FlattenAll      FlattenMode = "all"
-	FlattenLeaf     FlattenMode = "leaf"
-	FlattenPath     FlattenMode = "path"
-	FlattenPathLeaf FlattenMode = "path-leaf"
+	FlattenAll      = inpxutil.FlattenAll
+	FlattenLeaf     = inpxutil.FlattenLeaf
+	FlattenPath     = inpxutil.FlattenPath
+	FlattenPathLeaf = inpxutil.FlattenPathLeaf
 )
 
-type DedupMode string
+type DedupMode = inpxutil.DedupMode
 
 const (
-	DedupCaseInsensitive DedupMode = "case-insensitive"
-	DedupCaseSensitive   DedupMode = "case-sensitive"
+	DedupCaseInsensitive = inpxutil.DedupCaseInsensitive
+	DedupCaseSensitive   = inpxutil.DedupCaseSensitive
 )
 
 type Options struct {
@@ -80,11 +78,7 @@ type Options struct {
 
 type Stats = inpxutil.Stats
 
-type sequence struct {
-	Name   string
-	Number string
-	Source string
-}
+type sequence = inpxutil.Sequence
 
 type recordFields struct {
 	Authors  string
@@ -103,66 +97,22 @@ type recordFields struct {
 	Source   string
 }
 
-type entryDiagnostics struct {
-	DisambiguatedAuthorBooks int64
-	DisambiguatedAuthors     int64
-	CanonicalizedLangBooks   int64
-}
+type entryDiagnostics = inpxutil.EntryDiagnostics
 
 func ParseSequenceMode(value string) (SequenceMode, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "author":
-		return SequenceAuthor, nil
-	case "publisher":
-		return SequencePublisher, nil
-	case "all":
-		return SequenceAll, nil
-	case "ignore":
-		return SequenceIgnore, nil
-	default:
-		return "", fmt.Errorf("invalid FLibrary INPX sequence mode %q", value)
-	}
+	return inpxutil.ParseSequenceMode(value, "FLibrary INPX")
 }
 
 func ParseFB2Preference(value string) (FB2Preference, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "complement":
-		return PreferComplement, nil
-	case "ignore":
-		return PreferIgnore, nil
-	case "merge":
-		return PreferMerge, nil
-	case "replace":
-		return PreferReplace, nil
-	default:
-		return "", fmt.Errorf("invalid FLibrary INPX FB2 preference %q", value)
-	}
+	return inpxutil.ParseFB2Preference(value, "FLibrary INPX")
 }
 
 func ParseFlattenMode(value string) (FlattenMode, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "all":
-		return FlattenAll, nil
-	case "leaf":
-		return FlattenLeaf, nil
-	case "path":
-		return FlattenPath, nil
-	case "path-leaf":
-		return FlattenPathLeaf, nil
-	default:
-		return "", fmt.Errorf("invalid FLibrary INPX FB2 flatten mode %q", value)
-	}
+	return inpxutil.ParseFlattenMode(value, "FLibrary INPX")
 }
 
 func ParseDedupMode(value string) (DedupMode, error) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "case-insensitive":
-		return DedupCaseInsensitive, nil
-	case "case-sensitive":
-		return DedupCaseSensitive, nil
-	default:
-		return "", fmt.Errorf("invalid FLibrary INPX sequence dedup mode %q", value)
-	}
+	return inpxutil.ParseDedupMode(value, "FLibrary INPX")
 }
 
 func Generate(ctx context.Context, opts Options) (Stats, error) {
@@ -242,37 +192,16 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 				}
 				opts.Additional = false
 			}
-			if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
-				return fmt.Errorf("create FLibrary INPX output directory: %w", err)
-			}
-			tmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(outputPath), filepath.Base(outputPath))
+			tmpPath, err = inpxutil.PrepareOutput(outputPath, "FLibrary INPX", opts.Log)
 			if err != nil {
-				return fmt.Errorf("create temporary FLibrary INPX output: %w", err)
-			}
-			tmpPath = tmpFile.Name()
-			if err := tmpFile.Close(); err != nil {
-				return fmt.Errorf("close temporary FLibrary INPX output %q: %w", tmpPath, err)
-			}
-			if _, err := os.Stat(outputPath); err == nil && opts.Log != nil {
-				opts.Log.Warn("Overwriting existing FLibrary INPX output", zap.String("file", outputPath))
-			} else if err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("stat FLibrary INPX output %q: %w", outputPath, err)
+				return err
 			}
 			if opts.Additional {
-				additionalOutputPath := annotationsOutputPath(outputPath)
+				additionalOutputPath := inpxutil.AnnotationsOutputPath(outputPath)
 				stats.AdditionalOutputPath = additionalOutputPath
-				additionalTmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(additionalOutputPath), filepath.Base(additionalOutputPath))
+				annotationsTmpPath, err = inpxutil.PrepareOutput(additionalOutputPath, "FLibrary additional", opts.Log)
 				if err != nil {
-					return fmt.Errorf("create temporary FLibrary additional output: %w", err)
-				}
-				annotationsTmpPath = additionalTmpFile.Name()
-				if err := additionalTmpFile.Close(); err != nil {
-					return fmt.Errorf("close temporary FLibrary additional output %q: %w", annotationsTmpPath, err)
-				}
-				if _, err := os.Stat(additionalOutputPath); err == nil && opts.Log != nil {
-					opts.Log.Warn("Overwriting existing FLibrary additional output", zap.String("file", additionalOutputPath))
-				} else if err != nil && !os.IsNotExist(err) {
-					return fmt.Errorf("stat FLibrary additional output %q: %w", additionalOutputPath, err)
+					return err
 				}
 				if dataset.Processing.FB2BodyFingerprints == nil || dataset.Processing.FB2BodyFingerprints.Coverage == model.FB2BodyFingerprintCoverageNone {
 					if opts.Log != nil {
@@ -282,19 +211,10 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 					if dataset.Processing.FB2BodyFingerprints.Coverage == model.FB2BodyFingerprintCoveragePartial && opts.Log != nil {
 						opts.Log.Warn("Generating FLibrary compilations output from partial FB2 body fingerprint coverage")
 					}
-					compilationsOutputPath = compilationsOutputPathFor(outputPath)
-					compilationsTmpFile, err := fileutil.CreateHiddenTemp(filepath.Dir(compilationsOutputPath), filepath.Base(compilationsOutputPath))
+					compilationsOutputPath = inpxutil.CompilationsOutputPath(outputPath)
+					compilationsTmpPath, err = inpxutil.PrepareOutput(compilationsOutputPath, "FLibrary compilations", opts.Log)
 					if err != nil {
-						return fmt.Errorf("create temporary FLibrary compilations output: %w", err)
-					}
-					compilationsTmpPath = compilationsTmpFile.Name()
-					if err := compilationsTmpFile.Close(); err != nil {
-						return fmt.Errorf("close temporary FLibrary compilations output %q: %w", compilationsTmpPath, err)
-					}
-					if _, err := os.Stat(compilationsOutputPath); err == nil && opts.Log != nil {
-						opts.Log.Warn("Overwriting existing FLibrary compilations output", zap.String("file", compilationsOutputPath))
-					} else if err != nil && !os.IsNotExist(err) {
-						return fmt.Errorf("stat FLibrary compilations output %q: %w", compilationsOutputPath, err)
+						return err
 					}
 				}
 			}
@@ -352,14 +272,6 @@ func Generate(ctx context.Context, opts Options) (Stats, error) {
 	return stats, nil
 }
 
-func annotationsOutputPath(outputPath string) string {
-	return strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "-annotations.zip"
-}
-
-func compilationsOutputPathFor(outputPath string) string {
-	return strings.TrimSuffix(outputPath, filepath.Ext(outputPath)) + "-compilations.zip"
-}
-
 type streamINPXWriter struct {
 	path         string
 	meta         inpxutil.Metadata
@@ -376,7 +288,7 @@ type streamINPXWriter struct {
 	bw           *bufio.Writer
 	stats        Stats
 	annotations  *annotationWriter
-	compilations *compilationCollector
+	compilations *inpxutil.CompilationCollector
 }
 
 func newStreamINPXWriter(
@@ -393,11 +305,7 @@ func newStreamINPXWriter(
 	}
 	zw := zip.NewWriter(f)
 	zw.SetComment(inpxutil.ZipComment(meta))
-	archives := inpxutil.DatasetArchiveRowsList(dataset)
-	archiveByID := make(map[string]int, len(archives))
-	for idx, archive := range archives {
-		archiveByID[archive.Meta.ID] = idx
-	}
+	archives, archiveByID := inpxutil.DatasetArchiveIndex(dataset)
 	var annotations *annotationWriter
 	if opts.Additional {
 		annotations, err = newAnnotationWriter(annotationsPath, meta)
@@ -407,9 +315,9 @@ func newStreamINPXWriter(
 			return nil, err
 		}
 	}
-	var compilations *compilationCollector
+	var compilations *inpxutil.CompilationCollector
 	if compilationsPath != "" {
-		compilations = newCompilationCollector(compilationsPath, meta, opts.Log)
+		compilations = inpxutil.NewCompilationCollector(compilationsPath, meta, opts.Log)
 	}
 	return &streamINPXWriter{
 		path:         path,
@@ -457,7 +365,7 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 		if fields.Ext != "" {
 			name += "." + fields.Ext
 		}
-		if err := w.annotations.WriteRecord(name, recordAnnotation(rec, w.opts.FB2Preference)); err != nil {
+		if err := w.annotations.WriteRecord(name, inpxutil.RecordAnnotation(rec, w.opts.FB2Preference)); err != nil {
 			return err
 		}
 	}
@@ -469,7 +377,7 @@ func (w *streamINPXWriter) WriteRecord(rec model.DatasetRecord) error {
 		w.compilations.AddRecord(rec, archive.Meta.Name, fileName)
 	}
 	w.stats.Files++
-	w.activeDiag.add(diagnostics)
+	w.activeDiag.Add(diagnostics)
 	sequences := recordSequences(rec, view, w.opts)
 	if len(sequences) == 0 {
 		sequences = []sequence{{}}
@@ -593,12 +501,6 @@ func (w *streamINPXWriter) finishActive() error {
 	return nil
 }
 
-func (d *entryDiagnostics) add(other entryDiagnostics) {
-	d.DisambiguatedAuthorBooks += other.DisambiguatedAuthorBooks
-	d.DisambiguatedAuthors += other.DisambiguatedAuthors
-	d.CanonicalizedLangBooks += other.CanonicalizedLangBooks
-}
-
 func (w *streamINPXWriter) statsSinceActiveStart() Stats {
 	return Stats{
 		Files:      w.stats.Files - w.activeStats.Files,
@@ -626,25 +528,9 @@ func (w *streamINPXWriter) Finish() (Stats, error) {
 			return w.stats, err
 		}
 	}
-	if err := inpxutil.WriteZipText(w.zw, "structure.info", structureInfo); err != nil {
-		w.Close()
-		return w.stats, err
-	}
-	collection, err := inpxutil.CollectionInfo(w.meta, templateOptions(w.opts))
-	if err != nil {
-		w.Close()
-		return w.stats, err
-	}
-	if err := inpxutil.WriteZipText(w.zw, "collection.info", collection); err != nil {
-		w.Close()
-		return w.stats, err
-	}
-	version, err := inpxutil.VersionInfo(w.meta, templateOptions(w.opts))
-	if err != nil {
-		w.Close()
-		return w.stats, err
-	}
-	if err := inpxutil.WriteZipText(w.zw, "version.info", version); err != nil {
+	if err := inpxutil.WriteInfoEntries(w.zw, w.meta, structureInfo, inpxutil.TemplateOptions{
+		CommentTemplate: w.opts.CommentTemplate, VersionTemplate: w.opts.VersionTemplate,
+	}); err != nil {
 		w.Close()
 		return w.stats, err
 	}
@@ -701,34 +587,11 @@ func (w *annotationWriter) OpenArchive(archive model.DatasetArchive) error {
 		return fmt.Errorf("create FLibrary additional entry %q: %w", archive.Name, err)
 	}
 	w.bw = bufio.NewWriter(zw)
-	if _, err := w.bw.WriteString("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<folder name=\""); err != nil {
-		return err
-	}
-	if _, err := w.bw.WriteString(xmlEscape(archive.Name)); err != nil {
-		return err
-	}
-	_, err = w.bw.WriteString("\">\n")
-	return err
+	return inpxutil.WriteAnnotationHeader(w.bw, archive.Name)
 }
 
 func (w *annotationWriter) WriteRecord(name string, annotation string) error {
-	if strings.TrimSpace(annotation) == "" {
-		return nil
-	}
-	if _, err := w.bw.WriteString("\t<file name=\""); err != nil {
-		return err
-	}
-	if _, err := w.bw.WriteString(xmlEscape(name)); err != nil {
-		return err
-	}
-	if _, err := w.bw.WriteString("\">\n\t\t<p>"); err != nil {
-		return err
-	}
-	if _, err := w.bw.WriteString(xmlEscape(strings.TrimSpace(annotation))); err != nil {
-		return err
-	}
-	_, err := w.bw.WriteString("</p>\n\t</file>\n")
-	return err
+	return inpxutil.WriteAnnotationRecord(w.bw, name, annotation)
 }
 
 func (w *annotationWriter) FinishArchive() error {
@@ -762,240 +625,6 @@ func (w *annotationWriter) Close() error {
 	return errors.Join(errs...)
 }
 
-type compilationCollector struct {
-	path    string
-	meta    inpxutil.Metadata
-	log     *zap.Logger
-	books   []compilationBook
-	missing int
-}
-
-type compilationBook struct {
-	folder string
-	file   string
-	root   *compilationSection
-}
-
-type compilationSection struct {
-	key      string
-	leaf     bool
-	children []*compilationSection
-}
-
-type compilationOutput struct {
-	Folder      string                  `json:"folder"`
-	File        string                  `json:"file"`
-	Compilation []compilationOutputPart `json:"compilation"`
-	Covered     bool                    `json:"covered"`
-}
-
-type compilationOutputPart struct {
-	Part   int    `json:"part"`
-	Folder string `json:"folder"`
-	File   string `json:"file"`
-}
-
-func newCompilationCollector(path string, meta inpxutil.Metadata, log *zap.Logger) *compilationCollector {
-	return &compilationCollector{path: path, meta: meta, log: log}
-}
-
-func (c *compilationCollector) AddRecord(rec model.DatasetRecord, folder string, file string) {
-	fingerprint := recordFB2BodyFingerprint(rec)
-	if fingerprint == nil || len(fingerprint.Sections) == 0 {
-		c.missing++
-		return
-	}
-	root := compilationSectionTree(fingerprint.Sections)
-	if root == nil {
-		c.missing++
-		return
-	}
-	c.books = append(c.books, compilationBook{folder: folder, file: file, root: root})
-}
-
-func (c *compilationCollector) Write() error {
-	if c.missing > 0 && c.log != nil {
-		c.log.Warn("Some FLibrary INPX records lack FB2 body fingerprints", zap.Int("records", c.missing))
-	}
-	outputs := c.compilations()
-	if len(outputs) == 0 {
-		if c.log != nil {
-			c.log.Warn("Skipping FLibrary compilations output because no compilations were detected")
-		}
-		if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove empty FLibrary compilations output %q: %w", c.path, err)
-		}
-		return nil
-	}
-	data, err := jsonv2.Marshal(outputs)
-	if err != nil {
-		return fmt.Errorf("marshal FLibrary compilations JSON: %w", err)
-	}
-	f, err := os.Create(c.path)
-	if err != nil {
-		return fmt.Errorf("create FLibrary compilations output %q: %w", c.path, err)
-	}
-	zw := zip.NewWriter(f)
-	zw.SetComment(inpxutil.ZipComment(c.meta))
-	if err := inpxutil.WriteZipText(zw, "compilations.json", string(data)); err != nil {
-		_ = zw.Close()
-		_ = f.Close()
-		return err
-	}
-	if err := zw.Close(); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("close FLibrary compilations zip %q: %w", c.path, err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close FLibrary compilations output %q: %w", c.path, err)
-	}
-	return nil
-}
-
-func (c *compilationCollector) compilations() []compilationOutput {
-	rootToBooks := make(map[string][]int, len(c.books))
-	for idx, book := range c.books {
-		rootToBooks[book.root.key] = append(rootToBooks[book.root.key], idx)
-	}
-	outputs := make([]compilationOutput, 0)
-	for idx, book := range c.books {
-		parts, covered, found := c.compilationParts(idx, rootToBooks)
-		if found <= 1 {
-			continue
-		}
-		outputs = append(outputs, compilationOutput{
-			Folder:      book.folder,
-			File:        book.file,
-			Compilation: parts,
-			Covered:     covered,
-		})
-	}
-	return outputs
-}
-
-func (c *compilationCollector) compilationParts(owner int, rootToBooks map[string][]int) ([]compilationOutputPart, bool, int) {
-	book := c.books[owner]
-	found := make(map[string]struct{})
-	notFound := make(map[string]struct{})
-	var parts []compilationOutputPart
-	var walk func([]*compilationSection)
-	walk = func(sections []*compilationSection) {
-		for _, section := range sections {
-			if section.key == book.root.key {
-				walk(section.children)
-				continue
-			}
-			matches := rootToBooks[section.key]
-			if len(matches) > 0 {
-				part := len(found)
-				for _, match := range matches {
-					matched := c.books[match]
-					parts = append(parts, compilationOutputPart{Part: part, Folder: matched.folder, File: matched.file})
-				}
-				found[section.key] = struct{}{}
-				continue
-			}
-			if section.leaf {
-				notFound[section.key] = struct{}{}
-				continue
-			}
-			walk(section.children)
-		}
-	}
-	walk(book.root.children)
-	return parts, len(notFound) == 0, len(found)
-}
-
-func recordFB2BodyFingerprint(rec model.DatasetRecord) *model.FB2BodyFingerprint {
-	for _, artifact := range rec.Artifacts {
-		if artifact.Fingerprints != nil && artifact.Fingerprints.FB2Body != nil {
-			return artifact.Fingerprints.FB2Body
-		}
-	}
-	return nil
-}
-
-func compilationSectionTree(sections []model.FB2BodySectionFingerprint) *compilationSection {
-	var root *compilationSection
-	stack := make([]*compilationSection, 0)
-	for _, section := range sections {
-		node := &compilationSection{key: section.Key, leaf: section.Leaf}
-		if section.Depth == 0 {
-			if root != nil {
-				return nil
-			}
-			root = node
-			stack = []*compilationSection{node}
-			continue
-		}
-		if root == nil || section.Depth > len(stack) {
-			return nil
-		}
-		stack = stack[:section.Depth]
-		parent := stack[len(stack)-1]
-		parent.children = append(parent.children, node)
-		stack = append(stack, node)
-	}
-	return root
-}
-
-func recordAnnotation(rec model.DatasetRecord, preference FB2Preference) string {
-	if rec.Claims.Bibliographic == nil {
-		return ""
-	}
-	dbAnnotation := annotationClaimValue(rec.Claims.Bibliographic.Annotation, "db")
-	fb2Annotation := annotationClaimValue(rec.Claims.Bibliographic.Annotation, "fb2")
-	fbdAnnotation := annotationClaimValue(rec.Claims.Bibliographic.Annotation, "fbd")
-	if dbAnnotation == "" {
-		return firstNonEmpty(fb2Annotation, fbdAnnotation)
-	}
-	switch preference {
-	case PreferIgnore, PreferComplement:
-		return dbAnnotation
-	case PreferMerge, PreferReplace:
-		return firstNonEmpty(fb2Annotation, fbdAnnotation, dbAnnotation)
-	default:
-		return firstNonEmpty(dbAnnotation, fb2Annotation, fbdAnnotation)
-	}
-}
-
-func annotationClaimValue(claims []model.Claim, observation string) string {
-	for _, claim := range claims {
-		if claim.Observation != observation {
-			continue
-		}
-		annotation, ok := claim.Value.(string)
-		if ok && strings.TrimSpace(annotation) != "" {
-			return annotation
-		}
-	}
-	return ""
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func xmlEscape(value string) string {
-	replacer := strings.NewReplacer(
-		"&", "&amp;",
-		"<", "&lt;",
-		">", "&gt;",
-		"\"", "&quot;",
-		"'", "&#39;",
-	)
-	return replacer.Replace(value)
-}
-
-func templateOptions(opts Options) inpxutil.TemplateOptions {
-	return inpxutil.TemplateOptions{CommentTemplate: opts.CommentTemplate, VersionTemplate: opts.VersionTemplate}
-}
-
 func buildRecordFields(
 	rec model.DatasetRecord,
 	opts Options,
@@ -1004,72 +633,26 @@ func buildRecordFields(
 	if err != nil {
 		return recordFields{}, view, entryDiagnostics{}, false, err
 	}
-	diagnostics := entryDiagnostics{}
-	title := view.Database.Title
-	if title == "" {
-		title = view.FB2.Title
-	}
-	if title == "" {
-		return recordFields{}, view, entryDiagnostics{}, false, nil
-	}
-	fileName, ext := inpxutil.RecordFileNameAndExtension(rec, view)
-	if opts.Log != nil && (inpxutil.FileNameEscapeAmbiguous(fileName) || inpxutil.FileNameEscapeAmbiguous(ext)) {
-		opts.Log.Warn(
-			"Ambiguous INPX filename escape sequence",
-			zap.String("book_id", datasetBookID(rec)),
-			zap.String("file", fileName),
-			zap.String("ext", ext),
-		)
-	}
-	size := view.Artifact.Size
-	date := inpxutil.DateOnly(view.Catalog.Time)
-	if date == "" {
-		date = view.Artifact.Date
-	}
-	lang, languageSelection := recordLanguage(rec, view, opts)
-	if languageSelection.Canonicalized {
-		diagnostics.CanonicalizedLangBooks = 1
-	}
-	keywords := view.Database.Keywords
-	if keywords == "" {
-		keywords = view.FB2.Keywords
-	}
-	year := view.DatabasePublication.Year
-	if year == "" {
-		year = view.FB2Publication.Year
-	}
-	authors := authorsString(view.HasDatabase, view.Database.Authors, view.FB2.Authors, opts)
-	if count := logDisambiguatedDBAuthors(rec, view, authors, opts); count > 0 {
-		diagnostics.DisambiguatedAuthorBooks = 1
-		diagnostics.DisambiguatedAuthors = int64(count)
+	selected, diagnostics, ok := inpxutil.PrepareRecordFields(rec, view, authorOptions(opts), opts.Language, opts.Log)
+	if !ok {
+		return recordFields{}, view, diagnostics, false, nil
 	}
 	return recordFields{
-		Authors:  authors,
-		Genres:   genresString(view.Database.Genres, view.FB2.Genres),
-		Title:    inpxutil.Cleanse(title),
-		File:     inpxutil.CleanseFileName(fileName),
-		Size:     strconv.FormatUint(size, 10),
-		LibID:    datasetBookID(rec),
+		Authors:  selected.Authors,
+		Genres:   selected.Genres,
+		Title:    inpxutil.Cleanse(selected.Title),
+		File:     inpxutil.CleanseFileName(selected.File),
+		Size:     strconv.FormatUint(view.Artifact.Size, 10),
+		LibID:    inpxutil.DatasetBookID(rec),
 		Deleted:  inpxutil.Cleanse(view.Catalog.Deleted),
-		Ext:      inpxutil.CleanseFileName(strings.TrimPrefix(ext, ".")),
-		Date:     inpxutil.Cleanse(date),
-		Lang:     inpxutil.Cleanse(strings.TrimSpace(lang)),
+		Ext:      inpxutil.CleanseFileName(strings.TrimPrefix(selected.Ext, ".")),
+		Date:     inpxutil.Cleanse(selected.Date),
+		Lang:     inpxutil.Cleanse(strings.TrimSpace(selected.Language)),
 		Rate:     view.Catalog.Rating,
-		Keywords: keywordsString(keywords),
-		Year:     inpxutil.Cleanse(year),
+		Keywords: inpxutil.KeywordsString(selected.Keywords),
+		Year:     inpxutil.Cleanse(selected.Year),
 		Source:   inpxutil.Cleanse(opts.SourceLib),
 	}, view, diagnostics, true, nil
-}
-
-func recordLanguage(rec model.DatasetRecord, view inpxutil.DatasetRecordView, opts Options) (string, inpxutil.LanguageSelection) {
-	if opts.Language != nil {
-		return opts.Language.SelectLanguageWithReport(rec, view)
-	}
-	lang := view.Database.Language
-	if lang == "" {
-		lang = view.FB2.Language
-	}
-	return lang, inpxutil.LanguageSelection{}
 }
 
 func recordLine(fields recordFields, seq sequence) string {
@@ -1091,365 +674,25 @@ func recordLine(fields recordFields, seq sequence) string {
 		fields.Year,
 		fields.Source,
 	}
-	return strings.Join(values, inpxutil.FieldSep) + inpxutil.FieldSep + "\r\n"
+	return inpxutil.JoinINPFields(values)
 }
 
-func authorsString(dbPresent bool, authors []model.PersonValue, fb2Authors []model.PersonValue, opts Options) string {
-	if opts.FB2Preference == PreferReplace && len(fb2Authors) > 0 {
-		return peopleStringWithDisambiguation(fb2Authors, opts)
+func authorOptions(opts Options) inpxutil.AuthorOptions {
+	return inpxutil.AuthorOptions{
+		Preference:          opts.FB2Preference,
+		Disambiguator:       opts.AuthorDisambiguator,
+		DisambiguationField: opts.DisambiguationField,
+		Verbose:             opts.Verbose,
 	}
-	if dbPresent && len(authors) == 0 {
-		return "неизвестный,автор,:"
-	}
-	if len(authors) == 0 && len(fb2Authors) > 0 {
-		return peopleStringWithDisambiguation(fb2Authors, opts)
-	}
-	if len(authors) == 0 {
-		return "неизвестный,автор,:"
-	}
-	return peopleStringWithDisambiguation(authors, opts)
-}
-
-func logDisambiguatedDBAuthors(rec model.DatasetRecord, view inpxutil.DatasetRecordView, renderedAuthors string, opts Options) int {
-	if opts.AuthorDisambiguator == nil || !dbAuthorsSelected(view.Database.Authors, view.FB2.Authors, opts) {
-		return 0
-	}
-	count := 0
-	for _, person := range view.Database.Authors {
-		suffix := opts.AuthorDisambiguator.Suffix(person)
-		if suffix == "" {
-			continue
-		}
-		count++
-		if opts.Log == nil || !opts.Verbose {
-			continue
-		}
-		fields := []zap.Field{
-			zap.String("book_id", datasetBookID(rec)),
-			zap.String("flibusta_person_id", inpxutil.FlibustaPersonID(person)),
-			zap.String("first_name", person.FirstName),
-			zap.String("middle_name", person.MiddleName),
-			zap.String("last_name", person.LastName),
-			zap.String("nick_name", person.NickName),
-			zap.String("suffix", suffix),
-			zap.String("disambiguation_field", string(disambiguationField(opts))),
-			zap.String("rendered_first_name", renderedAuthorFirstName(person, suffix, opts)),
-			zap.String("rendered_middle_name", renderedAuthorMiddleName(person, suffix, opts)),
-			zap.String("rendered_last_name", renderedAuthorLastName(person, suffix, opts)),
-			zap.String("rendered_authors", renderedAuthors),
-			zap.String("locator_kind", rec.Record.Locator.Kind),
-			zap.String("locator_source", rec.Record.Locator.Source),
-			zap.String("artifact", view.Artifact.Name),
-		}
-		if person.Position != nil {
-			fields = append(fields, zap.Int64("position", *person.Position))
-		}
-		if rec.Record.Locator.Index != nil {
-			fields = append(fields, zap.Int("locator_index", *rec.Record.Locator.Index))
-		}
-		opts.Log.Debug("Disambiguated INPX DB author", fields...)
-	}
-	return count
-}
-
-func dbAuthorsSelected(authors []model.PersonValue, fb2Authors []model.PersonValue, opts Options) bool {
-	return len(authors) > 0 && !(opts.FB2Preference == PreferReplace && len(fb2Authors) > 0)
-}
-
-func peopleString(people []model.PersonValue) string {
-	var b strings.Builder
-	for _, person := range people {
-		lastName := inpxutil.CleanseAuthorComponent(person.LastName)
-		firstName := inpxutil.CleanseAuthorComponent(person.FirstName)
-		middleName := inpxutil.CleanseAuthorComponent(person.MiddleName)
-		if lastName == "" && firstName == "" && middleName == "" {
-			continue
-		}
-		b.WriteString(lastName)
-		b.WriteByte(',')
-		b.WriteString(firstName)
-		b.WriteByte(',')
-		b.WriteString(middleName)
-		b.WriteByte(':')
-	}
-	if b.Len() == 0 {
-		return "неизвестный,автор,:"
-	}
-	return b.String()
-}
-
-func peopleStringWithDisambiguation(people []model.PersonValue, opts Options) string {
-	var b strings.Builder
-	for _, person := range people {
-		suffix := opts.AuthorDisambiguator.Suffix(person)
-		lastName := renderedAuthorLastName(person, suffix, opts)
-		firstName := renderedAuthorFirstName(person, suffix, opts)
-		middleName := renderedAuthorMiddleName(person, suffix, opts)
-		if lastName == "" && firstName == "" && middleName == "" {
-			continue
-		}
-		b.WriteString(lastName)
-		b.WriteByte(',')
-		b.WriteString(firstName)
-		b.WriteByte(',')
-		b.WriteString(middleName)
-		b.WriteByte(':')
-	}
-	if b.Len() == 0 {
-		return "неизвестный,автор,:"
-	}
-	return b.String()
-}
-
-func renderedAuthorLastName(person model.PersonValue, suffix string, opts Options) string {
-	return authorNameComponent(person.LastName, suffix, inpxutil.AuthorDisambiguationLast, opts)
-}
-
-func renderedAuthorFirstName(person model.PersonValue, suffix string, opts Options) string {
-	return authorNameComponent(person.FirstName, suffix, inpxutil.AuthorDisambiguationFirst, opts)
-}
-
-func renderedAuthorMiddleName(person model.PersonValue, suffix string, opts Options) string {
-	return authorNameComponent(person.MiddleName, suffix, inpxutil.AuthorDisambiguationMiddle, opts)
-}
-
-func authorNameComponent(value string, suffix string, field inpxutil.AuthorDisambiguationField, opts Options) string {
-	value = inpxutil.CleanseAuthorComponent(value)
-	suffix = inpxutil.CleanseAuthorComponent(suffix)
-	if suffix == "" || disambiguationField(opts) != field {
-		return value
-	}
-	return strings.TrimSpace(value + " " + suffix)
-}
-
-func disambiguationField(opts Options) inpxutil.AuthorDisambiguationField {
-	if opts.AuthorDisambiguator != nil {
-		return opts.AuthorDisambiguator.Field()
-	}
-	return inpxutil.NormalizeAuthorDisambiguationField(opts.DisambiguationField)
-}
-
-func genresString(genres []model.GenreValue, fb2Genres []model.GenreValue) string {
-	if len(genres) > 0 {
-		var b strings.Builder
-		for _, genre := range genres {
-			code := inpxutil.CleanseGenreCode(genre.Code)
-			if code == "" {
-				continue
-			}
-			b.WriteString(code)
-			b.WriteByte(':')
-		}
-		if b.Len() > 0 {
-			return b.String()
-		}
-	}
-	if len(fb2Genres) > 0 {
-		var b strings.Builder
-		for _, genre := range fb2Genres {
-			code := inpxutil.CleanseGenreCode(genre.Code)
-			if code == "" {
-				continue
-			}
-			b.WriteString(code)
-			b.WriteByte(':')
-		}
-		if b.Len() > 0 {
-			return b.String()
-		}
-	}
-	return "other:"
 }
 
 func recordSequences(rec model.DatasetRecord, view inpxutil.DatasetRecordView, opts Options) []sequence {
-	dbSeqs := dbSequences(view.Database.Sequences, opts.SequenceMode)
-	fb2Seqs := fb2Sequences(view.FB2.Sequences, view.FB2Publication.Sequences, opts)
-	var selected []sequence
-	switch opts.FB2Preference {
-	case PreferIgnore:
-		selected = dbSeqs
-	case PreferMerge:
-		selected = append(append([]sequence{}, dbSeqs...), fb2Seqs...)
-	case PreferReplace:
-		if len(fb2Seqs) > 0 {
-			selected = fb2Seqs
-		} else {
-			selected = dbSeqs
-		}
-	default:
-		if len(dbSeqs) > 0 {
-			selected = dbSeqs
-		} else {
-			selected = fb2Seqs
-		}
-	}
-	return dedupSequences(rec, selected, opts)
-}
-
-func dbSequences(sequences []model.SequenceValue, mode SequenceMode) []sequence {
-	if mode == SequenceIgnore || len(sequences) == 0 {
-		return nil
-	}
-	filtered := slices.DeleteFunc(slices.Clone(sequences), func(seq model.SequenceValue) bool {
-		if seq.Type == nil {
-			return true
-		}
-		switch mode {
-		case SequenceAuthor:
-			return *seq.Type != 0
-		case SequencePublisher:
-			return *seq.Type != 1
-		default:
-			return *seq.Type != 0 && *seq.Type != 1
-		}
-	})
-	slices.SortFunc(filtered, func(a, b model.SequenceValue) int {
-		if *a.Type != *b.Type {
-			if mode == SequencePublisher {
-				return int(*b.Type - *a.Type)
-			}
-			return int(*a.Type - *b.Type)
-		}
-		if sequenceLevel(a) != sequenceLevel(b) {
-			return int(sequenceLevel(a) - sequenceLevel(b))
-		}
-		return strings.Compare(a.Name, b.Name)
-	})
-	result := make([]sequence, 0, len(filtered))
-	for _, seq := range filtered {
-		result = append(result, sequence{Name: seq.Name, Number: sequenceNumber(seq.Number), Source: "db"})
-	}
-	return result
-}
-
-func fb2Sequences(titleSequences []model.SequenceValue, publicationSequences []model.SequenceValue, opts Options) []sequence {
-	var result []sequence
-	if opts.SequenceMode == SequenceAuthor || opts.SequenceMode == SequenceAll || opts.SequenceMode == SequenceIgnore {
-		result = append(result, flattenFB2Sequences(titleSequences, opts.FlattenMode, opts.FB2PathSeparator)...)
-	}
-	if opts.SequenceMode == SequencePublisher || opts.SequenceMode == SequenceAll {
-		result = append(result, flattenFB2Sequences(publicationSequences, opts.FlattenMode, opts.FB2PathSeparator)...)
-	}
-	return result
-}
-
-func flattenFB2Sequences(sequences []model.SequenceValue, mode FlattenMode, separator string) []sequence {
-	var result []sequence
-	var walk func(seq model.SequenceValue, path []string)
-	walk = func(seq model.SequenceValue, path []string) {
-		name := strings.TrimSpace(seq.Name)
-		if name == "" {
-			return
-		}
-		path = append(path, name)
-		isLeaf := len(seq.Sequences) == 0
-		number := sequenceNumber(seq.Number)
-		switch mode {
-		case FlattenLeaf:
-			if isLeaf {
-				result = append(result, sequence{Name: name, Number: number, Source: "fb2"})
-			}
-		case FlattenPath:
-			if isLeaf {
-				result = append(result, sequence{Name: strings.Join(path, separator), Number: number, Source: "fb2"})
-			}
-		case FlattenPathLeaf:
-			if isLeaf {
-				result = append(result, sequence{Name: strings.Join(path, separator), Number: number, Source: "fb2"})
-				result = append(result, sequence{Name: name, Number: number, Source: "fb2"})
-			}
-		default:
-			result = append(result, sequence{Name: name, Number: number, Source: "fb2"})
-		}
-		for _, nested := range seq.Sequences {
-			walk(nested, path)
-		}
-	}
-	for _, seq := range sequences {
-		walk(seq, nil)
-	}
-	return result
-}
-
-func sequenceNumber(value *model.NumberValue) string {
-	if value == nil {
-		return ""
-	}
-	if value.Value != nil {
-		return strconv.Itoa(int(*value.Value))
-	}
-	return value.Text
-}
-
-func dedupSequences(rec model.DatasetRecord, sequences []sequence, opts Options) []sequence {
-	seen := make(map[string]sequence, len(sequences))
-	result := make([]sequence, 0, len(sequences))
-	for _, seq := range sequences {
-		seq.Name = strings.TrimSpace(seq.Name)
-		if seq.Name == "" {
-			continue
-		}
-		key := seq.Name
-		if opts.DedupMode == DedupCaseInsensitive {
-			key = strings.ToLower(key)
-		}
-		if kept, ok := seen[key]; ok {
-			if opts.Log != nil {
-				fields := []zap.Field{
-					zap.String("book_id", datasetBookID(rec)),
-					zap.String("locator_kind", rec.Record.Locator.Kind),
-					zap.String("locator_source", rec.Record.Locator.Source),
-					zap.String("name", seq.Name),
-					zap.String("number", seq.Number),
-					zap.String("source", seq.Source),
-					zap.String("kept_name", kept.Name),
-					zap.String("kept_number", kept.Number),
-					zap.String("kept_source", kept.Source),
-				}
-				if rec.Record.Locator.Index != nil {
-					fields = append(
-						fields,
-						zap.Int("archive_index", *rec.Record.Locator.Index),
-					)
-				}
-				opts.Log.Debug("Dropped duplicate FLibrary sequence", fields...)
-			}
-			continue
-		}
-		seen[key] = seq
-		result = append(result, seq)
-	}
-	return result
-}
-
-func sequenceLevel(seq model.SequenceValue) int64 {
-	if seq.Level == nil {
-		return 0
-	}
-	return *seq.Level
-}
-
-func datasetBookID(rec model.DatasetRecord) string {
-	return inpxutil.DatasetBookID(rec)
-}
-
-func keywordsString(value string) string {
-	parts := strings.FieldsFunc(value, func(r rune) bool {
-		switch r {
-		case ',', ';', '/', '.', '(', ')', '[', ']', ':':
-			return true
-		default:
-			return false
-		}
-	})
-	var b strings.Builder
-	for _, part := range parts {
-		part = strings.TrimSpace(inpxutil.Cleanse(part))
-		if part == "" {
-			continue
-		}
-		b.WriteString(part)
-		b.WriteByte(':')
-	}
-	return b.String()
+	return inpxutil.RecordSequences(rec, view, inpxutil.SequenceOptions{
+		Mode:                opts.SequenceMode,
+		Preference:          opts.FB2Preference,
+		Flatten:             opts.FlattenMode,
+		Dedup:               opts.DedupMode,
+		PathSeparator:       opts.FB2PathSeparator,
+		DuplicateLogMessage: "Dropped duplicate FLibrary sequence",
+	}, opts.Log)
 }

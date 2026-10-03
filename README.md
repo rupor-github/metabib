@@ -1096,7 +1096,9 @@ Available `inpx` arguments:
   `flib-inpx`. See [INPX Record Construction](#inpx-record-construction) for
   source-selection details.
 - `--additional`: write FLibrary-compatible additional artifacts for accepted
-  books only. Annotation artifact source follows `--prefer-fb2` when DB
+  books only, using the same `-annotations.zip` and `-compilations.zip` suffixes
+  as `flib-inpx` (for example, `flibusta_20260603-annotations.zip`).
+  Annotation artifact source follows `--prefer-fb2` when DB
   annotations are present; without DB annotation, FB2 annotations still win over
   FBD sidecar annotations. See
   [INPX Record Construction](#inpx-record-construction) for the shared scope

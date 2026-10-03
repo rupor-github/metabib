@@ -408,7 +408,7 @@ func TestFlattenFB2Sequences(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := flattenFB2Sequences(sequences, tt.mode, " > ")
+			got := inpxutil.FlattenFB2Sequences(sequences, tt.mode, " > ")
 			if len(got) != len(tt.want) {
 				t.Fatalf("len = %d got=%#v", len(got), got)
 			}
@@ -418,39 +418,6 @@ func TestFlattenFB2Sequences(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestCompilationCollectorDetectsParts(t *testing.T) {
-	t.Parallel()
-
-	collector := &compilationCollector{books: []compilationBook{
-		{
-			folder: "owner.zip",
-			file:   "owner.fb2",
-			root: &compilationSection{key: "owner", children: []*compilationSection{
-				{key: "part-a", leaf: true},
-				{key: "part-b", leaf: true},
-				{key: "part-a", leaf: true},
-				{key: "missing", leaf: true},
-			}},
-		},
-		{folder: "a.zip", file: "a.fb2", root: &compilationSection{key: "part-a", leaf: true}},
-		{folder: "b.zip", file: "b.fb2", root: &compilationSection{key: "part-b", leaf: true}},
-	}}
-
-	outputs := collector.compilations()
-	if len(outputs) != 1 {
-		t.Fatalf("compilations = %#v, want one", outputs)
-	}
-	got := outputs[0]
-	if got.Folder != "owner.zip" || got.File != "owner.fb2" || got.Covered {
-		t.Fatalf("compilation owner = %#v", got)
-	}
-	if len(got.Compilation) != 3 || got.Compilation[0].Part != 0 || got.Compilation[0].File != "a.fb2" ||
-		got.Compilation[1].Part != 1 || got.Compilation[1].File != "b.fb2" ||
-		got.Compilation[2].Part != 2 || got.Compilation[2].File != "a.fb2" {
-		t.Fatalf("parts = %#v", got.Compilation)
 	}
 }
 
@@ -517,67 +484,19 @@ func TestDedupSequencesCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
 	rec := flibOnlineRecord(1)
-	got := dedupSequences(rec, []sequence{
+	got := inpxutil.DedupSequences(rec, []sequence{
 		{Name: "Cycle", Number: "1", Source: "db"},
 		{Name: "cycle", Number: "2", Source: "fb2"},
-	}, Options{DedupMode: DedupCaseInsensitive})
+	}, DedupCaseInsensitive, "Dropped duplicate FLibrary sequence", nil)
 	if len(got) != 1 || got[0].Name != "Cycle" || got[0].Number != "1" || got[0].Source != "db" {
 		t.Fatalf("dedupSequences() = %#v", got)
-	}
-}
-
-func TestRecordAnnotationFB2PreferenceModes(t *testing.T) {
-	t.Parallel()
-
-	rec := flibRecord("archive-0001", 0, "1.fb2")
-	rec.Claims.Bibliographic.Annotation = []model.Claim{
-		{Observation: "db", Value: "Database annotation"},
-		{Observation: "fb2", Value: "FB2 annotation"},
-		{Observation: "fbd", Value: "FBD annotation"},
-	}
-	tests := []struct {
-		preference FB2Preference
-		want       string
-	}{
-		{preference: PreferIgnore, want: "Database annotation"},
-		{preference: PreferComplement, want: "Database annotation"},
-		{preference: PreferMerge, want: "FB2 annotation"},
-		{preference: PreferReplace, want: "FB2 annotation"},
-	}
-	for _, tt := range tests {
-		t.Run(string(tt.preference), func(t *testing.T) {
-			t.Parallel()
-
-			if got := recordAnnotation(rec, tt.preference); got != tt.want {
-				t.Fatalf("recordAnnotation() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestRecordAnnotationWithoutDatabaseKeepsCurrentPreference(t *testing.T) {
-	t.Parallel()
-
-	rec := flibRecord("archive-0001", 0, "1.fb2")
-	rec.Claims.Bibliographic.Annotation = []model.Claim{
-		{Observation: "fb2", Value: "FB2 annotation"},
-		{Observation: "fbd", Value: "FBD annotation"},
-	}
-	for _, preference := range []FB2Preference{PreferIgnore, PreferComplement, PreferMerge, PreferReplace} {
-		t.Run(string(preference), func(t *testing.T) {
-			t.Parallel()
-
-			if got := recordAnnotation(rec, preference); got != "FB2 annotation" {
-				t.Fatalf("recordAnnotation() = %q, want FB2 annotation", got)
-			}
-		})
 	}
 }
 
 func TestPeopleStringSanitizesAuthorSeparators(t *testing.T) {
 	t.Parallel()
 
-	got := peopleString([]model.PersonValue{{
+	got := (inpxutil.AuthorOptions{}).PeopleString([]model.PersonValue{{
 		LastName:   "Last, Jr:",
 		FirstName:  " First\u00a0A: B ",
 		MiddleName: "Middle, : C",
@@ -590,7 +509,7 @@ func TestPeopleStringSanitizesAuthorSeparators(t *testing.T) {
 func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 	t.Parallel()
 
-	got := peopleString([]model.PersonValue{{LastName: "����"}, {LastName: ":"}})
+	got := (inpxutil.AuthorOptions{}).PeopleString([]model.PersonValue{{LastName: "����"}, {LastName: ":"}})
 	if got != "неизвестный,автор,:" {
 		t.Fatalf("peopleString() = %q", got)
 	}
@@ -631,7 +550,7 @@ func TestPeopleStringDisambiguatesConfiguredAuthorField(t *testing.T) {
 			t.Parallel()
 
 			disambiguator := inpxutil.NewAuthorDisambiguator(ambiguousAuthorMetadata(), tt.field, nil, false)
-			got := peopleStringWithDisambiguation([]model.PersonValue{author}, Options{AuthorDisambiguator: disambiguator})
+			got := authorOptions(Options{AuthorDisambiguator: disambiguator}).PeopleString([]model.PersonValue{author})
 			if got != tt.want {
 				t.Fatalf("peopleStringWithDisambiguation() = %q, want %q", got, tt.want)
 			}
@@ -803,25 +722,6 @@ func TestGenerateFLibraryAdditionalIgnoredForDatabaseOnly(t *testing.T) {
 	}
 	if logs.FilterMessage("Skipping FLibrary additional artifacts for database-only input").Len() != 1 {
 		t.Fatalf("logs = %#v, want database-only warning", logs.All())
-	}
-}
-
-func TestGenresStringSanitizesGenreSeparators(t *testing.T) {
-	t.Parallel()
-
-	got := genresString([]model.GenreValue{{Code: "sf:history"}, {Code: ":"}, {Code: "sf,comma"}}, nil)
-	if got != "sf：history:sf,comma:" {
-		t.Fatalf("genresString() = %q", got)
-	}
-
-	got = genresString([]model.GenreValue{{Code: "�"}}, []model.GenreValue{{Code: "fb2:genre"}})
-	if got != "fb2：genre:" {
-		t.Fatalf("genresString() fallback = %q", got)
-	}
-
-	got = genresString([]model.GenreValue{{Code: "�"}}, nil)
-	if got != "other:" {
-		t.Fatalf("genresString() empty = %q", got)
 	}
 }
 

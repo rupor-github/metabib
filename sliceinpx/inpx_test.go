@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 
+	"metabib/flibinpx"
 	"metabib/internal/inpxutil"
 	"metabib/jsonl"
 	"metabib/model"
@@ -136,7 +137,7 @@ func TestPeopleStringDisambiguatesConfiguredAuthorField(t *testing.T) {
 		nil,
 		false,
 	)
-	got := peopleStringWithDisambiguation([]model.PersonValue{author}, Options{AuthorDisambiguator: disambiguator})
+	got := authorOptions(Options{AuthorDisambiguator: disambiguator}).PeopleString([]model.PersonValue{author})
 	if got != "Васильев,Сергей [археолог],Александрович:" {
 		t.Fatalf("peopleStringWithDisambiguation() = %q, want first-name suffix", got)
 	}
@@ -179,6 +180,9 @@ func TestGenerateAdditionalUSRSidecarAnnotations(t *testing.T) {
 		t.Fatalf("Generate() error = %v", err)
 	}
 	entries := readSliceZipEntries(t, stats.AdditionalOutputPath)
+	if filepath.Base(stats.AdditionalOutputPath) != "slice_20260603-annotations.zip" {
+		t.Fatalf("annotation output path = %q", stats.AdditionalOutputPath)
+	}
 	want := "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<folder name=\"usr.zip\">\n" +
 		"\t<file name=\"42.pdf\">\n\t\t<p>Sidecar annotation &amp; notes</p>\n\t</file>\n</folder>\n"
 	if entries["usr.zip"] != want {
@@ -186,49 +190,74 @@ func TestGenerateAdditionalUSRSidecarAnnotations(t *testing.T) {
 	}
 }
 
-func TestRecordAnnotationFB2PreferenceModes(t *testing.T) {
+func TestGenerateAdditionalCompilations(t *testing.T) {
 	t.Parallel()
-
-	rec := sliceRecord("archive-0001", 0, 42, "ru")
-	rec.Claims.Bibliographic.Annotation = []model.Claim{
-		{Observation: "db", Value: "Database annotation"},
-		{Observation: "fb2", Value: "FB2 annotation"},
-		{Observation: "fbd", Value: "FBD annotation"},
-	}
 	tests := []struct {
-		preference FB2Preference
-		want       string
+		name     string
+		generate func(context.Context, string, string) (string, error)
 	}{
-		{preference: PreferIgnore, want: "Database annotation"},
-		{preference: PreferComplement, want: "Database annotation"},
-		{preference: PreferMerge, want: "FB2 annotation"},
-		{preference: PreferReplace, want: "FB2 annotation"},
+		{
+			name: "inpx",
+			generate: func(ctx context.Context, input string, output string) (string, error) {
+				stats, err := Generate(ctx, Options{
+					InputPrefix: input, OutputPrefix: output, Additional: true,
+					CommentTemplate: "{{ .DatabaseName }}", VersionTemplate: "{{ .DumpDate }}",
+				})
+				return stats.CompilationsOutputPath, err
+			},
+		},
+		{
+			name: "flib-inpx",
+			generate: func(ctx context.Context, input string, output string) (string, error) {
+				stats, err := flibinpx.Generate(ctx, flibinpx.Options{
+					InputPrefix: input, OutputPrefix: output, Additional: true,
+					CommentTemplate: "{{ .DatabaseName }}", VersionTemplate: "{{ .DumpDate }}",
+				})
+				return inpxutil.CompilationsOutputPath(stats.OutputPath), err
+			},
+		},
 	}
 	for _, tt := range tests {
-		t.Run(string(tt.preference), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-
-			if got := recordAnnotation(rec, tt.preference); got != tt.want {
-				t.Fatalf("recordAnnotation() = %q, want %q", got, tt.want)
+			dir := t.TempDir()
+			prefix := filepath.Join(dir, "all")
+			rootKey, firstKey, secondKey := "AAAAAAAAAAAAAAAAAAAAAA", "AQEBAQEBAQEBAQEBAQEBAQ", "AgICAgICAgICAgICAgICAg"
+			records := []model.DatasetRecord{
+				sliceRecord("archive-0001", 0, 1, "ru"),
+				sliceRecord("archive-0001", 1, 2, "ru"),
+				sliceRecord("archive-0001", 2, 3, "ru"),
 			}
-		})
-	}
-}
-
-func TestRecordAnnotationWithoutDatabaseKeepsCurrentPreference(t *testing.T) {
-	t.Parallel()
-
-	rec := sliceRecord("archive-0001", 0, 42, "ru")
-	rec.Claims.Bibliographic.Annotation = []model.Claim{
-		{Observation: "fb2", Value: "FB2 annotation"},
-		{Observation: "fbd", Value: "FBD annotation"},
-	}
-	for _, preference := range []FB2Preference{PreferIgnore, PreferComplement, PreferMerge, PreferReplace} {
-		t.Run(string(preference), func(t *testing.T) {
-			t.Parallel()
-
-			if got := recordAnnotation(rec, preference); got != "FB2 annotation" {
-				t.Fatalf("recordAnnotation() = %q, want FB2 annotation", got)
+			sections := [][]model.FB2BodySectionFingerprint{
+				{{Key: rootKey}, {Depth: 1, Key: firstKey, Leaf: true}, {Depth: 1, Key: secondKey, Leaf: true}},
+				{{Key: firstKey, Leaf: true}},
+				{{Key: secondKey, Leaf: true}},
+			}
+			for idx := range records {
+				records[idx].Artifacts[0].Fingerprints = &model.ArtifactFingerprints{
+					FB2Body: &model.FB2BodyFingerprint{Sections: sections[idx]},
+				}
+			}
+			dataset := sliceDataset()
+			dataset.Records = 3
+			dataset.Archives[0].Entries = 3
+			dataset.Processing.FB2BodyFingerprints = &model.DatasetFB2BodyFingerprints{
+				Coverage: model.FB2BodyFingerprintCoverageComplete,
+			}
+			writeSliceDataset(t, prefix, dataset, records...)
+			path, err := tt.generate(context.Background(), prefix, filepath.Join(dir, "output"))
+			if err != nil {
+				t.Fatalf("Generate() error = %v", err)
+			}
+			if filepath.Base(path) != "output_20260603-compilations.zip" {
+				t.Fatalf("compilation output path = %q", path)
+			}
+			entries := readSliceZipEntries(t, path)
+			want := `[{"folder":"books.zip","file":"1.fb2","compilation":[` +
+				`{"part":0,"folder":"books.zip","file":"2.fb2"},` +
+				`{"part":1,"folder":"books.zip","file":"3.fb2"}],"covered":true}]`
+			if entries["compilations.json"] != want {
+				t.Fatalf("compilations JSON = %q, want %q", entries["compilations.json"], want)
 			}
 		})
 	}

@@ -416,14 +416,16 @@ func TestInfoTemplates(t *testing.T) {
 		DumpDate:    "20260603",
 		DumpDateISO: "2026-06-03",
 	}
-	got, err := collectionInfo(meta, Options{CommentTemplate: "\ufeff{{ .DatabaseName | upper }} {{ .DumpDate }} {{ .DisplayDate }}"})
+	got, err := inpxutil.CollectionInfo(meta, inpxutil.TemplateOptions{
+		CommentTemplate: "\ufeff{{ .DatabaseName | upper }} {{ .DumpDate }} {{ .DisplayDate }}",
+	})
 	if err != nil {
 		t.Fatalf("collectionInfo() error = %v", err)
 	}
 	if got != "\ufeffFLIBUSTA 20260603 2026-06-03" {
 		t.Fatalf("collectionInfo() = %q", got)
 	}
-	got, err = versionInfo(meta, Options{VersionTemplate: "{{ .DumpDate }} {{ .DatabaseName | upper }}\r\n"})
+	got, err = inpxutil.VersionInfo(meta, inpxutil.TemplateOptions{VersionTemplate: "{{ .DumpDate }} {{ .DatabaseName | upper }}\r\n"})
 	if err != nil {
 		t.Fatalf("versionInfo() error = %v", err)
 	}
@@ -451,7 +453,7 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 	t.Parallel()
 
 	fb2Authors := []model.PersonValue{{FirstName: "неизвестен", LastName: "Автор"}}
-	got := authorsString(true, nil, fb2Authors, Options{FB2Preference: PreferComplement, Limits: DefaultLimits()})
+	got := authorOptions(Options{FB2Preference: PreferComplement, Limits: DefaultLimits()}).AuthorsString(true, nil, fb2Authors)
 	if got != "неизвестный,автор,:" {
 		t.Fatalf("authorsString() = %q", got)
 	}
@@ -460,11 +462,11 @@ func TestAuthorsStringDBPresentWithoutAuthors(t *testing.T) {
 func TestPeopleStringSanitizesAuthorSeparators(t *testing.T) {
 	t.Parallel()
 
-	got := peopleString([]model.PersonValue{{
+	got := authorOptions(Options{Limits: DefaultLimits()}).PeopleString([]model.PersonValue{{
 		LastName:   "Last, Jr:",
 		FirstName:  " First\u00a0A: B ",
 		MiddleName: "Middle, : C",
-	}}, Options{Limits: DefaultLimits()})
+	}})
 	if got != "Last， Jr,First A： B,Middle， ： C:" {
 		t.Fatalf("peopleString() = %q", got)
 	}
@@ -473,7 +475,7 @@ func TestPeopleStringSanitizesAuthorSeparators(t *testing.T) {
 func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 	t.Parallel()
 
-	got := peopleString([]model.PersonValue{{LastName: "����"}, {LastName: ":"}}, Options{Limits: DefaultLimits()})
+	got := authorOptions(Options{Limits: DefaultLimits()}).PeopleString([]model.PersonValue{{LastName: "����"}, {LastName: ":"}})
 	if got != "неизвестный,автор,:" {
 		t.Fatalf("peopleString() = %q", got)
 	}
@@ -482,50 +484,34 @@ func TestPeopleStringSkipsCorruptEmptyAuthors(t *testing.T) {
 func TestAuthorNameComponentPreservesDisambiguationSuffixWithQuickFix(t *testing.T) {
 	t.Parallel()
 
-	got := renderedAuthorLastName(
+	got := authorOptions(Options{
+		QuickFix: true, Limits: Limits{AuthorFamily: 12}, DisambiguationField: inpxutil.AuthorDisambiguationLast,
+	}).LastName(
 		model.PersonValue{LastName: "VeryLongFamilyName"},
 		" [#123]",
-		Options{QuickFix: true, Limits: Limits{AuthorFamily: 12}, DisambiguationField: inpxutil.AuthorDisambiguationLast},
 	)
 	if got != "Very [#123]" {
 		t.Fatalf("renderedAuthorLastName() = %q, want suffix preserved", got)
 	}
 
-	got = renderedAuthorLastName(
+	got = authorOptions(Options{
+		QuickFix: true, Limits: Limits{AuthorFamily: 5}, DisambiguationField: inpxutil.AuthorDisambiguationLast,
+	}).LastName(
 		model.PersonValue{LastName: "VeryLongFamilyName"},
 		"[#123456789]",
-		Options{QuickFix: true, Limits: Limits{AuthorFamily: 5}, DisambiguationField: inpxutil.AuthorDisambiguationLast},
 	)
 	if got != "[#123456789]" {
 		t.Fatalf("renderedAuthorLastName() = %q, want full suffix over truncation", got)
 	}
 
-	got = renderedAuthorFirstName(
+	got = authorOptions(Options{
+		QuickFix: true, Limits: Limits{AuthorName: 12}, DisambiguationField: inpxutil.AuthorDisambiguationFirst,
+	}).FirstName(
 		model.PersonValue{FirstName: "VeryLongGivenName"},
 		"[#123]",
-		Options{QuickFix: true, Limits: Limits{AuthorName: 12}, DisambiguationField: inpxutil.AuthorDisambiguationFirst},
 	)
 	if got != "Very [#123]" {
 		t.Fatalf("renderedAuthorFirstName() = %q, want suffix preserved", got)
-	}
-}
-
-func TestGenresStringSanitizesGenreSeparators(t *testing.T) {
-	t.Parallel()
-
-	got := genresString([]model.GenreValue{{Code: "sf:history"}, {Code: ":"}, {Code: "sf,comma"}}, nil)
-	if got != "sf：history:sf,comma:" {
-		t.Fatalf("genresString() = %q", got)
-	}
-
-	got = genresString([]model.GenreValue{{Code: "�"}}, []model.GenreValue{{Code: "fb2:genre"}})
-	if got != "fb2：genre:" {
-		t.Fatalf("genresString() fallback = %q", got)
-	}
-
-	got = genresString([]model.GenreValue{{Code: "�"}}, nil)
-	if got != "other:" {
-		t.Fatalf("genresString() empty = %q", got)
 	}
 }
 
@@ -554,7 +540,7 @@ func TestFB2PreferenceModes(t *testing.T) {
 			t.Parallel()
 
 			opts := Options{FB2Preference: tt.preference, SequenceMode: SequenceAuthor, Limits: DefaultLimits()}
-			if got := authorsString(true, dbAuthors, fb2Authors, opts); got != tt.wantAuthor {
+			if got := authorOptions(opts).AuthorsString(true, dbAuthors, fb2Authors); got != tt.wantAuthor {
 				t.Fatalf("authorsString() = %q, want %q", got, tt.wantAuthor)
 			}
 			series, _ := sequenceString(dbSequences, fb2Sequences, opts)
