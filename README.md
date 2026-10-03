@@ -128,6 +128,21 @@ back to signaling the private server process.
 To use an existing MariaDB service instead of the managed local instance, set
 `database.dsn` or `database.managed: false` in the configuration file.
 
+Configure extra startup options for a managed MariaDB server, including temporary
+instances, with `database.server_args`. For example:
+
+```yaml
+database:
+  server_args:
+    - "--innodb-buffer-pool-size=1G"
+    - "--key-buffer-size=128M"
+```
+
+Each list item is one command-line argument, passed directly without shell
+expansion. Custom options precede metabib's generated arguments, so its datadir,
+socket, and other duplicate startup settings take precedence. These options apply
+to the managed server only, not the database initializer or external services.
+
 The easiest portable setup for managed mode is to keep a local MariaDB unpacked
 next to the `metabib` executable or project checkout.
 

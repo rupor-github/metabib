@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,58 @@ func TestInstallDBArgs(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && !contains(args, "--skip-test-db") {
 		t.Fatalf("unix installDBArgs() missing --skip-test-db: %#v", args)
+	}
+}
+
+func TestManagedServerArgs(t *testing.T) {
+	t.Parallel()
+	for _, protocol := range []string{"unix", "tcp"} {
+		t.Run(protocol, func(t *testing.T) {
+			t.Parallel()
+			extra := []string{
+				"--defaults-file=/tmp/custom config.cnf",
+				"--key-buffer-size=128M",
+				"--max-connections", "17",
+				"--datadir=/tmp/overridden",
+			}
+			// Extra capacity detects accidental append into the configured backing array.
+			backing := make([]string, len(extra)+16)
+			copy(backing, extra)
+			for idx := len(extra); idx < len(backing); idx++ {
+				backing[idx] = "unused"
+			}
+			original := slices.Clone(backing)
+			cfg := config.DatabaseConfig{
+				Protocol: protocol, Host: "127.0.0.1", Port: 3307,
+				DataDir: "/tmp/data", Socket: "/tmp/metabib.sock", PIDFile: "/tmp/metabib.pid", LogFile: "/tmp/metabib.log",
+				ServerArgs: backing[:len(extra)],
+			}
+			args := managedServerArgs(cfg)
+			if !slices.Equal(args[:len(extra)], extra) {
+				t.Fatalf("custom arguments were reordered or split: %#v", args)
+			}
+			if !slices.Equal(backing, original) {
+				t.Fatal("managedServerArgs mutated the configured arguments")
+			}
+			for _, arg := range []string{
+				"--datadir=/tmp/data", "--pid-file=/tmp/metabib.pid", "--log-error=/tmp/metabib.log", "--skip-grant-tables",
+			} {
+				if !slices.Contains(args[len(extra):], arg) {
+					t.Fatalf("managed startup argument %q is missing after custom options: %#v", arg, args)
+				}
+			}
+			if protocol == "unix" {
+				if !slices.Contains(args, "--socket=/tmp/metabib.sock") || !slices.Contains(args, "--skip-networking") {
+					t.Fatalf("missing managed socket settings: %#v", args)
+				}
+			} else if !slices.Contains(args, "--bind-address=127.0.0.1") || !slices.Contains(args, "--port=3307") {
+				t.Fatalf("missing managed TCP settings: %#v", args)
+			}
+			cfg.ServerArgs = nil
+			if defaults := managedServerArgs(cfg); !slices.Equal(defaults, args[len(extra):]) {
+				t.Fatalf("default arguments differ with server_args unset: %#v", defaults)
+			}
+		})
 	}
 }
 

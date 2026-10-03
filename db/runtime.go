@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -309,25 +310,33 @@ func installDBArgs(dataDir string) []string {
 	return args
 }
 
-func (r *Runtime) startServer(ctx context.Context, server string) error {
-	start := time.Now()
-	args := []string{
-		"--datadir=" + r.Config.DataDir,
-		"--pid-file=" + r.Config.PIDFile,
-		"--log-error=" + r.Config.LogFile,
+func managedServerArgs(cfg config.DatabaseConfig) []string {
+	// Keep option-file arguments first and avoid mutating the configured slice.
+	args := slices.Clone(cfg.ServerArgs)
+	args = append(args,
+		"--datadir="+cfg.DataDir,
+		"--pid-file="+cfg.PIDFile,
+		"--log-error="+cfg.LogFile,
 		"--skip-grant-tables",
 		"--character-set-server=utf8mb4",
 		"--collation-server=utf8mb4_unicode_ci",
+	)
+	if cfg.Protocol == "unix" {
+		args = append(args, "--socket="+cfg.Socket, "--skip-networking")
+	} else {
+		args = append(args, "--bind-address="+cfg.Host, fmt.Sprintf("--port=%d", cfg.Port))
 	}
+	return args
+}
+
+func (r *Runtime) startServer(ctx context.Context, server string) error {
+	start := time.Now()
 	if r.Config.Protocol == "unix" {
 		if err := removeStaleSocket(r.Config.Socket); err != nil {
 			return err
 		}
-		args = append(args, "--socket="+r.Config.Socket, "--skip-networking")
-	} else {
-		args = append(args, "--bind-address="+r.Config.Host, fmt.Sprintf("--port=%d", r.Config.Port))
 	}
-	cmd := exec.Command(server, args...)
+	cmd := exec.Command(server, managedServerArgs(r.Config)...)
 	cmd.Stdout = r.LogOut
 	cmd.Stderr = r.LogOut
 	if err := r.startManagedProcess(ctx, cmd); err != nil {

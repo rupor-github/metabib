@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,6 +106,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if cfg.Database.AdminPath != "" {
 		t.Fatalf("Database.AdminPath = %q, want empty", cfg.Database.AdminPath)
 	}
+	if len(cfg.Database.ServerArgs) != 0 {
+		t.Fatalf("Database.ServerArgs = %#v, want no extra startup arguments", cfg.Database.ServerArgs)
+	}
 	for _, placeholder := range []string{"skip", "snip", "просто проверка", "qwdqd"} {
 		if !containsString(cfg.Database.AnnotationBodyPlaceholders, placeholder) {
 			t.Fatalf("Database.AnnotationBodyPlaceholders missing %q: %#v", placeholder, cfg.Database.AnnotationBodyPlaceholders)
@@ -164,6 +168,47 @@ func TestDatabaseImportWorkersConfiguration(t *testing.T) {
 			}
 			if cfg.Database.ImportWorkers != workers {
 				t.Fatalf("import_workers = %d, want %d", cfg.Database.ImportWorkers, workers)
+			}
+		})
+	}
+}
+
+func TestDatabaseServerArgsConfiguration(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		yaml    string
+		want    []string
+		wantErr bool
+	}{
+		{name: "empty", yaml: "[]"},
+		{
+			name: "startup options", yaml: `["--key-buffer-size=128M", "--init-connect=SET time_zone = '+00:00'"]`,
+			want: []string{"--key-buffer-size=128M", "--init-connect=SET time_zone = '+00:00'"},
+		},
+		{name: "empty argument", yaml: `[""]`, wantErr: true},
+		{name: "scalar instead of list", yaml: `"--key-buffer-size=128M"`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			path := filepath.Join(root, "metabib.yaml")
+			if err := os.WriteFile(path, []byte("version: 1\ndatabase:\n  server_args: "+tt.yaml+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfiguration(path, gencfg.WithRootDir(root))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("invalid server_args configuration was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(cfg.Database.ServerArgs, tt.want) {
+				t.Fatalf("server_args = %#v, want %#v", cfg.Database.ServerArgs, tt.want)
 			}
 		})
 	}

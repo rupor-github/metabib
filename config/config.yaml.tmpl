@@ -44,6 +44,11 @@ database:
   client_path: ""
   admin_path: ""
 
+  # Extra managed-server startup options, one list item per command-line argument.
+  # Passed directly without shell expansion, before metabib's generated arguments.
+  # Metabib's datadir, socket, and other duplicate startup settings take precedence.
+  server_args: []
+
   # Database annotation bodies that should be omitted after markup removal and
   # text normalization. Matching ignores case and punctuation, so "--skip--"
   # matches "skip".
