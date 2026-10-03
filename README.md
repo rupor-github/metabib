@@ -388,6 +388,11 @@ Available `rollup` arguments:
 `cache` creates portable manifest files for selected sources. It does not produce
 the final merged dataset JSONL.
 
+Records are compressed into a temporary Zstandard stream during extraction.
+Final publication writes a header frame and copies the compressed record stream,
+avoiding an uncompressed spool and a final compression pass. Standard Zstandard
+readers decode the concatenated frames as one JSONL stream: header, then records.
+
 ```sh
 metabib cache \
   --database-dumps /path/to/sql-dumps \

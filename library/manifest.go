@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	jsonv2 "encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -145,11 +146,12 @@ type DumpManifestSource struct {
 }
 
 type manifestWriter struct {
-	path        string
-	tmpRecords  string
-	recordsFile *os.File
-	recordsBuf  *bufio.Writer
-	count       int64
+	path           string
+	tmpRecords     string
+	recordsFile    *os.File
+	recordsBuf     *bufio.Writer
+	recordsEncoder *zstd.Encoder
+	count          int64
 }
 
 type manifestReadCloser struct {
@@ -511,11 +513,21 @@ func newManifestWriter(path string) (*manifestWriter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create manifest records %q: %w", filepath.Join(filepath.Dir(path), recordsPattern), err)
 	}
-	tmpRecords := f.Name()
-	return &manifestWriter{path: path, tmpRecords: tmpRecords, recordsFile: f, recordsBuf: bufio.NewWriter(f)}, nil
+	enc, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
+	if err != nil {
+		cleanupErr := errors.Join(f.Close(), os.Remove(f.Name()))
+		return nil, fmt.Errorf("create manifest records compressor %q: %w", f.Name(), errors.Join(err, cleanupErr))
+	}
+	return &manifestWriter{
+		path: path, tmpRecords: f.Name(), recordsFile: f,
+		recordsBuf: bufio.NewWriter(enc), recordsEncoder: enc,
+	}, nil
 }
 
 func (w *manifestWriter) Write(rec model.Record) error {
+	if w == nil || w.recordsBuf == nil {
+		return fmt.Errorf("write manifest record: %w", os.ErrClosed)
+	}
 	data, err := jsonv2.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal manifest record: %w", err)
@@ -528,89 +540,112 @@ func (w *manifestWriter) Write(rec model.Record) error {
 	return nil
 }
 
-func (w *manifestWriter) Close(header any) error {
+func (w *manifestWriter) Close(header any) (retErr error) {
 	if w == nil {
 		return nil
 	}
-	if w.recordsBuf != nil {
-		if err := w.recordsBuf.Flush(); err != nil {
-			return fmt.Errorf("flush manifest records %q: %w", w.tmpRecords, err)
-		}
+	if w.recordsEncoder == nil {
+		return fmt.Errorf("close manifest: %w", os.ErrClosed)
 	}
-	if w.recordsFile != nil {
-		if err := w.recordsFile.Close(); err != nil {
-			return fmt.Errorf("close manifest records %q: %w", w.tmpRecords, err)
-		}
+	defer func() {
+		retErr = errors.Join(retErr, w.Abort())
+	}()
+	enc := w.recordsEncoder
+	if err := w.closeRecords(); err != nil {
+		return err
+	}
+	data, err := jsonv2.Marshal(header)
+	if err != nil {
+		return fmt.Errorf("marshal manifest header %q: %w", w.path, err)
 	}
 
 	manifestPattern := fileutil.HiddenTempPattern(filepath.Base(w.path))
-	tmpManifestFile, err := os.CreateTemp(filepath.Dir(w.path), manifestPattern)
+	out, err := os.CreateTemp(filepath.Dir(w.path), manifestPattern)
 	if err != nil {
 		return fmt.Errorf("create manifest %q: %w", filepath.Join(filepath.Dir(w.path), manifestPattern), err)
 	}
-	tmpManifest := tmpManifestFile.Name()
-	if err := tmpManifestFile.Close(); err != nil {
-		return fmt.Errorf("close empty manifest %q: %w", tmpManifest, err)
-	}
+	tmpManifest := out.Name()
 	cleanupManifest := true
 	defer func() {
+		if out != nil {
+			retErr = errors.Join(retErr, out.Close())
+		}
 		if cleanupManifest {
-			_ = os.Remove(tmpManifest)
+			if err := os.Remove(tmpManifest); err != nil && !os.IsNotExist(err) {
+				retErr = errors.Join(retErr, fmt.Errorf("remove temporary manifest %q: %w", tmpManifest, err))
+			}
 		}
 	}()
-	out, enc, err := createCompressedManifest(tmpManifest)
-	if err != nil {
-		return err
-	}
-	if err := writeJSONLValue(enc, header); err != nil {
-		enc.Close()
-		out.Close()
+	// A header frame followed by the already compressed record frame decodes to
+	// the same JSONL stream. Final publication only copies compressed bytes.
+	// Reuse the streaming encoder so the header does not allocate another encoder pool.
+	enc.Reset(out)
+	_, writeErr := enc.Write(append(data, '\n'))
+	headerCloseErr := enc.Close()
+	if err := errors.Join(writeErr, headerCloseErr); err != nil {
 		return fmt.Errorf("write manifest header %q: %w", tmpManifest, err)
 	}
 	records, err := os.Open(w.tmpRecords)
 	if err != nil {
-		out.Close()
 		return fmt.Errorf("open manifest records %q: %w", w.tmpRecords, err)
 	}
-	if _, err := io.Copy(enc, records); err != nil {
-		records.Close()
-		enc.Close()
-		out.Close()
-		return fmt.Errorf("write manifest records %q: %w", tmpManifest, err)
+	_, copyErr := io.Copy(out, records)
+	closeErr := records.Close()
+	if copyErr != nil {
+		return fmt.Errorf("write manifest records %q: %w", tmpManifest, errors.Join(copyErr, closeErr))
 	}
-	if err := records.Close(); err != nil {
-		enc.Close()
-		out.Close()
-		return fmt.Errorf("close manifest records %q: %w", w.tmpRecords, err)
-	}
-	if err := enc.Close(); err != nil {
-		out.Close()
-		return fmt.Errorf("close manifest compressor %q: %w", tmpManifest, err)
+	if closeErr != nil {
+		return fmt.Errorf("close manifest records %q: %w", w.tmpRecords, closeErr)
 	}
 	if err := out.Close(); err != nil {
+		out = nil
 		return fmt.Errorf("close manifest %q: %w", tmpManifest, err)
 	}
+	out = nil
 	if err := os.Rename(tmpManifest, w.path); err != nil {
 		return fmt.Errorf("rename manifest %q to %q: %w", tmpManifest, w.path, err)
 	}
 	cleanupManifest = false
-	if err := os.Remove(w.tmpRecords); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove manifest records %q: %w", w.tmpRecords, err)
-	}
 	return nil
+}
+
+func (w *manifestWriter) closeRecords() error {
+	var errs []error
+	if w.recordsBuf != nil {
+		if err := w.recordsBuf.Flush(); err != nil {
+			errs = append(errs, fmt.Errorf("flush manifest records %q: %w", w.tmpRecords, err))
+		}
+		w.recordsBuf = nil
+	}
+	if w.recordsEncoder != nil {
+		if err := w.recordsEncoder.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close manifest records compressor %q: %w", w.tmpRecords, err))
+		}
+		w.recordsEncoder = nil
+	}
+	if w.recordsFile != nil {
+		if err := w.recordsFile.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close manifest records %q: %w", w.tmpRecords, err))
+		}
+		w.recordsFile = nil
+	}
+	return errors.Join(errs...)
 }
 
 func (w *manifestWriter) Abort() error {
 	if w == nil {
 		return nil
 	}
-	if w.recordsFile != nil {
-		_ = w.recordsFile.Close()
+	// Discard unwritten buffered records; close the encoder to stop its workers.
+	w.recordsBuf = nil
+	closeErr := w.closeRecords()
+	if w.tmpRecords != "" {
+		if err := os.Remove(w.tmpRecords); err != nil && !os.IsNotExist(err) {
+			return errors.Join(closeErr, fmt.Errorf("remove temporary manifest records %q: %w", w.tmpRecords, err))
+		}
+		w.tmpRecords = ""
 	}
-	if err := os.Remove(w.tmpRecords); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove temporary manifest records %q: %w", w.tmpRecords, err)
-	}
-	return nil
+	return closeErr
 }
 
 func planArchiveManifest(
@@ -1127,19 +1162,6 @@ func openManifestReader(path string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("open manifest compressor %q: %w", path, err)
 	}
 	return &manifestReadCloser{file: f, decoder: dec}, nil
-}
-
-func createCompressedManifest(path string) (*os.File, *zstd.Encoder, error) {
-	f, err := os.Create(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create manifest %q: %w", path, err)
-	}
-	enc, err := zstd.NewWriter(f, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
-	if err != nil {
-		f.Close()
-		return nil, nil, fmt.Errorf("create manifest compressor %q: %w", path, err)
-	}
-	return f, enc, nil
 }
 
 func writeJSONLValue(w io.Writer, value any) error {
