@@ -264,18 +264,15 @@ func ProcessDatabase(
 				if err != nil {
 					return err
 				}
-				identities, err := repo.FileIdentitiesByIDs(workerCtx, batch.IDs)
-				if err != nil {
-					return err
-				}
 				dbLoadElapsed := time.Since(batchStart)
 				records := make([]model.Record, 0, len(batch.IDs))
 				for _, id := range batch.IDs {
-					identity := identities[id]
+					source := sources[id]
+					identity := db.FileIdentityFromSource(id, source)
 					records = append(records, model.Record{
 						Schema: recordSchema,
 						ID:     model.RecordID{Library: cfg.Database.Name, BookID: id, FileName: identity.FileName, Extension: identity.Extension},
-						Source: model.RecordSources{Database: sources[id], FB2: model.FB2Source{}},
+						Source: model.RecordSources{Database: source, FB2: model.FB2Source{}},
 					})
 				}
 				select {

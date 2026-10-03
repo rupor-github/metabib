@@ -572,6 +572,9 @@ func runCache(ctx context.Context, cmd *cli.Command) (retErr error) {
 			}
 			defer repo.Close()
 			if importDumps {
+				if err := repo.EnsureReadIndexes(ctx, env.Log); err != nil {
+					return err
+				}
 				if err := repo.WriteImportProvenance(ctx, importProvenanceFromDatabaseManifest(databaseManifest)); err != nil {
 					return err
 				}

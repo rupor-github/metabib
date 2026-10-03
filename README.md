@@ -394,6 +394,11 @@ metabib cache \
   --archives /path/to/flibusta
 ```
 
+After importing Flibusta dumps, `cache` creates a `(BookId, nid)` read index on
+`libbannotations` if no index already starts with the full `BookId` column. This
+avoids scanning the entire annotation table for every book batch. Index creation
+and its elapsed time are logged before database manifest generation begins.
+
 To use an already imported database:
 
 ```sh

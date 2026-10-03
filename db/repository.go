@@ -30,6 +30,21 @@ type FileIdentity struct {
 	Extension string
 }
 
+// FileIdentityFromSource uses the first filename in database order when present.
+// Otherwise it falls back to the numeric book ID and reported file type.
+func FileIdentityFromSource(id int64, src model.DatabaseSource) FileIdentity {
+	identity := FileIdentity{}
+	if src.Book != nil {
+		identity = FileIdentity{FileName: strconv.FormatInt(id, 10), Extension: src.Book.FileType}
+	}
+	if len(src.Filenames) > 0 {
+		name := src.Filenames[0]
+		identity.FileName = strings.TrimSuffix(name, filepath.Ext(name))
+		identity.Extension = strings.TrimPrefix(filepath.Ext(name), ".")
+	}
+	return identity
+}
+
 func Open(ctx context.Context, cfg config.DatabaseConfig) (*Repository, error) {
 	dsn, err := DSN(cfg, true)
 	if err != nil {
@@ -130,11 +145,7 @@ func (r *Repository) FileIdentitiesByIDs(ctx context.Context, ids []int64) (map[
 		return nil, err
 	}
 	for id, book := range books {
-		if strings.EqualFold(book.FileType, "fb2") {
-			out[id] = FileIdentity{FileName: strconv.FormatInt(id, 10), Extension: book.FileType}
-		} else {
-			out[id] = FileIdentity{FileName: strconv.FormatInt(id, 10), Extension: book.FileType}
-		}
+		out[id] = FileIdentityFromSource(id, model.DatabaseSource{Book: book})
 	}
 	if ok, err := r.tableExists(ctx, "libfilename"); err != nil || !ok {
 		return out, err
@@ -167,9 +178,7 @@ func (r *Repository) FileIdentitiesByIDs(ctx context.Context, ids []int64) (map[
 		if _, exists := selected[id]; exists {
 			continue
 		}
-		stem := strings.TrimSuffix(name, filepath.Ext(name))
-		ext := strings.TrimPrefix(filepath.Ext(name), ".")
-		out[id] = FileIdentity{FileName: stem, Extension: ext}
+		out[id] = FileIdentityFromSource(id, model.DatabaseSource{Filenames: []string{name}})
 		selected[id] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {

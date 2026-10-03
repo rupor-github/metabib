@@ -70,6 +70,64 @@ func TestFileIdentityFallback(t *testing.T) {
 	}
 }
 
+func TestFileIdentityFromSource(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		source model.DatabaseSource
+		want   FileIdentity
+	}{
+		{name: "missing book"},
+		{
+			name: "numeric FB2", source: model.DatabaseSource{Book: &model.DBBook{FileType: "fb2"}},
+			want: FileIdentity{FileName: "42", Extension: "fb2"},
+		},
+		{
+			name: "numeric non-FB2", source: model.DatabaseSource{Book: &model.DBBook{FileType: "pdf"}},
+			want: FileIdentity{FileName: "42", Extension: "pdf"},
+		},
+		{
+			name: "legacy filename", source: model.DatabaseSource{
+				Book: &model.DBBook{FileType: "pdf"}, Filenames: []string{"A legacy.book.DJVU", "Z book.pdf"},
+			},
+			want: FileIdentity{FileName: "A legacy.book", Extension: "DJVU"},
+		},
+		{
+			name: "filename without book", source: model.DatabaseSource{Filenames: []string{"legacy.fb2"}},
+			want: FileIdentity{FileName: "legacy", Extension: "fb2"},
+		},
+		{
+			name: "filename without extension", source: model.DatabaseSource{Filenames: []string{"legacy"}},
+			want: FileIdentity{FileName: "legacy"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := FileIdentityFromSource(42, tt.source); got != tt.want {
+				t.Fatalf("FileIdentityFromSource() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFileIdentityFromLoadedSourceMatchesSeparateLookup(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepository(t)
+	ctx := context.Background()
+	sources, err := repo.BookSourcesByIDs(ctx, []int64{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identities, err := repo.FileIdentitiesByIDs(ctx, []int64{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := FileIdentityFromSource(1, sources[1]); got != identities[1] {
+		t.Fatalf("loaded source identity = %#v, separate lookup = %#v", got, identities[1])
+	}
+}
+
 func TestImportProvenanceRoundTrip(t *testing.T) {
 	t.Parallel()
 
