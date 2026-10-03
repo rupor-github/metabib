@@ -121,12 +121,13 @@ detect_dump_date() {
 
 	for sql in "${dump_dir}"/*.sql; do
 		[[ -e "${sql}" ]] || continue
+		# The completion timestamp is in the footer; avoid scanning the SQL data.
 		while IFS= read -r line; do
 			if [[ "${line}" =~ --[[:space:]]*Dump[[:space:]]completed[[:space:]]on[[:space:]]([0-9]{4})-([0-9]{2})-([0-9]{2}) ]]; then
 				printf '%s%s%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}"
 				return 0
 			fi
-		done <"${sql}"
+		done < <(tail -c 4096 -- "${sql}")
 	done
 
 	return 1
