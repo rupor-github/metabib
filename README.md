@@ -404,6 +404,11 @@ After importing Flibusta dumps, `cache` creates a `(BookId, nid)` read index on
 avoids scanning the entire annotation table for every book batch. Index creation
 and its elapsed time are logged before database manifest generation begins.
 
+SQL dump import concurrency is controlled by `database.import_workers`, which
+defaults to half the detected logical CPUs, rounded down, with a minimum of one.
+Set it to `1` for sequential imports. This is independent of
+`processing.database_workers`, which controls metadata reads after import.
+
 To use an already imported database:
 
 ```sh

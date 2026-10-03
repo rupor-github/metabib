@@ -57,6 +57,7 @@ type DatabaseConfig struct {
 
 	AnnotationBodyPlaceholders []string `yaml:"annotation_body_placeholders" validate:"dive"`
 
+	ImportWorkers   int `yaml:"import_workers" validate:"min=1"`
 	MaxOpenConns    int `yaml:"max_open_connections" validate:"min=0"`
 	MaxIdleConns    int `yaml:"max_idle_connections" validate:"min=0"`
 	ConnMaxLifetime int `yaml:"connection_max_lifetime_seconds" validate:"min=0"`

@@ -65,6 +65,11 @@ database:
     - просто проверка
     - qwdqd
 
+  # Concurrent SQL dump imports, each using a separate client connection.
+  # Default to half the logical CPUs, rounded down, with a minimum of 1.
+  # Set 1 explicitly for sequential imports.
+  import_workers: '{{ max 1 (div .CPUs 2) }}'
+
   # Connection pool used by metabib while reading metadata. 0 lets database/sql
   # use its default for that particular setting.
   max_open_connections: 32

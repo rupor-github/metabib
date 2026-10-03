@@ -2,11 +2,17 @@ package db
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"metabib/config"
 )
@@ -137,6 +143,101 @@ func TestImportFixupSkipsAlterDatabase(t *testing.T) {
 	}
 	if !strings.Contains(got, "CREATE TABLE") || !strings.Contains(got, "INSERT INTO") {
 		t.Fatalf("fixup output removed ordinary SQL: %s", got)
+	}
+}
+
+func TestImportFixupReader(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		dump  string
+		input string
+	}{
+		{name: "empty", dump: "libbook.sql"},
+		{name: "no final newline", dump: "libbook.sql", input: "CREATE TABLE x (id int);\nINSERT INTO x VALUES (1);"},
+		{name: "skipped line", dump: "libbook.sql", input: "ALTER DATABASE `l` CHARACTER SET utf8;\nSELECT 1;\n"},
+		{name: "all skipped", dump: "libbook.sql", input: "ALTER DATABASE `l` CHARACTER SET utf8;"},
+		{name: "long line", dump: "libbook.sql", input: "INSERT INTO x VALUES ('" + strings.Repeat("данные", 10000) + "');\n"},
+		{
+			name: "author aliases", dump: "lib.libavtoraliase.sql",
+			input: "  `AliaseId` int(11) NOT NULL auto_increment,\nINSERT INTO `libavtoraliase` VALUES (0,10,20);",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var want, got bytes.Buffer
+			if err := writeImportFixup(&want, strings.NewReader(tt.input), isAuthorAliasDump(tt.dump)); err != nil {
+				t.Fatal(err)
+			}
+			reader := importFixupReader(strings.NewReader(tt.input), tt.dump)
+			if n, err := reader.Read(nil); n != 0 || err != nil {
+				t.Fatalf("empty Read() = %d, %v", n, err)
+			}
+			buf := make([]byte, 3)
+			for {
+				n, err := reader.Read(buf)
+				got.Write(buf[:n])
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !bytes.Equal(got.Bytes(), want.Bytes()) {
+				t.Fatal("streaming fixups changed SQL contents")
+			}
+		})
+	}
+}
+
+func TestImportDumpClientExitsWithoutReading(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("test client is a Unix shell executable")
+	}
+	dir := t.TempDir()
+	client := filepath.Join(dir, "client")
+	if err := os.WriteFile(client, []byte("#!/bin/sh\nexit 17\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "libbook.sql")
+	if err := os.WriteFile(path, []byte(strings.Repeat("INSERT INTO x VALUES (1);\n", 100000)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	importer := NewImporter(config.DatabaseConfig{Protocol: "unix", Name: "test"}, client, nil, nil, false, true)
+	err := importer.importDump(ctx, client, DumpFile{Path: path, Name: "libbook.sql"})
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 17 {
+		t.Fatalf("import error=%v, want client exit 17", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("import did not return before its deadline: %v", ctx.Err())
+	}
+}
+
+func TestImportDumpClientCancellation(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("test client is a Unix shell executable")
+	}
+	dir := t.TempDir()
+	client := filepath.Join(dir, "client")
+	if err := os.WriteFile(client, []byte("#!/bin/sh\nexec sleep 30\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "libbook.sql")
+	if err := os.WriteFile(path, []byte("SELECT 1;\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	importer := NewImporter(config.DatabaseConfig{Protocol: "unix", Name: "test"}, client, nil, nil, false, true)
+	if err := importer.importDump(ctx, client, DumpFile{Path: path, Name: "libbook.sql"}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("canceled client error = %v", err)
 	}
 }
 

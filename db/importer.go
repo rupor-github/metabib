@@ -14,10 +14,13 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"golang.org/x/sync/errgroup"
 
 	"metabib/config"
 )
@@ -53,7 +56,7 @@ func NewImporter(
 		cfg:     cfg,
 		client:  client,
 		log:     log,
-		logOut:  logOut,
+		logOut:  zapcore.Lock(zapcore.AddSync(logOut)),
 		verbose: verbose,
 		create:  create,
 	}
@@ -128,7 +131,9 @@ func (i *Importer) PrepareDatabase(ctx context.Context) error {
 		return fmt.Errorf("ping MariaDB admin connection: %w", err)
 	}
 	if i.create {
-		if _, err := db.ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS "+quoteIdentifier(i.cfg.Name)+" CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"); err != nil {
+		query := "CREATE DATABASE IF NOT EXISTS " + quoteIdentifier(i.cfg.Name) +
+			" CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+		if _, err := db.ExecContext(ctx, query); err != nil {
 			return fmt.Errorf("create database %q: %w", i.cfg.Name, err)
 		}
 	}
@@ -136,7 +141,9 @@ func (i *Importer) PrepareDatabase(ctx context.Context) error {
 }
 
 func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
-	start := time.Now()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if len(dumps) == 0 {
 		return errors.New("no SQL dumps found")
 	}
@@ -151,28 +158,63 @@ func (i *Importer) ImportDumps(ctx context.Context, dumps []DumpFile) error {
 			return err
 		}
 	}
+	return i.importDumps(ctx, dumps, func(ctx context.Context, dump DumpFile) error {
+		return i.importDump(ctx, client, dump)
+	})
+}
+
+func (i *Importer) importDumps(ctx context.Context, dumps []DumpFile, importDump func(context.Context, DumpFile) error) error {
+	start := time.Now()
+	workers := min(max(i.cfg.ImportWorkers, 1), len(dumps))
+	if i.log != nil {
+		i.log.Info("SQL import started", zap.Int("files", len(dumps)), zap.Int("workers", workers))
+	}
+	g, importCtx := errgroup.WithContext(ctx)
+	g.SetLimit(workers)
+	var completed atomic.Int64
 	for idx, dump := range dumps {
-		dumpStart := time.Now()
-		if err := i.importDump(ctx, client, dump); err != nil {
-			return err
+		if importCtx.Err() != nil {
+			break
 		}
-		if i.log != nil {
-			if i.verbose {
-				i.log.Info(
-					"SQL dump import progress",
+		g.Go(func() error {
+			// Scheduling can block on the concurrency limit while another import fails.
+			if err := importCtx.Err(); err != nil {
+				return err
+			}
+			dumpStart := time.Now()
+			if err := importDump(importCtx, dump); err != nil {
+				return err
+			}
+			done := completed.Add(1)
+			if i.log != nil {
+				fields := []zap.Field{
 					zap.String("file", dump.Path),
 					zap.Int("file_index", idx+1),
 					zap.Int("files", len(dumps)),
+					zap.Int64("completed_files", done),
+					zap.Int("workers", workers),
 					zap.Duration("elapsed", time.Since(start)),
 					zap.Duration("dump_elapsed", time.Since(dumpStart)),
-				)
-			} else {
-				i.log.Debug("SQL dump imported", zap.String("file", dump.Path), zap.Duration("dump_elapsed", time.Since(dumpStart)))
+				}
+				if i.verbose {
+					i.log.Info("SQL dump import progress", fields...)
+				} else {
+					i.log.Debug("SQL dump imported", fields...)
+				}
 			}
-		}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if i.log != nil {
-		i.log.Info("SQL import completed", zap.Int("files", len(dumps)), zap.Duration("elapsed", time.Since(start)))
+		i.log.Info("SQL import completed",
+			zap.Int("files", len(dumps)), zap.Int("workers", workers), zap.Duration("elapsed", time.Since(start)),
+		)
 	}
 	return nil
 }
@@ -195,6 +237,9 @@ func (i *Importer) importDump(ctx context.Context, client string, dump DumpFile)
 	cmd.Stdout = i.logOut
 	cmd.Stderr = i.logOut
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			err = errors.Join(err, ctx.Err())
+		}
 		return fmt.Errorf("import dump %q with %q: %w", dump.Path, client, err)
 	}
 	return nil
@@ -205,11 +250,33 @@ func isAuthorAliasDump(name string) bool {
 }
 
 func importFixupReader(r io.Reader, dumpName string) io.Reader {
-	pr, pw := io.Pipe()
-	go func() {
-		_ = pw.CloseWithError(writeImportFixup(pw, r, isAuthorAliasDump(dumpName)))
-	}()
-	return pr
+	return &sqlFixupReader{reader: bufio.NewReader(r), aliases: isAuthorAliasDump(dumpName)}
+}
+
+// Transform SQL in the client's stdin reader, avoiding a producer goroutine
+// that could block on a pipe when a failed or canceled client stops reading.
+type sqlFixupReader struct {
+	reader  *bufio.Reader
+	aliases bool
+	pending string
+	err     error
+}
+
+func (r *sqlFixupReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for r.pending == "" && r.err == nil {
+		var line string
+		line, r.err = r.reader.ReadString('\n')
+		r.pending = fixImportSQLLine(line, r.aliases)
+	}
+	if r.pending != "" {
+		n := copy(p, r.pending)
+		r.pending = r.pending[n:]
+		return n, nil
+	}
+	return 0, r.err
 }
 
 func writeImportFixup(w io.Writer, r io.Reader, fixAuthorAliases bool) error {

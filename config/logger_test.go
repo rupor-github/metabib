@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"go.uber.org/zap"
@@ -37,6 +38,40 @@ func TestLoggingPrepareFile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "hello") || !strings.Contains(string(data), "mariadb line") {
 		t.Fatalf("log file did not contain expected data: %s", data)
+	}
+}
+
+func TestLoggingPrepareConcurrentProcessOutput(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "metabib.log")
+	logger, processLog, err := (&LoggingConfig{
+		ConsoleLogger: LoggerConfig{Level: "none"},
+		FileLogger:    LoggerConfig{Level: "debug", Destination: path, Mode: "overwrite"},
+	}).Prepare("metabib-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 50 {
+				if _, err := processLog.Write([]byte("concurrent mariadb line\n")); err != nil {
+					t.Error(err)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	_ = logger.Sync()
+	if err := processLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(data), "concurrent mariadb line"); count != 400 {
+		t.Fatalf("logged lines = %d, want 400", count)
 	}
 }
 

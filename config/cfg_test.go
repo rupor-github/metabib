@@ -1,9 +1,11 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -26,6 +28,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	}
 	if !cfg.Database.Temporary {
 		t.Fatal("Database.Temporary = false, want true")
+	}
+	if want := max(1, runtime.NumCPU()/2); cfg.Database.ImportWorkers != want {
+		t.Fatalf("Database.ImportWorkers = %d, want %d", cfg.Database.ImportWorkers, want)
 	}
 	if cfg.Database.Socket != "" || cfg.Database.PIDFile != "" || cfg.Database.LogFile != "" {
 		t.Fatalf(
@@ -133,6 +138,34 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	}
 	if len(cfg.INPX.Language.ContextRules) != 2 || cfg.INPX.Language.ContextRules[0].From != "ba" || cfg.INPX.Language.ContextRules[1].From != "xa" {
 		t.Fatalf("INPX language context rules = %#v", cfg.INPX.Language.ContextRules)
+	}
+}
+
+func TestDatabaseImportWorkersConfiguration(t *testing.T) {
+	t.Parallel()
+	for _, workers := range []int{1, 2, 0, -1} {
+		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			path := filepath.Join(root, "metabib.yaml")
+			data := fmt.Sprintf("version: 1\ndatabase:\n  import_workers: %d\n", workers)
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadConfiguration(path, gencfg.WithRootDir(root))
+			if workers < 1 {
+				if err == nil {
+					t.Fatal("nonpositive import_workers was accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Database.ImportWorkers != workers {
+				t.Fatalf("import_workers = %d, want %d", cfg.Database.ImportWorkers, workers)
+			}
+		})
 	}
 }
 

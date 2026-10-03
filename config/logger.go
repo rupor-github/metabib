@@ -84,7 +84,7 @@ func (conf *LoggingConfig) Prepare(appName string) (*zap.Logger, io.WriteCloser,
 	if processCore.Enabled(processLevel) || len(closers) > 0 {
 		processLogger := zap.New(processCore).Named(appName).Named("mariadb")
 		processLog = &combinedWriteCloser{
-			Writer:  &zapio.Writer{Log: processLogger, Level: processLevel},
+			Writer:  zapcore.Lock(zapcore.AddSync(&zapio.Writer{Log: processLogger, Level: processLevel})),
 			closers: closers,
 		}
 	}
