@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -219,6 +220,102 @@ func TestParseWithBodyFingerprints(t *testing.T) {
 	top10 := "worddvwordduworddtworddsworddrworddqworddpworddoworddnworddm"
 	assertSection(0, 0, top10, false)
 	assertSection(1, 1, top10, true)
+}
+
+func TestParseIgnoresTrailingContent(t *testing.T) {
+	t.Parallel()
+
+	documents := []struct {
+		name    string
+		xml     string
+		bodyKey string
+	}{
+		{
+			name: "metadata and multiple bodies",
+			xml: `<FictionBook><description><title-info><book-title>Book</book-title></title-info></description>` +
+				`<body><section><FictionBook/><p><![CDATA[Text </FictionBook> alpha]]></p></section></body>` +
+				`<body name="notes"><section><p>More words</p></section></body>` +
+				`<binary id="cover">AAAA</binary></FictionBook>`,
+			bodyKey: md5Key("fictionbookwordsalphatextmore"),
+		},
+		{
+			name:    "body without metadata",
+			xml:     `<FictionBook><body><p>Book text</p></body></FictionBook>`,
+			bodyKey: md5Key("textbook"),
+		},
+		{name: "empty book", xml: `<FictionBook/>`},
+	}
+	trailers := []struct {
+		name string
+		text string
+	}{
+		{name: "NUL padding", text: strings.Repeat("\x00", 117040)},
+		{name: "invalid UTF-8", text: "\xff\xfe"},
+		{name: "incomplete XML", text: "\n<broken"},
+		{name: "another book", text: `<FictionBook><body><p>Unrelated trailing book</p></body></FictionBook>`},
+	}
+	options := []struct {
+		name string
+		opts ParseOptions
+	}{
+		{name: "title only"},
+		{name: "full description", opts: ParseOptions{PreserveDescription: true}},
+		{name: "title and fingerprints", opts: ParseOptions{BodyFingerprints: true}},
+		{name: "full description and fingerprints", opts: ParseOptions{PreserveDescription: true, BodyFingerprints: true}},
+	}
+	for _, document := range documents {
+		for _, option := range options {
+			t.Run(document.name+"/"+option.name, func(t *testing.T) {
+				t.Parallel()
+
+				want, err := ParseWithOptions(strings.NewReader(document.xml), option.opts)
+				if err != nil {
+					t.Fatalf("parse clean book: %v", err)
+				}
+				if option.opts.BodyFingerprints && document.bodyKey != "" {
+					if want.Fingerprints == nil || want.Fingerprints.FB2Body == nil {
+						t.Fatal("body fingerprints missing")
+					}
+					sections := want.Fingerprints.FB2Body.Sections
+					if len(sections) != 1 || sections[0].Key != document.bodyKey {
+						t.Fatalf("body sections = %#v, want root key %q", sections, document.bodyKey)
+					}
+				}
+				for _, trailer := range trailers {
+					t.Run(trailer.name, func(t *testing.T) {
+						got, err := ParseWithOptions(strings.NewReader(document.xml+trailer.text), option.opts)
+						if err != nil {
+							t.Fatalf("parse book with trailing content: %v", err)
+						}
+						if !reflect.DeepEqual(got, want) {
+							t.Fatalf("source = %#v, want clean book source %#v", got, want)
+						}
+					})
+				}
+			})
+		}
+	}
+}
+
+func TestParseWithBodyFingerprintsRejectsInvalidContentInsideBook(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{
+		`<description><title-info><book-title>Bad` + "\x00" + `title</book-title></title-info></description>`,
+		`<body><p>Bad` + "\x00" + `text</p></body>`,
+		`<body><p>Bad` + "\xff" + `text</p></body>`,
+		`<body><p>Text</p></body>` + "\x00",
+	} {
+		t.Run(content, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := ParseWithOptions(strings.NewReader(`<FictionBook>`+content+`</FictionBook>`), ParseOptions{BodyFingerprints: true})
+			var syntaxErr *xml.SyntaxError
+			if !errors.As(err, &syntaxErr) {
+				t.Fatalf("ParseWithOptions() error = %v, want XML syntax error", err)
+			}
+		})
+	}
 }
 
 func uniqueLetterWords(count int) []string {

@@ -236,6 +236,7 @@ func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, 
 	if err != nil {
 		return model.FB2Source{}, err
 	}
+	var depth int
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -244,20 +245,29 @@ func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, 
 			}
 			return model.FB2Source{}, fmt.Errorf("parse FB2 XML: %w", err)
 		}
-		start, ok := tok.(xml.StartElement)
-		if !ok || start.Name.Local != "description" {
-			continue
+		switch t := tok.(type) {
+		case xml.StartElement:
+			depth++
+			if t.Name.Local != "description" {
+				continue
+			}
+			if !preserveDescription {
+				return parseTitleInfoOnly(dec)
+			}
+			state := &parseState{}
+			node, err := readElement(dec, t, 1, 0, state)
+			if err != nil {
+				return model.FB2Source{}, err
+			}
+			description := parseDescription(node, true)
+			return model.FB2Source{Present: true, Description: &description}, nil
+		case xml.EndElement:
+			// Books without metadata may still have invalid bytes after the root.
+			if depth == 1 && t.Name.Local == "FictionBook" {
+				return model.FB2Source{}, nil
+			}
+			depth--
 		}
-		if !preserveDescription {
-			return parseTitleInfoOnly(dec)
-		}
-		state := &parseState{}
-		node, err := readElement(dec, start, 1, 0, state)
-		if err != nil {
-			return model.FB2Source{}, err
-		}
-		description := parseDescription(node, true)
-		return model.FB2Source{Present: true, Description: &description}, nil
 	}
 }
 
@@ -308,6 +318,10 @@ func parseWithBodyFingerprints(r io.Reader, opts ParseOptions) (model.FB2Source,
 				fingerprints.addText(t)
 			}
 		case xml.EndElement:
+			// The book is complete; trailing bytes need not be valid XML.
+			if t.Name.Local == "FictionBook" && len(stack) == 1 && stack[0] == "FictionBook" {
+				return fb2ParseResult(description, fingerprints.finish()), nil
+			}
 			if t.Name.Local == "section" && fingerprints.inBody() {
 				fingerprints.closeSection()
 			} else if t.Name.Local == "body" && fingerprints.inBody() {
