@@ -169,6 +169,99 @@ func TestBuildArchiveManifestsProcessesZip(t *testing.T) {
 	}
 }
 
+func TestBuildArchiveManifestsConfiguredFB2TextLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name  string
+		files map[string]string
+		fbd   bool
+	}{
+		{
+			name: "FB2 body",
+			files: map[string]string{
+				"1.fb2": `<FictionBook><description><title-info><book-title>Alpha</book-title></title-info></description>` +
+					`<body><p>` + strings.Repeat("beta ", 250000) + `</p></body></FictionBook>`,
+			},
+		},
+		{
+			name: "FBD description",
+			files: map[string]string{
+				"1.pdf": "book bytes",
+				"1.fbd": `<FictionBook><description><title-info><book-title>` + strings.Repeat("a", 400000) +
+					`</book-title></title-info></description></FictionBook>`,
+			},
+			fbd: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			archive := filepath.Join(t.TempDir(), "books.zip")
+			writeZip(t, archive, tt.files)
+			cfg := manifestTestConfig()
+			cfg.Processing.ArchiveWorkers = 1
+			cfg.Processing.ArchiveBatchSize = 1
+			cfg.Processing.FB2BodyFingerprints = true
+			for _, limit := range []int64{1, 2} {
+				cfg.Processing.FB2MaxTextSizeMiB = limit
+				cfg.Processing.Rebuild = limit == 2
+				plan, ready, err := PlanArchives(context.Background(), cfg, []string{archive}, false, nil, false)
+				if err != nil {
+					t.Fatalf("PlanArchives() error = %v", err)
+				}
+				if limit == 2 {
+					if len(plan) != 1 || !ready || !plan[0].Use || plan[0].Create {
+						t.Fatalf("plan = %#v ready=%t, want reuse despite changed text limit", plan, ready)
+					}
+					// Explicitly remove the selected manifest to reparse this archive.
+					if err := os.Remove(plan[0].ManifestPath); err != nil {
+						t.Fatalf("remove selected manifest: %v", err)
+					}
+					plan, _, err = PlanArchives(context.Background(), cfg, []string{archive}, false, nil, false)
+					if err != nil {
+						t.Fatalf("PlanArchives() after selecting rebuild: %v", err)
+					}
+				}
+				if len(plan) != 1 || !plan[0].Create {
+					t.Fatalf("plan = %#v, want rebuild at %d MiB", plan, limit)
+				}
+				if err := BuildArchiveManifests(context.Background(), cfg, nil, false, plan); err != nil {
+					t.Fatalf("BuildArchiveManifests() error = %v", err)
+				}
+				header, err := readArchiveManifestHeader(plan[0].ManifestPath)
+				if err != nil || header.Processing.FB2MaxTextSizeMiB != limit {
+					t.Fatalf("recorded text limit = %d, error=%v, want %d MiB", header.Processing.FB2MaxTextSizeMiB, err, limit)
+				}
+				var records []model.Record
+				_, err = ForEachManifestRecord(context.Background(), plan[0].ManifestPath, func(rec model.Record) error {
+					records = append(records, rec)
+					return nil
+				})
+				if err != nil || len(records) != 1 {
+					t.Fatalf("read records: count=%d error=%v", len(records), err)
+				}
+				rec := records[0]
+				if tt.fbd {
+					if got := len(rec.Source.Sidecars) > 0; got != (limit == 2) {
+						t.Fatalf("sidecar present=%t at %d MiB, want %t", got, limit, limit == 2)
+					}
+				} else {
+					if rec.Source.FB2.Present != (limit == 2) {
+						t.Fatalf("FB2 present=%t at %d MiB, errors=%v", rec.Source.FB2.Present, limit, rec.Errors)
+					}
+					if limit == 1 && !strings.Contains(strings.Join(rec.Errors, "; "), "text size exceeds 1048576 bytes") {
+						t.Fatalf("errors=%v, want configured text limit", rec.Errors)
+					}
+					if limit == 2 && (len(rec.Errors) != 0 || rec.Source.FB2.Fingerprints == nil) {
+						t.Fatalf("errors=%v fingerprints=%#v, want successful body parsing", rec.Errors, rec.Source.FB2.Fingerprints)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestBuildArchiveManifestsLogsIgnoredNonFB2InFB2Scope(t *testing.T) {
 	t.Parallel()
 

@@ -42,6 +42,7 @@
       "properties": {
         "parse_fb2": {"type": "boolean"},
         "fb2_description_tree": {"type": "boolean"},
+        "fb2_max_text_size_mib": {"type": "integer", "minimum": 1, "default": 64},
         "fb2_body_fingerprints": {"type": "boolean"},
         "archive_content_md5": {"type": "boolean"},
         "nested_archive_inspection": {"$ref": "#/$defs/nested_archive_inspection"}

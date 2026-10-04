@@ -36,8 +36,9 @@ const (
 var ErrLimitExceeded = errors.New("FB2 parsing limit exceeded")
 
 type parseState struct {
-	nodes     int
-	textBytes int
+	nodes        int
+	textBytes    int64
+	maxTextBytes int64
 }
 
 type element struct {
@@ -50,6 +51,8 @@ type element struct {
 type ParseOptions struct {
 	PreserveDescription bool
 	BodyFingerprints    bool
+	// MaxTextBytes limits cumulative parsed text; zero uses the 64 MiB default.
+	MaxTextBytes int64
 }
 
 func Parse(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
@@ -57,8 +60,11 @@ func Parse(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
 }
 
 func ParseWithOptions(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
+	if opts.MaxTextBytes < 0 {
+		return model.FB2Source{}, errors.New("FB2 maximum text size must not be negative")
+	}
 	if !opts.BodyFingerprints {
-		return parseMetadataOnly(r, opts.PreserveDescription)
+		return parseMetadataOnly(r, opts)
 	}
 	return parseWithBodyFingerprints(r, opts)
 }
@@ -231,7 +237,7 @@ func (d utf32Decoder) Transform(dst []byte, src []byte, atEOF bool) (int, int, e
 	return nDst, nSrc, nil
 }
 
-func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, error) {
+func parseMetadataOnly(r io.Reader, opts ParseOptions) (model.FB2Source, error) {
 	dec, err := newXMLDecoder(r)
 	if err != nil {
 		return model.FB2Source{}, err
@@ -251,10 +257,10 @@ func parseMetadataOnly(r io.Reader, preserveDescription bool) (model.FB2Source, 
 			if t.Name.Local != "description" {
 				continue
 			}
-			if !preserveDescription {
-				return parseTitleInfoOnly(dec)
+			state := &parseState{maxTextBytes: opts.MaxTextBytes}
+			if !opts.PreserveDescription {
+				return parseTitleInfoOnly(dec, state)
 			}
-			state := &parseState{}
 			node, err := readElement(dec, t, 1, 0, state)
 			if err != nil {
 				return model.FB2Source{}, err
@@ -276,7 +282,7 @@ func parseWithBodyFingerprints(r io.Reader, opts ParseOptions) (model.FB2Source,
 	if err != nil {
 		return model.FB2Source{}, err
 	}
-	state := &parseState{}
+	state := &parseState{maxTextBytes: opts.MaxTextBytes}
 	fingerprints := newBodyFingerprintBuilder()
 	var description *model.FB2Description
 	var stack []string
@@ -342,7 +348,7 @@ func fb2ParseResult(description *model.FB2Description, fingerprint *model.FB2Bod
 	return out
 }
 
-func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
+func parseTitleInfoOnly(dec *xml.Decoder, state *parseState) (model.FB2Source, error) {
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -354,7 +360,6 @@ func parseTitleInfoOnly(dec *xml.Decoder) (model.FB2Source, error) {
 		switch t := tok.(type) {
 		case xml.StartElement:
 			if t.Name.Local == "title-info" {
-				state := &parseState{}
 				node, err := readElement(dec, t, 1, 0, state)
 				if err != nil {
 					return model.FB2Source{}, err
@@ -464,10 +469,14 @@ func readElement(dec *xml.Decoder, start xml.StartElement, depth int, sequenceDe
 }
 
 func (s *parseState) addText(bytes int) error {
-	s.textBytes += bytes
-	if s.textBytes > MaxTextBytes {
-		return fmt.Errorf("%w: text size exceeds %d bytes", ErrLimitExceeded, MaxTextBytes)
+	limit := s.maxTextBytes
+	if limit == 0 {
+		limit = MaxTextBytes
 	}
+	if int64(bytes) > limit-s.textBytes {
+		return fmt.Errorf("%w: text size exceeds %d bytes", ErrLimitExceeded, limit)
+	}
+	s.textBytes += int64(bytes)
 	return nil
 }
 

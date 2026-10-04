@@ -1076,6 +1076,7 @@ func processEntryWithSource(
 			fb2Source, err := fb2.ParseWithOptions(parser, fb2.ParseOptions{
 				PreserveDescription: cfg.Processing.FB2DescriptionTree,
 				BodyFingerprints:    cfg.Processing.FB2BodyFingerprints,
+				MaxTextBytes:        cfg.Processing.FB2MaxTextBytes(),
 			})
 			timing.FB2ParseElapsed += time.Since(parseStart)
 			if cfg.Processing.ArchiveContentMD5 {
@@ -1338,6 +1339,7 @@ func parseFBDReader(
 	source, err := fb2.ParseWithOptions(reader, fb2.ParseOptions{
 		PreserveDescription: cfg.Processing.FB2DescriptionTree,
 		BodyFingerprints:    false,
+		MaxTextBytes:        cfg.Processing.FB2MaxTextBytes(),
 	})
 	elapsed := time.Since(start)
 	if err != nil {

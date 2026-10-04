@@ -505,6 +505,24 @@ section fingerprints while archive manifests are built. This requires
 `processing.parse_fb2: true`. Archive manifests built with different fingerprint
 settings, model, or section encoding are rejected and must be rebuilt.
 
+`processing.fb2_max_text_size_mib` limits cumulative text counted while parsing
+each FB2 book or FBD sidecar. It defaults to **64 MiB** and must be a positive
+integer. To accommodate larger books, increase it in your configuration:
+
+```yaml
+processing:
+  fb2_max_text_size_mib: 80
+```
+
+This applies to metadata parsing and body fingerprints, not total file size.
+Description text accumulated at multiple tree levels can contribute more than
+once. Archive manifests record the limit used when they were built, but changing
+it does not invalidate existing manifests, including older manifests without the
+field. Cached parsing failures remain cached until you choose to reparse them.
+To reparse a selected archive with the new limit, remove its manifest and run
+`cache --archives /path/to/archive.zip`. The `--rebuild` flag only regenerates
+stale or invalid manifests; it does not force a fresh, compatible one to rebuild.
+
 `processing.fb2_replacement_quality_check` and
 `processing.database_replacement_quality_check` default to `true`. During dataset
 merge, metabib detects FB2 and database metadata fields whose meaningful

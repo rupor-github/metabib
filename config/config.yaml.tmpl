@@ -189,6 +189,13 @@ processing:
   # title-info and is faster, but loses document-info/publish-info/custom-info.
   fb2_description_tree: true
 
+  # Maximum cumulative text counted per FB2 book or FBD sidecar, in MiB.
+  # Applies to metadata and body fingerprints, not total file size. Description
+  # text accumulated at multiple tree levels can contribute more than once.
+  # Must be positive. Increase to 80 for books needing more than the 64 MiB default.
+  # Changing this limit does not invalidate existing archive manifests.
+  fb2_max_text_size_mib: 64
+
   # Detect FB2 metadata fields made only of Unicode replacement characters and
   # omit those corrupted values from dataset claims while recording issues.
   fb2_replacement_quality_check: true

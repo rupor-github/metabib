@@ -80,6 +80,7 @@ func (r ManifestReport) Ready(allowStale bool) bool {
 type manifestProcessing struct {
 	ParseFB2                bool                             `json:"parse_fb2"`
 	FB2DescriptionTree      bool                             `json:"fb2_description_tree"`
+	FB2MaxTextSizeMiB       int64                            `json:"fb2_max_text_size_mib,omitempty"`
 	FB2BodyFingerprints     bool                             `json:"fb2_body_fingerprints"`
 	ArchiveContentMD5       bool                             `json:"archive_content_md5"`
 	NestedArchiveInspection *manifestNestedArchiveInspection `json:"nested_archive_inspection,omitempty"`
@@ -1203,6 +1204,7 @@ func processingManifest(cfg *config.Config) manifestProcessing {
 
 func archiveProcessingManifest(cfg *config.Config, scope string) manifestProcessing {
 	processing := processingManifest(cfg)
+	processing.FB2MaxTextSizeMiB = cfg.Processing.FB2MaxTextBytes() / (1024 * 1024)
 	if scope == archiveScopeUSR {
 		processing.NestedArchiveInspection = &manifestNestedArchiveInspection{
 			Enabled:              cfg.Processing.NestedArchiveInspection.Enabled,
@@ -1372,6 +1374,7 @@ func sourceMTimeMatches(stored string, current any) bool {
 }
 
 func manifestProcessingMatches(stored manifestProcessing, current manifestProcessing) bool {
+	// The text limit is provenance only; users choose which archives to reparse.
 	if stored.ParseFB2 != current.ParseFB2 ||
 		stored.FB2DescriptionTree != current.FB2DescriptionTree ||
 		stored.FB2BodyFingerprints != current.FB2BodyFingerprints ||

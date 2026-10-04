@@ -618,6 +618,43 @@ func TestExpandArchivesFromDirectory(t *testing.T) {
 	}
 }
 
+func TestArchiveManifestTextLimitCompatibility(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		stored int64
+		limit  int64
+	}{
+		{name: "legacy default", stored: 0, limit: 64},
+		{name: "legacy changed limit", stored: 0, limit: 80},
+		{name: "matching custom limit", stored: 80, limit: 80},
+		{name: "increased limit", stored: 64, limit: 80},
+		{name: "decreased limit", stored: 80, limit: 64},
+	} {
+		for _, scope := range []string{archiveScopeFB2, archiveScopeUSR} {
+			t.Run(tt.name+"/"+scope, func(t *testing.T) {
+				t.Parallel()
+
+				cfg := manifestTestConfig()
+				cfg.Processing.FB2MaxTextSizeMiB = tt.limit
+				processing := archiveProcessingManifest(cfg, scope)
+				if processing.FB2MaxTextSizeMiB != tt.limit {
+					t.Fatalf("manifest limit = %d, want %d", processing.FB2MaxTextSizeMiB, tt.limit)
+				}
+				processing.FB2MaxTextSizeMiB = tt.stored
+				header := archiveManifestHeader{
+					Schema: archiveManifestSchema, Scope: scope,
+					Source: ArchiveManifestSource{Path: "books.zip"}, Processing: processing,
+				}
+				if !archiveManifestLightMatchesForScope(header, cfg, "books.zip", scope, time.Time{}, false) {
+					t.Fatal("text limit change made the archive manifest incompatible")
+				}
+			})
+		}
+	}
+}
+
 func manifestTestConfig() *config.Config {
 	return &config.Config{
 		Database: config.DatabaseConfig{Name: "lib"},

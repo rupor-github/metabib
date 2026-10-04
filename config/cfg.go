@@ -67,6 +67,7 @@ type DatabaseConfig struct {
 type ProcessingConfig struct {
 	ParseFB2                        bool                          `yaml:"parse_fb2"`
 	FB2DescriptionTree              bool                          `yaml:"fb2_description_tree"`
+	FB2MaxTextSizeMiB               int64                         `yaml:"fb2_max_text_size_mib" validate:"min=1"`
 	FB2ReplacementQualityCheck      bool                          `yaml:"fb2_replacement_quality_check"`
 	DatabaseReplacementQualityCheck bool                          `yaml:"database_replacement_quality_check"`
 	FB2BodyFingerprints             bool                          `yaml:"fb2_body_fingerprints"`
@@ -79,6 +80,15 @@ type ProcessingConfig struct {
 	ArchiveBatchSize                int                           `yaml:"archive_batch_size" validate:"min=1"`
 	ArchiveReadBuffer               int                           `yaml:"archive_read_buffer_size" validate:"min=0"`
 	Rebuild                         bool                          `yaml:"-"`
+}
+
+// FB2MaxTextBytes converts the validated limit to bytes. Zero-valued programmatic
+// configurations retain the default used before this option was introduced.
+func (c ProcessingConfig) FB2MaxTextBytes() int64 {
+	if c.FB2MaxTextSizeMiB == 0 {
+		return 64 * 1024 * 1024
+	}
+	return c.FB2MaxTextSizeMiB * (1024 * 1024)
 }
 
 type NestedArchiveInspectionConfig struct {
@@ -223,6 +233,9 @@ func unmarshalConfig(data []byte, cfg *Config, process bool) (*Config, error) {
 }
 
 func validateConfig(cfg *Config) error {
+	if cfg.Processing.FB2MaxTextSizeMiB > (1<<63-1)/(1024*1024) {
+		return errors.New("processing.fb2_max_text_size_mib is too large to convert to bytes")
+	}
 	if cfg.Processing.FB2BodyFingerprints && !cfg.Processing.ParseFB2 {
 		return errors.New("processing.fb2_body_fingerprints requires processing.parse_fb2")
 	}

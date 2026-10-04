@@ -47,6 +47,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if !cfg.Processing.FB2ReplacementQualityCheck {
 		t.Fatal("Processing.FB2ReplacementQualityCheck = false, want true")
 	}
+	if cfg.Processing.FB2MaxTextSizeMiB != 64 || cfg.Processing.FB2MaxTextBytes() != 64*1024*1024 {
+		t.Fatalf("FB2 text limit = %d MiB / %d bytes, want 64 MiB", cfg.Processing.FB2MaxTextSizeMiB, cfg.Processing.FB2MaxTextBytes())
+	}
 	if !cfg.Processing.DatabaseReplacementQualityCheck {
 		t.Fatal("Processing.DatabaseReplacementQualityCheck = false, want true")
 	}
@@ -266,6 +269,7 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 		"  validate_crc: true",
 		"processing:",
 		"  parse_fb2: false",
+		"  fb2_max_text_size_mib: 80",
 		"  fb2_replacement_quality_check: false",
 		"  database_replacement_quality_check: false",
 		"  fb2_body_fingerprints: false",
@@ -296,6 +300,9 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	if cfg.Processing.ParseFB2 {
 		t.Fatal("Processing.ParseFB2 = true, want false")
 	}
+	if cfg.Processing.FB2MaxTextSizeMiB != 80 || cfg.Processing.FB2MaxTextBytes() != 80*1024*1024 {
+		t.Fatalf("FB2 text limit = %d MiB / %d bytes, want 80 MiB", cfg.Processing.FB2MaxTextSizeMiB, cfg.Processing.FB2MaxTextBytes())
+	}
 	if cfg.Processing.FB2ReplacementQualityCheck {
 		t.Fatal("Processing.FB2ReplacementQualityCheck = true, want false")
 	}
@@ -310,6 +317,47 @@ func TestLoadConfigurationFileOverridesDefaults(t *testing.T) {
 	}
 	if cfg.Database.User != "root" {
 		t.Fatalf("default Database.User was not preserved: %q", cfg.Database.User)
+	}
+}
+
+func TestLoadConfigurationFB2TextLimitValidation(t *testing.T) {
+	t.Parallel()
+
+	const maxMiB = (1<<63 - 1) / (1024 * 1024)
+	for _, tt := range []struct {
+		name    string
+		limit   int64
+		wantErr bool
+	}{
+		{name: "zero", limit: 0, wantErr: true},
+		{name: "negative", limit: -1, wantErr: true},
+		{name: "minimum", limit: 1},
+		{name: "maximum safe conversion", limit: maxMiB},
+		{name: "byte conversion overflow", limit: maxMiB + 1, wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "metabib.yaml")
+			data := fmt.Sprintf("processing:\n  fb2_max_text_size_mib: %d\n", tt.limit)
+			if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := LoadConfiguration(path, gencfg.WithRootDir(t.TempDir()))
+			if tt.wantErr {
+				if err == nil || (!strings.Contains(err.Error(), "FB2MaxTextSizeMiB") &&
+					!strings.Contains(err.Error(), "fb2_max_text_size_mib")) {
+					t.Fatalf("LoadConfiguration() error = %v, want FB2 text limit validation error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadConfiguration() error = %v", err)
+			}
+			if got := cfg.Processing.FB2MaxTextBytes(); got != tt.limit*1024*1024 {
+				t.Fatalf("FB2MaxTextBytes() = %d, want %d", got, tt.limit*1024*1024)
+			}
+		})
 	}
 }
 

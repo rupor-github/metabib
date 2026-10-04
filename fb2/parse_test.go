@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -480,6 +481,65 @@ func TestParseRejectsExcessiveSequenceDepth(t *testing.T) {
 	_, err := Parse(strings.NewReader(b.String()), false)
 	if !errors.Is(err, ErrLimitExceeded) || !strings.Contains(err.Error(), "nested sequence depth") {
 		t.Fatalf("Parse() error = %v, want sequence depth limit", err)
+	}
+}
+
+func TestParseWithOptionsTextLimit(t *testing.T) {
+	t.Parallel()
+
+	const document = `<FictionBook><description><title-info><book-title>Alpha</book-title></title-info></description>` +
+		`<body><p>Beta</p></body></FictionBook>`
+	for _, tt := range []struct {
+		name  string
+		opts  ParseOptions
+		bytes int64
+	}{
+		{name: "title only", bytes: 10},
+		{name: "full description", opts: ParseOptions{PreserveDescription: true}, bytes: 15},
+		{name: "title and body", opts: ParseOptions{BodyFingerprints: true}, bytes: 14},
+		{name: "full description and body", opts: ParseOptions{PreserveDescription: true, BodyFingerprints: true}, bytes: 19},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := tt.opts
+			opts.MaxTextBytes = tt.bytes - 1
+			_, err := ParseWithOptions(strings.NewReader(document), opts)
+			if !errors.Is(err, ErrLimitExceeded) || !strings.Contains(err.Error(), fmt.Sprintf("exceeds %d bytes", opts.MaxTextBytes)) {
+				t.Fatalf("ParseWithOptions() error = %v, want configured text limit", err)
+			}
+			opts.MaxTextBytes = tt.bytes
+			source, err := ParseWithOptions(strings.NewReader(document), opts)
+			if err != nil {
+				t.Fatalf("parse at exact text limit: %v", err)
+			}
+			if source.Description == nil || source.Description.TitleInfo == nil || source.Description.TitleInfo.Title != "Alpha" {
+				t.Fatalf("source metadata missing: %#v", source)
+			}
+			opts.MaxTextBytes = 0
+			if _, err := ParseWithOptions(strings.NewReader(document), opts); err != nil {
+				t.Fatalf("parse using default limit: %v", err)
+			}
+		})
+	}
+}
+
+func TestParseWithOptionsRejectsNegativeTextLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := ParseWithOptions(strings.NewReader(`<FictionBook/>`), ParseOptions{MaxTextBytes: -1})
+	if err == nil || !strings.Contains(err.Error(), "maximum text size must not be negative") {
+		t.Fatalf("ParseWithOptions() error = %v, want invalid text limit", err)
+	}
+}
+
+func TestParseStateTextLimitDoesNotOverflow(t *testing.T) {
+	t.Parallel()
+
+	const limit = 1<<63 - 1
+	state := &parseState{maxTextBytes: limit, textBytes: limit - 1}
+	if err := state.addText(2); !errors.Is(err, ErrLimitExceeded) {
+		t.Fatalf("addText() error = %v, want text limit", err)
 	}
 }
 
