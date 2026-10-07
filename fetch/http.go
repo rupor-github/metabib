@@ -92,7 +92,9 @@ func (f fetcher) requestResume(ctx context.Context, method, sourceURL string, st
 	if f.opts.Log != nil {
 		f.opts.Log.Info("Download response", zap.String("url", sourceURL), zap.String("final_url", resp.Request.URL.String()),
 			zap.Int("status", resp.StatusCode), zap.Int64("content_length", resp.ContentLength),
-			zap.String("content_range", resp.Header.Get("Content-Range")))
+			zap.String("content_range", resp.Header.Get("Content-Range")), zap.String("etag", resp.Header.Get("ETag")),
+			zap.String("last_modified", resp.Header.Get("Last-Modified")), zap.String("accept_ranges", resp.Header.Get("Accept-Ranges")),
+			zap.Strings("transfer_encoding", resp.TransferEncoding))
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent &&
 		!(start > 0 && resp.StatusCode == http.StatusRequestedRangeNotSatisfiable) {

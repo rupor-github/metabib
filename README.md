@@ -273,8 +273,10 @@ Available `fetch` arguments:
   Servers that ignore ranges return a full response, which replaces the partial
   download safely. If a range request returns HTTP 400, fetch immediately falls
   back to a plain GET in the same attempt and remembers to restart that download
-  without ranges on subsequent retries and runs. Partial files are removed after
-  successful publication.
+  without ranges on subsequent retries and runs. A full `200` response with an
+  unchanged validator also identifies a server that ignores ranges; fetch logs a
+  warning and remembers this limitation. Partial files are removed after successful
+  publication.
 - `--sticky`: ignore HTTP redirects and keep using the original host.
 
 Fetch logs include the final response URL/status, downloaded bytes, attempt elapsed
@@ -291,6 +293,19 @@ ZIP entries and gzip checksums are validated before downloaded output is atomica
 published. An interrupted or invalid download does not overwrite an existing output
 file. HTTP and HTTPS URLs, redirects, and profile proxies are supported; when
 comparing with a browser download, compare its final URL with the logged `final_url`.
+
+#### Troubleshooting ignored ranges
+
+A resume response should be `206 Partial Content` with `Content-Range` starting at
+the requested offset. `200 OK` with the same ETag or Last-Modified means the endpoint
+ignored the range. Retries then require a full transfer; preserving a partial file
+cannot avoid retransmitting its prefix when the server provides no byte ranges.
+
+Response logs include ETag, Last-Modified, Accept-Ranges, and transfer encoding to
+help distinguish changed files from ignored ranges. An absent Accept-Ranges header
+alone does not prove that resuming is unsupported. Changing the source URL starts
+a fresh download because partial metadata is tied to its original URL; subsequent
+interruptions can resume if the new endpoint supports ranges.
 
 ### Roll Up Daily Archives
 

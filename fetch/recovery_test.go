@@ -18,6 +18,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func gzipPayload(t *testing.T, text string) []byte {
@@ -415,6 +418,107 @@ func TestPlainGETFallback(t *testing.T) {
 			}
 			if got := requests.Load(); got != tt.wantRequests {
 				t.Fatalf("requests = %d, want %d", got, tt.wantRequests)
+			}
+		})
+	}
+}
+
+func TestChunkedFullResumeResponse(t *testing.T) {
+	t.Parallel()
+	const modified = "Wed, 07 Oct 2026 02:18:16 GMT"
+	for _, tt := range []struct {
+		name         string
+		oldValidator string
+		etag         string
+		lastModified string
+		noRanges     bool
+	}{
+		{name: "ignored range with matching ETag", oldValidator: `"v1"`, etag: `"v1"`, noRanges: true},
+		{name: "ignored range with matching Last-Modified", oldValidator: modified, lastModified: modified, noRanges: true},
+		{name: "changed file still supports ranges", oldValidator: `"v1"`, etag: `"v2"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			const wanted = "SQL dump\n"
+			payload := gzipPayload(t, wanted)
+			initialSize := len(payload) / 4
+			split := len(payload) / 2
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("ETag", tt.etag)
+				w.Header().Set("Last-Modified", tt.lastModified)
+				if requests.Add(1) == 1 {
+					if r.Header.Get("Range") != fmt.Sprintf("bytes=%d-", initialSize) || r.Header.Get("If-Range") != tt.oldValidator {
+						t.Errorf("initial resume headers = %v", r.Header)
+					}
+					// Reproduce the mirror: full 200 response, unknown length, chunked
+					// encoding, and a connection closed before the terminating chunk.
+					_, _ = w.Write(payload[:split])
+					w.(http.Flusher).Flush()
+					conn, _, err := w.(http.Hijacker).Hijack()
+					if err != nil {
+						t.Errorf("hijack: %v", err)
+						return
+					}
+					_ = conn.Close()
+					return
+				}
+				body := payload
+				if tt.noRanges {
+					if r.Header.Get("Range") != "" || r.Header.Get("If-Range") != "" {
+						t.Errorf("unsupported ranges retried across runs: %v", r.Header)
+					}
+				} else {
+					if r.Header.Get("Range") != fmt.Sprintf("bytes=%d-", split) || r.Header.Get("If-Range") != tt.etag {
+						t.Errorf("changed file incorrectly marked non-resumable: %v", r.Header)
+					}
+					w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", split, len(payload)-1, len(payload)))
+					w.WriteHeader(http.StatusPartialContent)
+					body = payload[split:]
+				}
+				_, _ = w.Write(body)
+			}))
+			defer server.Close()
+			dir := t.TempDir()
+			part := filepath.Join(dir, ".lib.sql.gz.part")
+			if err := os.WriteFile(part, payload[:initialSize], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state := downloadState{URL: server.URL + "/lib.sql.gz", Validator: tt.oldValidator, Total: -1}
+			if err := saveDownloadState(part, state); err != nil {
+				t.Fatal(err)
+			}
+			core, logs := observer.New(zap.InfoLevel)
+			f := testFetcher(server)
+			f.opts.Log = zap.New(core)
+			if err := f.file(t.Context(), "lib.sql.gz", server.URL, dir); !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("first attempt error = %v, want truncated chunked response", err)
+			}
+			_, size, saved, err := f.partialFile(state.URL, "lib.sql.gz", dir)
+			if err != nil || saved.NoRanges != tt.noRanges || saved.Total != -1 || size != int64(split) {
+				t.Fatalf("saved state = %+v, size = %d, error = %v", saved, size, err)
+			}
+			if got := readString(t, part); got != string(payload[:split]) {
+				t.Fatal("full response was appended instead of replacing partial bytes")
+			}
+			responses := logs.FilterMessage("Download response").All()
+			if len(responses) != 1 {
+				t.Fatalf("response logs = %d, want 1", len(responses))
+			}
+			fields := responses[0].ContextMap()
+			if fields["content_length"] != int64(-1) || fields["etag"] != tt.etag || fields["last_modified"] != tt.lastModified {
+				t.Fatalf("missing response diagnostics: %v", fields)
+			}
+			warnings := logs.FilterMessage("Server ignored range; retries must download the full file").All()
+			if (len(warnings) == 1) != tt.noRanges {
+				t.Fatalf("ignored-range warnings = %d, noRanges = %t", len(warnings), tt.noRanges)
+			}
+			f = testFetcher(server)
+			if err := f.file(t.Context(), "lib.sql.gz", server.URL, dir); err != nil {
+				t.Fatal(err)
+			}
+			if got := readString(t, filepath.Join(dir, "lib.sql")); got != wanted || requests.Load() != 2 {
+				t.Fatalf("recovery output = %q, requests = %d", got, requests.Load())
 			}
 		})
 	}

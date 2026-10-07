@@ -269,7 +269,15 @@ func (f fetcher) fetchFile(ctx context.Context, sourceURL, part string, start in
 			return start, restartDownload(part, state, errors.New("Content-Length does not match Content-Range"))
 		}
 	} else if start > 0 {
-		if f.opts.Log != nil {
+		// A matching validator proves that If-Range did not fail because the file
+		// changed. Remember the ignored range so later attempts do not claim to resume.
+		if validatorMatches(resp, state.Validator) {
+			state.NoRanges = true
+			if f.opts.Log != nil {
+				f.opts.Log.Warn("Server ignored range; retries must download the full file", zap.String("url", sourceURL),
+					zap.Int64("discarded_bytes", start), zap.String("validator", state.Validator))
+			}
+		} else if f.opts.Log != nil {
 			f.opts.Log.Info("Server ignored range or file changed; restarting download", zap.String("url", sourceURL))
 		}
 		// Consume this full response directly, rather than issuing another request.
