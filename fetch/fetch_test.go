@@ -163,7 +163,8 @@ func TestLinksIncludesPartiallyOverlappingUpdates(t *testing.T) {
 	defer server.Close()
 
 	f := testFetcher(server)
-	got, err := f.archiveLinks(context.Background(), server.URL, `href="([^"]+)"`, t.TempDir(), map[string]archiveHighWater{archiveFamilyFB2: {End: 100}})
+	got, err := f.archiveLinks(context.Background(), server.URL, `href="([^"]+)"`, t.TempDir(),
+		map[string]archiveHighWater{archiveFamilyFB2: {End: 100}})
 	if err != nil {
 		t.Fatalf("links() error = %v", err)
 	}
@@ -370,7 +371,8 @@ func TestFetchFileResumeValidatesContentRange(t *testing.T) {
 		t.Fatalf("write temp: %v", err)
 	}
 	f := testFetcher(server)
-	_, size, err := f.fetchFile(context.Background(), server.URL, tmp, 3)
+	state := downloadState{URL: server.URL, Validator: `"v1"`, Total: 6}
+	size, err := f.fetchFile(context.Background(), server.URL, tmp, 3, &state)
 	if err != nil {
 		t.Fatalf("fetchFile() error = %v", err)
 	}
@@ -398,15 +400,16 @@ func TestFetchFileRestartsWhenResumeRangeIgnored(t *testing.T) {
 		t.Fatalf("write temp: %v", err)
 	}
 	f := testFetcher(server)
-	_, size, err := f.fetchFile(context.Background(), server.URL, tmp, 3)
+	state := downloadState{URL: server.URL, Validator: `"v1"`, Total: 6}
+	size, err := f.fetchFile(context.Background(), server.URL, tmp, 3, &state)
 	if err != nil {
 		t.Fatalf("fetchFile() error = %v", err)
 	}
 	if size != 6 {
 		t.Fatalf("size = %d, want 6", size)
 	}
-	if requests != 2 {
-		t.Fatalf("requests = %d, want resume plus restart", requests)
+	if requests != 1 {
+		t.Fatalf("requests = %d, want full response reused without another request", requests)
 	}
 	if got := readString(t, tmp); got != "abcdef" {
 		t.Fatalf("temp content = %q, want restarted file", got)
@@ -428,7 +431,8 @@ func TestFetchFileRejectsMismatchedContentRange(t *testing.T) {
 		t.Fatalf("write temp: %v", err)
 	}
 	f := testFetcher(server)
-	_, _, err := f.fetchFile(context.Background(), server.URL, tmp, 3)
+	state := downloadState{URL: server.URL, Validator: `"v1"`, Total: 6}
+	_, err := f.fetchFile(context.Background(), server.URL, tmp, 3, &state)
 	if err == nil || !strings.Contains(err.Error(), "Content-Range starting at byte 0") {
 		t.Fatalf("fetchFile() error = %v, want Content-Range mismatch", err)
 	}

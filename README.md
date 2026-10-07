@@ -251,12 +251,46 @@ Available `fetch` arguments:
 - `--tosql DIR`: destination directory for decompressed SQL dump files.
 - `--nosql`: skip SQL dump downloads.
 - `--noarchives`: skip daily archive ZIP downloads.
-- `--retry N`: download attempts per index or file. Default is `3`.
-- `--timeout SECONDS`: per-request timeout. Default is `20`.
-- `--chunksize MB`: download chunk size used while streaming files. Default is
-  `10`.
-- `--continue`: resume partial downloads when the server supports ranges.
+- `--retry N`: download attempts per index or file. Default is `3`. Transient
+  failures use exponential backoff with jitter, up to 30 seconds. Server
+  `Retry-After` delays are honored up to 5 minutes. Cancellation interrupts waits.
+- `--timeout SECONDS`: connection/response-header timeout and maximum time waiting
+  for the next body read. Default is `20`. A download that keeps receiving bytes
+  can take arbitrarily longer than this timeout.
+- `--chunksize SIZE`: streaming progress interval, logged with global `--verbose`.
+  Accepts positive whole numbers with `B`, `KiB`, `MiB`, or `GiB` units
+  (case-insensitive), such as `1MiB` or `512KiB`. Bare numbers retain the original
+  MiB interpretation: `--chunksize 1` equals `--chunksize 1MiB`. The default is
+  `10MiB`, unchanged in bytes. Zero, negative, fractional, and overflowing sizes
+  are rejected. This does not create separate HTTP requests or impose a deadline
+  on completing a chunk; smaller sizes produce more frequent progress messages.
+- `--continue`: preserve and resume partial downloads across retries and runs.
+  Partial bytes are saved as `.<filename>.part` beside the destination, with a
+  `.<filename>.part.meta.json` sidecar. Reuse the same output directory on subsequent
+  runs (especially `--tosql`, whose default is timestamped). GET range requests use
+  a strong ETag or Last-Modified validator with `If-Range` to avoid combining
+  different versions of a file. Without a usable validator, downloads restart.
+  Servers that ignore ranges return a full response, which replaces the partial
+  download safely. If a range request returns HTTP 400, fetch immediately falls
+  back to a plain GET in the same attempt and remembers to restart that download
+  without ranges on subsequent retries and runs. Partial files are removed after
+  successful publication.
 - `--sticky`: ignore HTTP redirects and keep using the original host.
+
+Fetch logs include the final response URL/status, downloaded bytes, attempt elapsed
+time, and explicit inactivity-timeout errors. For slow or intermittently stalled
+connections, for example:
+
+```sh
+metabib --verbose fetch --library flibusta --continue --retry 10 --timeout 300 \
+  --chunksize 512KiB \
+  --to upd_flibusta --tosql flibusta_sql
+```
+
+ZIP entries and gzip checksums are validated before downloaded output is atomically
+published. An interrupted or invalid download does not overwrite an existing output
+file. HTTP and HTTPS URLs, redirects, and profile proxies are supported; when
+comparing with a browser download, compare its final URL with the logged `final_url`.
 
 ### Roll Up Daily Archives
 
@@ -1442,10 +1476,25 @@ scripts/fb2_flibusta.sh /path/to/library full both myuser
 ```
 
 The `full` mode runs `fetch`, `rollup`, `cache`, `merge`, and the selected INPX
-exporter. It exits early when no new daily archives are downloaded or when rollup
-does not finalize a new archive. The `reindex` mode skips download and rollup and
-reruns `cache`, `merge`, and the selected INPX exporter from already available
-data.
+exporter. After a successful fetch, it always checks rollup, including updates
+downloaded before an earlier SQL fetch failed. It exits early when rollup does not
+finalize a new archive. The `reindex` mode skips download and rollup and reruns
+`cache`, `merge`, and the selected INPX exporter from already available data.
+
+To retry a failed fetch manually on the same day, rerun the same `full` command:
+
+```sh
+scripts/fb2_flibusta.sh /path/to/library full both
+```
+
+The script marks unfinished fetches with `.fetch-incomplete` in their SQL dump
+directory. It automatically reuses the latest marked directory from the current
+local calendar day, so `fetch --continue` can resume its partial downloads. The
+marker remains after failure and is removed after fetch succeeds. For example, a
+retry at 10:30 can reuse `flibusta_20261007_080033/`, while writing a new
+`flibusta_full_both_20261007_103000.log`. If no unfinished fetch exists for today,
+a new timestamped SQL directory is used. Failures in later indexing stages can be
+retried with `reindex`.
 
 The script writes generated INPX files with non-overlapping output prefixes:
 
@@ -1468,13 +1517,17 @@ generated. Stale symlinks are removed when an optional artifact is absent.
 After a successful download, `full` mode keeps the five newest SQL dump
 directories and also keeps the newest SQL dump directory that already contains
 `database.manifest.zst`, so reindexing can reuse the latest database cache even
-when it is older than the newest downloads.
+when it is older than the newest downloads. The current SQL directory is also
+preserved if a same-day retry reused an older directory. Update archive cleanup
+retains up to ten completed ZIP files and leaves partial downloads and their
+metadata untouched.
 
 Expected library layout under `<library-root>`:
 
 - `flibusta/`: finalized local FB2 archives and active `.merging` archive.
 - `upd_flibusta/`: downloaded daily update archives.
-- `flibusta_<timestamp>/`: downloaded SQL dumps.
+- `flibusta_<timestamp>/`: downloaded SQL dumps, partial downloads, and a
+  `.fetch-incomplete` marker while fetch is unfinished.
 - `inpx/`: generated INPX files and merged dataset JSONL artifacts.
 
 The script writes a console log next to itself named like

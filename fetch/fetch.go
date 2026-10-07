@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -18,7 +17,6 @@ import (
 
 	regexp2 "github.com/dlclark/regexp2/v2"
 	"go.uber.org/zap"
-	"golang.org/x/net/proxy"
 
 	"metabib/config"
 	"metabib/internal/fileutil"
@@ -64,14 +62,6 @@ type archiveHighWater struct {
 	Daily bool
 }
 
-type temporaryError struct {
-	err error
-}
-
-func (e temporaryError) Error() string { return e.err.Error() }
-
-func (e temporaryError) Unwrap() error { return e.err }
-
 func Run(ctx context.Context, opts Options) (Result, error) {
 	if opts.Retry < 1 {
 		return Result{}, fmt.Errorf("retry must be at least 1")
@@ -114,6 +104,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	defer client.CloseIdleConnections()
 	f := fetcher{opts: opts, client: client, userAgent: userAgent(opts)}
 
 	highWater := map[string]archiveHighWater{archiveFamilyFB2: {}, archiveFamilyUSR: {}}
@@ -150,7 +141,12 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		}
 	}
 
-	res := Result{LibraryName: libraryName, LastBookID: max(highWater[archiveFamilyFB2].End, highWater[archiveFamilyUSR].End), Archives: len(archiveLinks), SQLDir: sqlDir}
+	res := Result{
+		LibraryName: libraryName,
+		LastBookID:  max(highWater[archiveFamilyFB2].End, highWater[archiveFamilyUSR].End),
+		Archives:    len(archiveLinks),
+		SQLDir:      sqlDir,
+	}
 	if opts.Log != nil && !opts.NoArchives {
 		opts.Log.Info("Archive fetch completed", zap.Int("archives", res.Archives), zap.String("directory", archiveDir))
 	}
@@ -181,7 +177,9 @@ type fetcher struct {
 	userAgent string
 }
 
-func (f fetcher) archiveLinks(ctx context.Context, baseURL string, pattern string, dest string, highWater map[string]archiveHighWater) ([]string, error) {
+func (f fetcher) archiveLinks(
+	ctx context.Context, baseURL string, pattern string, dest string, highWater map[string]archiveHighWater,
+) ([]string, error) {
 	links, err := f.links(ctx, baseURL, pattern)
 	if err != nil {
 		return nil, err
@@ -241,14 +239,15 @@ func (f fetcher) links(ctx context.Context, baseURL string, pattern string) ([]s
 func (f fetcher) fetchString(ctx context.Context, sourceURL string) (string, error) {
 	var lastErr error
 	for attempt := 1; attempt <= f.opts.Retry; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		if f.opts.Log != nil {
 			f.opts.Log.Info("Downloading index", zap.String("url", sourceURL), zap.Int("attempt", attempt), zap.Int("attempts", f.opts.Retry))
 		}
 		resp, err := f.request(ctx, http.MethodGet, sourceURL, 0)
 		if err == nil {
-			timer := time.AfterFunc(f.opts.Timeout, func() { _ = resp.Body.Close() })
 			body, readErr := io.ReadAll(resp.Body)
-			timer.Stop()
 			closeErr := resp.Body.Close()
 			if readErr == nil && closeErr == nil {
 				return string(body), nil
@@ -264,7 +263,13 @@ func (f fetcher) fetchString(ctx context.Context, sourceURL string) (string, err
 			break
 		}
 		if f.opts.Log != nil {
-			f.opts.Log.Warn("Downloading index failed", zap.String("url", sourceURL), zap.Int("attempt", attempt), zap.Int("attempts", f.opts.Retry), zap.Error(err))
+			f.opts.Log.Warn("Downloading index failed", zap.String("url", sourceURL), zap.Int("attempt", attempt),
+				zap.Int("attempts", f.opts.Retry), zap.Error(err))
+		}
+		if attempt < f.opts.Retry {
+			if err := f.waitRetry(ctx, attempt, lastErr); err != nil {
+				return "", err
+			}
 		}
 	}
 	return "", fmt.Errorf("download index %q: %w", sourceURL, lastErr)
@@ -280,265 +285,6 @@ func (f fetcher) files(ctx context.Context, files []string, baseURL string, dest
 		}
 	}
 	return nil
-}
-
-func (f fetcher) file(ctx context.Context, file string, baseURL string, dest string) error {
-	var start int64
-	var tmp string
-	var lastErr error
-	success := false
-	defer func() {
-		if tmp != "" {
-			_ = os.Remove(tmp)
-		}
-	}()
-	for attempt := 1; attempt <= f.opts.Retry; attempt++ {
-		withRanges := false
-		if f.opts.Continue && start > 0 {
-			var err error
-			withRanges, err = f.acceptsRanges(ctx, joinURL(baseURL, file))
-			if err != nil && f.opts.Log != nil {
-				f.opts.Log.Warn("Range support check failed", zap.String("file", file), zap.Error(err))
-			}
-		}
-		if !withRanges {
-			start = 0
-		}
-		if f.opts.Log != nil {
-			f.opts.Log.Info("Downloading file", zap.String("file", file), zap.Int("attempt", attempt), zap.Int("attempts", f.opts.Retry), zap.Int64("offset", start))
-		}
-		var err error
-		tmp, start, err = f.fetchFile(ctx, joinURL(baseURL, file), tmp, start)
-		if err == nil {
-			success = true
-			break
-		}
-		lastErr = err
-		if !retryable(err) {
-			break
-		}
-		if f.opts.Log != nil {
-			f.opts.Log.Warn("Downloading file failed", zap.String("file", file), zap.Int("attempt", attempt), zap.Int("attempts", f.opts.Retry), zap.Error(err))
-		}
-	}
-	if !success {
-		return fmt.Errorf("download file %q: %w", file, lastErr)
-	}
-	if err := processFile(tmp, filepath.Join(dest, file)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (f fetcher) acceptsRanges(ctx context.Context, sourceURL string) (bool, error) {
-	resp, err := f.request(ctx, http.MethodHead, sourceURL, 1)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	timer := time.AfterFunc(f.opts.Timeout, func() { _ = resp.Body.Close() })
-	defer timer.Stop()
-	_, err = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode == http.StatusPartialContent, err
-}
-
-func (f fetcher) fetchFile(ctx context.Context, sourceURL string, tmpIn string, start int64) (string, int64, error) {
-	tmpOut := tmpIn
-	size := start
-	var out *os.File
-	var err error
-	if tmpIn != "" {
-		if start > 0 {
-			out, err = os.OpenFile(tmpIn, os.O_RDWR|os.O_APPEND, 0o666)
-		} else {
-			out, err = os.Create(tmpIn)
-		}
-	} else {
-		out, err = fileutil.CreateHiddenTemp("", "metabib-fetch")
-		if err == nil {
-			tmpOut = out.Name()
-		}
-	}
-	if err != nil {
-		return tmpOut, size, fmt.Errorf("prepare temporary file: %w", err)
-	}
-	defer func() { _ = out.Close() }()
-
-	resp, err := f.request(ctx, http.MethodGet, sourceURL, start)
-	if err != nil {
-		return tmpOut, size, err
-	}
-	if start > 0 {
-		restart, err := validateResumeResponse(resp, start)
-		if err != nil {
-			_ = resp.Body.Close()
-			return tmpOut, size, err
-		}
-		if restart {
-			_ = resp.Body.Close()
-			if err := out.Close(); err != nil {
-				return tmpOut, size, fmt.Errorf("close temporary file before restart: %w", err)
-			}
-			out, err = os.Create(tmpOut)
-			if err != nil {
-				return tmpOut, 0, fmt.Errorf("restart temporary file: %w", err)
-			}
-			size = 0
-			start = 0
-			resp, err = f.request(ctx, http.MethodGet, sourceURL, 0)
-			if err != nil {
-				return tmpOut, size, err
-			}
-		}
-	}
-	defer resp.Body.Close()
-	timer := time.AfterFunc(f.opts.Timeout, func() { _ = resp.Body.Close() })
-	defer timer.Stop()
-	for {
-		timer.Reset(f.opts.Timeout)
-		read, copyErr := io.CopyN(out, resp.Body, f.opts.ChunkSize)
-		size += read
-		if copyErr == nil {
-			if f.opts.Verbose && f.opts.Log != nil {
-				f.opts.Log.Info("Downloaded chunk", zap.String("url", sourceURL), zap.Int64("bytes", size))
-			}
-			continue
-		}
-		if errors.Is(copyErr, io.EOF) {
-			break
-		}
-		return tmpOut, size, temporaryError{err: fmt.Errorf("read response body: %w", copyErr)}
-	}
-	return tmpOut, size, nil
-}
-
-func validateResumeResponse(resp *http.Response, start int64) (bool, error) {
-	if resp.StatusCode == http.StatusOK {
-		return true, nil
-	}
-	if resp.StatusCode != http.StatusPartialContent {
-		return false, fmt.Errorf("resume request from byte %d returned status %s", start, resp.Status)
-	}
-	rangeStart, err := parseContentRangeStart(resp.Header.Get("Content-Range"))
-	if err != nil {
-		return false, err
-	}
-	if rangeStart != start {
-		return false, fmt.Errorf("resume request from byte %d returned Content-Range starting at byte %d", start, rangeStart)
-	}
-	return false, nil
-}
-
-func parseContentRangeStart(value string) (int64, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return 0, errors.New("resume response missing Content-Range")
-	}
-	if !strings.HasPrefix(strings.ToLower(value), "bytes ") {
-		return 0, fmt.Errorf("unsupported Content-Range %q", value)
-	}
-	rangePart := strings.TrimSpace(value[len("bytes "):])
-	dash := strings.IndexByte(rangePart, '-')
-	if dash <= 0 {
-		return 0, fmt.Errorf("invalid Content-Range %q", value)
-	}
-	start, err := strconv.ParseInt(rangePart[:dash], 10, 64)
-	if err != nil || start < 0 {
-		return 0, fmt.Errorf("invalid Content-Range %q", value)
-	}
-	return start, nil
-}
-
-func (f fetcher) request(ctx context.Context, method string, sourceURL string, start int64) (*http.Response, error) {
-	reqCtx, cancel := context.WithCancel(ctx)
-	req, err := http.NewRequestWithContext(reqCtx, method, sourceURL, nil)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	req.Header.Set("Referer", sourceURL)
-	req.Header.Set("User-Agent", f.userAgent)
-	req.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	req.Header.Set("Pragma", "no-cache")
-	req.Header.Set("Expires", "0")
-	if f.opts.Continue && start > 0 {
-		req.Header.Set("Range", "bytes="+strconv.FormatInt(start, 10)+"-")
-	}
-	timer := time.AfterFunc(f.opts.Timeout, cancel)
-	resp, err := f.client.Do(req)
-	timer.Stop()
-	if err != nil {
-		cancel()
-		return nil, temporaryError{err: err}
-	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		_ = resp.Body.Close()
-		cancel()
-		// return nil, fmt.Errorf("status %s", resp.Status)
-		// Make all errors re-tryable - here "502 bad gateway" is often
-		// transient
-		return nil, temporaryError{err: fmt.Errorf("status %s", resp.Status)}
-	}
-	resp.Body = cancelReadCloser{ReadCloser: resp.Body, cancel: cancel}
-	return resp, nil
-}
-
-type cancelReadCloser struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (c cancelReadCloser) Close() error {
-	err := c.ReadCloser.Close()
-	c.cancel()
-	return err
-}
-
-func newHTTPClient(opts Options) (*http.Client, error) {
-	transport := &http.Transport{DisableKeepAlives: true}
-	if opts.Library.Proxy != "" {
-		proxyURL, err := url.Parse(opts.Library.Proxy)
-		if err != nil {
-			return nil, fmt.Errorf("parse proxy URL: %w", err)
-		}
-		switch proxyURL.Scheme {
-		case "socks5":
-			var auth *proxy.Auth
-			if proxyURL.User != nil && proxyURL.User.Username() != "" {
-				password, _ := proxyURL.User.Password()
-				auth = &proxy.Auth{User: proxyURL.User.Username(), Password: password}
-			}
-			dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
-			if err != nil {
-				return nil, fmt.Errorf("create SOCKS5 proxy dialer: %w", err)
-			}
-			contextDialer, ok := dialer.(proxy.ContextDialer)
-			if !ok {
-				return nil, errors.New("SOCKS5 dialer does not support context cancellation")
-			}
-			transport.DialContext = contextDialer.DialContext
-		case "http", "https":
-			transport.Proxy = http.ProxyURL(proxyURL)
-		default:
-			return nil, fmt.Errorf("unsupported proxy scheme %q", proxyURL.Scheme)
-		}
-	}
-	client := &http.Client{Transport: transport}
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
-			return errors.New("stopped after 5 redirects")
-		}
-		if opts.Sticky {
-			return http.ErrUseLastResponse
-		}
-		return nil
-	}
-	return client, nil
-}
-
-func retryable(err error) bool {
-	var temp temporaryError
-	return errors.As(err, &temp)
 }
 
 func getLastBookID(path string) (int, error) {
@@ -721,7 +467,7 @@ func processFile(tmp string, file string) error {
 	switch ext := strings.ToLower(filepath.Ext(file)); ext {
 	case ".zip":
 		if err := checkZip(tmp); err != nil {
-			return err
+			return invalidDownloadError{err: err}
 		}
 		return copyFileContents(tmp, file)
 	case ".gz":
@@ -730,6 +476,14 @@ func processFile(tmp string, file string) error {
 		return fmt.Errorf("unknown downloaded file extension %q", ext)
 	}
 }
+
+type invalidDownloadError struct {
+	err error
+}
+
+func (e invalidDownloadError) Error() string { return e.err.Error() }
+
+func (e invalidDownloadError) Unwrap() error { return e.err }
 
 func checkZip(file string) error {
 	r, err := zip.OpenReader(file)
@@ -742,8 +496,9 @@ func checkZip(file string) error {
 		if err != nil {
 			return fmt.Errorf("check zip entry %q: %w", f.Name, err)
 		}
-		if err := rc.Close(); err != nil {
-			return fmt.Errorf("close zip entry %q: %w", f.Name, err)
+		_, readErr := io.Copy(io.Discard, rc)
+		if err := errors.Join(readErr, rc.Close()); err != nil {
+			return fmt.Errorf("check zip entry %q: %w", f.Name, err)
 		}
 	}
 	return nil
@@ -755,15 +510,7 @@ func copyFileContents(src string, dst string) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("create %q: %w", dst, err)
-	}
-	defer out.Close()
-	if _, err = io.Copy(out, in); err != nil {
-		return fmt.Errorf("copy %q to %q: %w", src, dst, err)
-	}
-	return out.Sync()
+	return publishDownload(in, dst)
 }
 
 func ungzipFile(src string, dst string) error {
@@ -774,16 +521,36 @@ func ungzipFile(src string, dst string) error {
 	defer in.Close()
 	r, err := gzip.NewReader(in)
 	if err != nil {
-		return fmt.Errorf("read gzip %q: %w", src, err)
+		return invalidDownloadError{err: fmt.Errorf("read gzip %q: %w", src, err)}
 	}
 	defer r.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return fmt.Errorf("create %q: %w", dst, err)
+	err = publishDownload(r, dst)
+	if errors.Is(err, gzip.ErrChecksum) || errors.Is(err, gzip.ErrHeader) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return invalidDownloadError{err: err}
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, r); err != nil {
-		return fmt.Errorf("decompress %q to %q: %w", src, dst, err)
+	return err
+}
+
+func publishDownload(in io.Reader, dst string) error {
+	out, err := fileutil.CreateHiddenTemp(filepath.Dir(dst), filepath.Base(dst))
+	if err != nil {
+		return fmt.Errorf("create output for %q: %w", dst, err)
+	}
+	defer func() {
+		_ = out.Close()
+		_ = os.Remove(out.Name())
+	}()
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("write downloaded file %q: %w", dst, err)
+	}
+	if err := out.Sync(); err != nil {
+		return fmt.Errorf("sync downloaded file %q: %w", dst, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close downloaded file %q: %w", dst, err)
+	}
+	if err := fileutil.ReplaceOutputFile(out.Name(), dst); err != nil {
+		return fmt.Errorf("publish downloaded file %q: %w", dst, err)
 	}
 	return nil
 }

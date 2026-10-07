@@ -160,12 +160,15 @@ func fetchCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "library", Aliases: []string{"l"}, Value: "flibusta", Usage: "fetch profile `NAME` from configuration"},
 			&cli.IntFlag{Name: "retry", Value: 3, Usage: "number of download attempts"},
-			&cli.IntFlag{Name: "timeout", Value: 20, Usage: "per-request timeout in seconds"},
-			&cli.IntFlag{Name: "chunksize", Value: 10, Usage: "download chunk size in megabytes"},
+			&cli.IntFlag{Name: "timeout", Value: 20, Usage: "connection/header and download inactivity timeout in seconds"},
+			&cli.StringFlag{
+				Name: "chunksize", Value: "10MiB",
+				Usage: "streaming progress interval `SIZE` (B, KiB, MiB, GiB; bare integers are MiB)",
+			},
 			&cli.BoolFlag{Name: "nosql", Usage: "do not download SQL dumps"},
 			&cli.BoolFlag{Name: "noarchives", Usage: "do not download daily archive ZIP files"},
 			&cli.BoolFlag{Name: "sticky", Usage: "ignore HTTP redirects and keep using the original host"},
-			&cli.BoolFlag{Name: "continue", Usage: "continue partially downloaded files when the server supports ranges"},
+			&cli.BoolFlag{Name: "continue", Usage: "preserve and resume partial downloads across retries and runs when safe"},
 			&cli.StringFlag{Name: "to", Aliases: []string{"o"}, Usage: "destination directory for daily archive ZIP files"},
 			&cli.StringFlag{Name: "tosql", Usage: "destination directory for SQL dump files"},
 		},
@@ -348,6 +351,10 @@ func mergeCommand() *cli.Command {
 }
 
 func runFetch(ctx context.Context, cmd *cli.Command) error {
+	chunkSize, err := parseChunkSize(cmd.String("chunksize"))
+	if err != nil {
+		return err
+	}
 	cfg := state.EnvFromContext(ctx).Cfg
 	env := state.EnvFromContext(ctx)
 	if cmd.Bool("nosql") && cmd.Bool("noarchives") {
@@ -368,7 +375,7 @@ func runFetch(ctx context.Context, cmd *cli.Command) error {
 		DownloadSQL:   !cmd.Bool("nosql"),
 		Retry:         cmd.Int("retry"),
 		Timeout:       time.Duration(cmd.Int("timeout")) * time.Second,
-		ChunkSize:     int64(cmd.Int("chunksize")) * 1024 * 1024,
+		ChunkSize:     chunkSize,
 		Continue:      cmd.Bool("continue"),
 		Sticky:        cmd.Bool("sticky"),
 		Verbose:       env.Verbose,

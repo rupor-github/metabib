@@ -51,11 +51,11 @@ name="flibusta"
 # Number of attempts for downloading each index page and file.
 retries=10
 
-# Per-request timeout in seconds. File downloads must receive each chunk within
-# this interval.
+# Connection/response-header and download inactivity timeout in seconds.
 timeout=300
 
-# Download chunk size in decimal megabytes.
+# Streaming progress interval: B, KiB, MiB, or GiB; bare integers are MiB.
+# This is not a chunk completion deadline. For example, chunksize="512KiB".
 chunksize=1
 
 # Set to true, or run with METABIB_VERBOSE=1, to enable detailed progress logs.
@@ -65,7 +65,7 @@ verbose=false
 # Main body
 # -----------------------------------------------------------------------------
 
-# Timestamp used to keep downloaded SQL dumps and logs unique per run.
+# Timestamp used for new SQL dump directories and a separate log per attempt.
 cdate="$(date +%Y%m%d_%H%M%S)"
 
 # Directory containing this script and the metabib executable.
@@ -83,7 +83,8 @@ odir="${root}/inpx"
 # Subdirectory under the INPX directory for stable FLibrary additional-artifact links.
 flib_additional_link_dir="flib-etc"
 
-# Per-run SQL dump directory populated by `metabib fetch`.
+# Default SQL dump directory for a new fetch. Failed same-day fetches reuse their
+# original directory, including partial downloads and metadata.
 wdir="${adir}_${cdate}"
 
 # Daily update archive directory populated by `metabib fetch`.
@@ -145,8 +146,21 @@ latest_dump_dir() {
 	printf '%s\n' "${dirs[@]}" | sort -r | head -n 1
 }
 
+retry_dump_dir() {
+	local dir candidate=""
+
+	for dir in "${adir}_${cdate%%_*}_"[0-9][0-9][0-9][0-9][0-9][0-9]; do
+		[[ -d "${dir}" && -f "${dir}/.fetch-incomplete" ]] || continue
+		candidate="${dir}"
+	done
+
+	# Globs are sorted, so candidate is the latest matching failed run.
+	printf '%s\n' "${candidate:-${adir}_${cdate}}"
+}
+
 # Keep recent SQL dumps for rollback while preserving the newest imported dump
-# with a database manifest, so reindex can reuse its cache after new downloads.
+# with a database manifest and the current dump directory, which may be an older
+# same-day retry. Reindex can reuse its cache after new downloads.
 cleanup_old_sql_dump_dirs() {
 	local dir i manifest_dir=""
 	local -a dirs delete
@@ -164,7 +178,7 @@ cleanup_old_sql_dump_dirs() {
 
 	for i in "${!dirs[@]}"; do
 		dir="${dirs[${i}]}"
-		if (( i < 5 )) || [[ -n "${manifest_dir}" && "${dir}" == "${manifest_dir}" ]]; then
+		if (( i < 5 )) || [[ "${dir}" == "${wdir}" ]] || [[ -n "${manifest_dir}" && "${dir}" == "${manifest_dir}" ]]; then
 			continue
 		fi
 		delete+=("${dir}")
@@ -320,7 +334,12 @@ if [[ "${mode}" == "reindex" ]]; then
 	exit 0
 fi
 
+wdir="$(retry_dump_dir)"
+mkdir -p "${wdir}" || exit 1
+touch "${wdir}/.fetch-incomplete" || exit 1
+
 log_phase "Downloading ${name}"
+echo "SQL download directory: ${wdir}"
 
 "${metabib}" "${metabib_args[@]}" fetch \
 	--library "${name}" \
@@ -332,18 +351,24 @@ log_phase "Downloading ${name}"
 	--tosql "${wdir}"
 
 res=$?
-if (( res == 1 )); then
-	echo "metabib fetch error!"
-	exit 1
-elif (( res == 0 )); then
-	echo "No archive updates..."
-	exit 0
-fi
+case "${res}" in
+	0|2)
+		# Both codes mean fetch completed successfully. Rollup must also inspect
+		# archives downloaded before a failed SQL fetch, even when this fetch
+		# reports no newly downloaded archives.
+		rm -f "${wdir}/.fetch-incomplete" || exit 1
+		;;
+	*)
+		echo "metabib fetch error - ${res}"
+		echo "Run this script again today to retry using ${wdir}"
+		exit 1
+		;;
+esac
 
 log_phase "Cleaning old SQL dump directories"
 
 # Clean old database directories - we have at least one good download.
-# Keep the newest dumps and the newest dump that already has a database manifest.
+# Keep the current dumps, newest dumps, and newest dump with a database manifest.
 cleanup_old_sql_dump_dirs
 
 log_phase "Rolling up ${name} archives"
@@ -360,8 +385,9 @@ fi
 
 log_phase "Cleaning old update archives"
 
-# Clean updates leaving last ones so fetch does not download unnecessary updates next time.
-find "${udir}" -type f | sort -nr | tail -n +11 | xargs -r -I {} rm -r {}
+# Clean completed ZIPs only, leaving the last ones so fetch does not download
+# unnecessary updates next time. Partial downloads and metadata are preserved.
+find "${udir}" -type f -name '*.zip' | sort -nr | tail -n +11 | xargs -r -I {} rm -r {}
 
 if (( res == 0 )); then
 	echo "Nothing to do..."
