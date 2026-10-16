@@ -12,6 +12,8 @@
 ## metabib
 [![GitHub Release](https://img.shields.io/github/release/rupor-github/metabib.svg)](https://github.com/rupor-github/metabib/releases)
 
+For bug reports, feature requests, and pull requests, see [Contributing](CONTRIBUTING.md).
+
 `metabib` extracts metadata from Flibusta/Librusec SQL dumps and book archives
 into JSON Lines. It first builds cache manifests for database dumps and/or
 archives, then merges those cached artifacts into final JSONL.
