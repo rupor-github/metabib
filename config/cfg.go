@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -72,6 +73,7 @@ type ProcessingConfig struct {
 	DatabaseReplacementQualityCheck bool                          `yaml:"database_replacement_quality_check"`
 	FB2BodyFingerprints             bool                          `yaml:"fb2_body_fingerprints"`
 	ArchiveContentMD5               bool                          `yaml:"archive_content_md5"`
+	MergeConsistency                MergeConsistencyConfig        `yaml:"merge_consistency"`
 	NestedArchiveInspection         NestedArchiveInspectionConfig `yaml:"nested_archive_inspection"`
 	Manifests                       ManifestConfig                `yaml:"manifests"`
 	DatabaseWorkers                 int                           `yaml:"database_workers" validate:"min=0"`
@@ -94,6 +96,25 @@ func (c ProcessingConfig) FB2MaxTextBytes() int64 {
 type NestedArchiveInspectionConfig struct {
 	Enabled              bool  `yaml:"enabled"`
 	MaxCompressedSizeMiB int64 `yaml:"max_compressed_size_mib" validate:"min=0"`
+}
+
+type MergeConsistencyConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	Checks  []string `yaml:"checks" validate:"unique,dive,oneof=content_md5 document_type content_size title authors language"`
+}
+
+// ActiveChecks returns enabled checks in descending evidence strength, independent
+// of configuration order. An explicit empty list disables all comparisons.
+func (c MergeConsistencyConfig) ActiveChecks() []string {
+	checks := make([]string, 0, len(c.Checks))
+	if c.Enabled {
+		for _, check := range []string{"content_md5", "document_type", "content_size", "title", "authors", "language"} {
+			if slices.Contains(c.Checks, check) {
+				checks = append(checks, check)
+			}
+		}
+	}
+	return checks
 }
 
 func (c NestedArchiveInspectionConfig) MaxCompressedBytes() int64 {

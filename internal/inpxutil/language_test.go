@@ -24,6 +24,28 @@ func TestLanguageResolverCanonicalizesSelectedLanguage(t *testing.T) {
 	}
 }
 
+func TestConsistencyLanguage(t *testing.T) {
+	t.Parallel()
+	core, logs := observer.New(zap.DebugLevel)
+	resolver := testLanguageResolver(t, zap.New(core), true)
+	for _, tt := range []struct{ value, want string }{
+		{"en-US", "en"}, {"RU", "ru"}, {"sp", "es"}, {"russian", "ru"},
+		{"Человеческое, слишком человеческое", "ru"},
+		{"", ""}, {"und", ""}, {"und-US", ""}, {"und-Cyrl", ""}, {"x-private", ""}, {"un", ""}, {"mul", ""}, {"zxx", ""},
+		{"ru,en", ""}, {"ru/en", ""}, {"ru;en", ""}, {"russ", ""}, {"not a real language", ""},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			got, ok := resolver.ConsistencyLanguage(tt.value, "")
+			if got != tt.want || ok != (tt.want != "") {
+				t.Fatalf("ConsistencyLanguage(%q) = %q, %v; want %q", tt.value, got, ok, tt.want)
+			}
+		})
+	}
+	if logs.Len() != 0 {
+		t.Fatal("consistency resolution emitted per-record logs")
+	}
+}
+
 func TestLanguageResolverDerivesKnownNoisyValues(t *testing.T) {
 	t.Parallel()
 

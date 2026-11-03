@@ -100,6 +100,15 @@ type DatasetProcessing struct {
 	DatabaseReplacementQualityCheck bool                        `json:"database_replacement_quality_check"`
 	ArchiveContentChecksum          DatasetChecksumOption       `json:"archive_content_checksum"`
 	FB2BodyFingerprints             *DatasetFB2BodyFingerprints `json:"fb2_body_fingerprints,omitempty"`
+	MergeConsistency                *DatasetMergeConsistency    `json:"merge_consistency,omitempty"`
+}
+
+const MergeConsistencyPolicyV1 = "metabib.merge_consistency/1"
+
+type DatasetMergeConsistency struct {
+	Enabled bool     `json:"enabled"`
+	Policy  string   `json:"policy"`
+	Checks  []string `json:"checks"`
 }
 
 type DatasetChecksumOption struct {

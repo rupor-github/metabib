@@ -48,6 +48,11 @@ func DatasetFor(
 				Algorithm: checksumAlgorithm(processing.ArchiveContentMD5),
 			},
 			FB2BodyFingerprints: datasetFB2BodyFingerprints(archives),
+			MergeConsistency: &model.DatasetMergeConsistency{
+				Enabled: processing.MergeConsistency.Enabled,
+				Policy:  model.MergeConsistencyPolicyV1,
+				Checks:  processing.MergeConsistency.ActiveChecks(),
+			},
 		},
 	}
 	if database.ManifestPath != "" || database.DumpDate != "" || database.DumpDir != "" {

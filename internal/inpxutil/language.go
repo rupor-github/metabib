@@ -149,6 +149,35 @@ func (r *LanguageResolver) SelectLanguage(rec model.DatasetRecord, view DatasetR
 	return value
 }
 
+// ConsistencyLanguage resolves one language without selection, logging, or fuzzy
+// display-name prefixes. Unknown and multilingual values are inconclusive.
+func (r *LanguageResolver) ConsistencyLanguage(value string, sourceLanguage string) (string, bool) {
+	if r == nil {
+		return "", false
+	}
+	if _, alias := r.aliases[languageKey(value)]; !alias {
+		if strings.ContainsAny(value, ",;/+&") {
+			return "", false
+		}
+		if tag, err := language.Parse(strings.TrimSpace(value)); err == nil {
+			base, _, _ := tag.Raw()
+			if base.String() == "und" {
+				return "", false
+			}
+		}
+	}
+	resolved := r.resolve(languageCandidate{Field: "language", Value: value, ContextLanguage: sourceLanguage}, languageRecordContext{})
+	if !resolved.Resolved || resolved.Ignored || strings.Contains(resolved.Method, "prefix") {
+		return "", false
+	}
+	switch resolved.Value {
+	case "", "und", "mul", "zxx":
+		return "", false
+	default:
+		return resolved.Value, true
+	}
+}
+
 func (r *LanguageResolver) SelectLanguageWithReport(rec model.DatasetRecord, view DatasetRecordView) (string, LanguageSelection) {
 	selection := LanguageSelection{}
 	if r == nil || !r.enabled {

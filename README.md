@@ -717,6 +717,77 @@ numeric row, then tries a unique database filename alias when no numeric databas
 row exists. The selected database observation records the match method, and
 conflicting evidence never changes the physical record locator.
 
+After matching, merge performs diagnostic consistency checks using cached evidence
+only. It does not reject or change the selected database match, remove records,
+or alter INPX preferences. All applicable checks run in the following order:
+
+| Check | Issue code | Evidence |
+| --- | --- | --- |
+| `content_md5` | `content_md5_mismatch` | Calculated archive-entry MD5 versus database-reported MD5 |
+| `document_type` | `document_type_mismatch` | Physical/inferred document extension versus database file type |
+| `content_size` | `content_size_mismatch` | Uncompressed entry size versus database-reported size |
+| `title` | `title_mismatch` | Normalized database and FB2/FBD bibliographic titles |
+| `authors` | `authors_mismatch` | Usable author lists with no matching name |
+| `language` | `language_mismatch` | Resolved base languages of the book |
+
+```yaml
+processing:
+  merge_consistency:
+    enabled: true
+    checks: [content_md5, document_type, content_size, title, authors, language]
+```
+
+All six checks are enabled by default. Set `enabled: false`, provide an empty
+`checks: []`, or select a subset. Unknown or duplicate check names are rejected;
+configuration order does not change the evidence-strength order above. The dataset
+header records the enabled checks and comparison-policy version under
+`processing.merge_consistency`.
+
+Issues use stage `consistency`, retain both original and normalized values,
+observation references, and database matching evidence. Artifact disagreements
+have `high` confidence; bibliographic disagreements have `low` confidence. These
+describe confidence in a disagreement, not proof that the sources represent
+different works. Equal MD5 does not suppress metadata disagreements. Existing
+`match` issues remain separate.
+
+Missing, invalid, placeholder, or quality-filtered evidence is inconclusive.
+MD5/size comparisons are skipped for nested containers where inner-document byte
+scope is unknown; known inner document types and FBD metadata are still compared.
+MD5 values must be valid 32-digit hexadecimal strings, excluding all-zero/all-F
+placeholders. Size comparisons require positive values. Types ignore case and
+leading dots, with `htm`/`html`, `djv`/`djvu`, and `jpeg`/`jpg` aliases.
+Titles use Unicode normalization/case folding, whitespace collapse, and typographic
+quote/dash normalization without removing meaningful letters or numbers. Author
+order and source-specific IDs are ignored; incomplete names or initials make a
+disjoint-list verdict inconclusive. Language checks reuse configured INPX language
+aliases, ignore patterns, and display-name locales, independently of INPX language
+selection being enabled; unknown/multilingual values and fuzzy display-name prefixes
+are skipped. Comparisons use book `title_info`, not original-work or document-info
+metadata.
+
+Run merge again to add issues to existing datasets; caches need rebuilding only
+if evidence such as archive content MD5 was not collected. Use `inspect --issues`
+or `trace --issues` on the resulting dataset to investigate.
+
+Merge logs one `Archive manifest merged` summary per archive and a final
+`Archive manifests merged` summary with totals. The `db_id_filename_conflict_issues`
+field counts disagreements between numeric book IDs inferred from entry names and
+database filename aliases. It describes database matching conflicts, not content
+or metadata consistency failures; dataset matching issue codes remain unchanged.
+
+When consistency checks are active, both summaries include:
+
+- `consistency_issue_records`: records with at least one consistency issue.
+- `consistency_issues`: total consistency issues; one record can have several.
+- `consistency_issues_by_code`: counts using the same issue codes as
+  `inspect --issues` and `trace --issues` (stage `consistency` only).
+
+Per-archive counts are local to that archive, not cumulative. The
+`consistency_checks` field lists active checks; when it is empty, consistency
+counters are omitted rather than suggesting a clean check result. These counts
+exclude issues from other stages, so the overall issue count from `inspect` can
+be larger. Merge does not warn for every individual consistency issue.
+
 Examples:
 
 - `42.fb2` first tries database book `42` through `numeric_entry_stem`; if present,
@@ -1462,7 +1533,9 @@ metabib --config metabib.yaml cache \
   --archives /path/to/flibusta
 ```
 
-### Flibusta Script
+### Scripts
+
+#### Flibusta Script
 
 `scripts/fb2_flibusta.sh` is an example automation script for the common Flibusta
 FB2 workflow. It is not required by `metabib`; use it as a starting point for
@@ -1564,3 +1637,60 @@ logging:
 With that configuration, the script log includes phase separators, `metabib`
 debug messages, and MariaDB process/client output. The script leaves application
 file logging to `metabib` logging configuration.
+
+#### Download Missing Flibusta Books
+
+`scripts/download_flibusta_fb2.py` selects FB2 records from a database manifest
+and downloads them sequentially from `/b/<book_id>/fb2`. It requires Python 3,
+`zstd`, and `curl`. Run these examples from the repository root:
+
+```sh
+python3 scripts/download_flibusta_fb2.py \
+  /path/to/database.manifest.zst \
+  --first 893518 --last 893588 \
+  --output build/books
+```
+
+Both `--first` and `--last` are required; the range is inclusive and must satisfy
+`1 <= first <= last`. Add `--dry-run` to list selected records without downloading.
+The default download base URL is `https://flibusta.site`; change it with
+`--base-url https://your-mirror.example`. Downloads pause for two seconds between
+books by default; use `--delay` to change this interval.
+
+Without `--output`, the script creates and prints a retained temporary directory
+named `/tmp/missing-books-<random>`. ZIP-wrapped responses are unpacked, and FB2
+XML is validated before publishing each `<book_id>.fb2` file. To resume after a
+failure, rerun with the same `--output` directory; valid existing books are
+skipped. Selected manifest records are saved as `selected-records.jsonl`, and
+failed downloads are reported with a nonzero exit status.
+
+#### Replace an FB2 Archive Range
+
+`scripts/repack_fb2.go` replaces an entire inclusive book ID range in an existing
+ZIP with downloaded files. It preserves numeric book order and copies compressed
+data for entries outside the range unchanged, without decompressing or
+recompressing them. Only replacement books are compressed. Run it with Go:
+
+```sh
+go run -mod=mod scripts/repack_fb2.go \
+  --input /path/to/flibusta/fb2-0000892299-0000894172.zip \
+  --books build/books \
+  --first 893518 --last 893588 \
+  --output /path/to/flibusta/fb2-0000892299-0000894172.repaired.zip \
+  --dry-run
+```
+
+Remove `--dry-run` after checking the reported counts. All original entries in
+the range are removed, including IDs absent from the replacement directory;
+downloaded IDs missing from the original archive are inserted in numeric order.
+The input must contain flat `<book_id>.fb2` entries in strictly increasing book
+ID order, and all replacement FB2 files must be within the requested range.
+
+The original ZIP is never modified. The output must not already exist and is
+published only after the new ZIP is complete. Allow enough free disk space for
+another full archive: unchanged compressed data still has to be copied, and ZIP
+headers and offsets are rebuilt. Verify the result before replacing the original:
+
+```sh
+unzip -t /path/to/flibusta/fb2-0000892299-0000894172.repaired.zip
+```

@@ -53,6 +53,9 @@ func TestLoadConfigurationDefaults(t *testing.T) {
 	if !cfg.Processing.DatabaseReplacementQualityCheck {
 		t.Fatal("Processing.DatabaseReplacementQualityCheck = false, want true")
 	}
+	if !cfg.Processing.MergeConsistency.Enabled || len(cfg.Processing.MergeConsistency.ActiveChecks()) != 6 {
+		t.Fatalf("MergeConsistency defaults = %#v", cfg.Processing.MergeConsistency)
+	}
 	if cfg.Processing.Manifests.ArchiveDir != "" {
 		t.Fatalf("ArchiveDir = %q, want empty", cfg.Processing.Manifests.ArchiveDir)
 	}

@@ -130,7 +130,22 @@
         "fb2_replacement_quality_check": {"type": "boolean"},
         "database_replacement_quality_check": {"type": "boolean"},
         "archive_content_checksum": {"$ref": "#/$defs/checksum_option"},
-        "fb2_body_fingerprints": {"$ref": "#/$defs/fb2_body_fingerprints"}
+        "fb2_body_fingerprints": {"$ref": "#/$defs/fb2_body_fingerprints"},
+        "merge_consistency": {"$ref": "#/$defs/merge_consistency"}
+      },
+      "additionalProperties": false
+    },
+    "merge_consistency": {
+      "type": "object",
+      "required": ["enabled", "policy", "checks"],
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "policy": {"type": "string"},
+        "checks": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"enum": ["content_md5", "document_type", "content_size", "title", "authors", "language"]}
+        }
       },
       "additionalProperties": false
     },

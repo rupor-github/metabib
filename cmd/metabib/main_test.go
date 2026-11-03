@@ -492,9 +492,8 @@ func TestMergeArchiveManifestsRewritesArchivePath(t *testing.T) {
 		[]library.ArchiveManifestDecision{{ArchivePath: currentPath, ManifestPath: manifestPath}},
 		databaseIndex{},
 		map[string]string{currentPath: "archive-0001"},
-		false,
-		true,
-		true,
+		model.DatasetProcessing{ParseFB2: true, FB2ReplacementQualityCheck: true, DatabaseReplacementQualityCheck: true},
+		nil,
 		out,
 		nil,
 	); err != nil {
@@ -555,9 +554,8 @@ func TestMergeArchiveManifestsRecordsFilenameMatch(t *testing.T) {
 			byFile: map[string]int64{"7.fb2": 42},
 		},
 		map[string]string{archivePath: "archive-0001"},
-		false,
-		true,
-		true,
+		model.DatasetProcessing{ParseFB2: true, FB2ReplacementQualityCheck: true, DatabaseReplacementQualityCheck: true},
+		nil,
 		out,
 		nil,
 	); err != nil {
@@ -632,9 +630,8 @@ func TestMergeArchiveManifestsRecordsJoinedFilenameAliasOwner(t *testing.T) {
 			byFile: map[string]int64{strings.ToLower(entry): 176497},
 		},
 		map[string]string{archivePath: "archive-0001"},
-		false,
-		true,
-		true,
+		model.DatasetProcessing{ParseFB2: true, FB2ReplacementQualityCheck: true, DatabaseReplacementQualityCheck: true},
+		nil,
 		out,
 		nil,
 	); err != nil {
@@ -681,6 +678,7 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 		},
 	})
 	numericSource := model.DatabaseSource{Present: true, Book: &model.DBBook{BookID: 7}}
+	core, logs := observer.New(zap.InfoLevel)
 	out, err := jsonl.CreateCompressed(filepath.Join(dir, "out"), jsonl.CompressionNone)
 	if err != nil {
 		t.Fatalf("CreateCompressed() error = %v", err)
@@ -693,11 +691,10 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 			byFile: map[string]int64{"7.fb2": 42},
 		},
 		map[string]string{archivePath: "archive-0001"},
-		false,
-		true,
-		true,
-		out,
+		model.DatasetProcessing{ParseFB2: true, FB2ReplacementQualityCheck: true, DatabaseReplacementQualityCheck: true},
 		nil,
+		out,
+		zap.New(core),
 	); err != nil {
 		t.Fatalf("mergeArchiveManifests() error = %v", err)
 	}
@@ -715,6 +712,12 @@ func TestMergeArchiveManifestsRecordsConflictingFilenameEvidence(t *testing.T) {
 	} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("merged output = %s, missing %s", data, want)
+		}
+	}
+	for _, message := range []string{"Archive manifest merged", "Archive manifests merged"} {
+		entries := logs.FilterMessage(message).All()
+		if len(entries) != 1 || entries[0].ContextMap()["db_id_filename_conflict_issues"] != int64(1) {
+			t.Fatalf("%s did not report the ID/filename conflict: %#v", message, entries)
 		}
 	}
 }
@@ -765,9 +768,8 @@ func TestMergeArchiveManifestsPrefersConflictingFilenameAliasOverNumericStem(t *
 			},
 		},
 		map[string]string{archivePath: "archive-0001"},
-		false,
-		true,
-		true,
+		model.DatasetProcessing{ParseFB2: true, FB2ReplacementQualityCheck: true, DatabaseReplacementQualityCheck: true},
+		nil,
 		out,
 		nil,
 	); err != nil {

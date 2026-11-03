@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,6 +85,7 @@ func TestDatasetForArchiveOutput(t *testing.T) {
 			FB2ReplacementQualityCheck:      true,
 			DatabaseReplacementQualityCheck: true,
 			ArchiveContentMD5:               true,
+			MergeConsistency:                config.MergeConsistencyConfig{Enabled: true, Checks: []string{"title", "content_md5"}},
 		},
 		"1.2.3",
 	)
@@ -126,6 +128,11 @@ func TestDatasetForArchiveOutput(t *testing.T) {
 	if !dataset.Processing.ArchiveContentChecksum.Enabled ||
 		dataset.Processing.ArchiveContentChecksum.Algorithm != "md5" {
 		t.Fatalf("ArchiveContentChecksum = %#v", dataset.Processing.ArchiveContentChecksum)
+	}
+	policy := dataset.Processing.MergeConsistency
+	if policy == nil || !policy.Enabled || policy.Policy != model.MergeConsistencyPolicyV1 ||
+		!slices.Equal(policy.Checks, []string{"content_md5", "title"}) {
+		t.Fatalf("MergeConsistency = %#v", policy)
 	}
 }
 

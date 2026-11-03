@@ -221,6 +221,9 @@ func TestDatasetSchemaCoversDatasetModelFields(t *testing.T) {
 		`"archive_content_checksum"`,
 		`"fb2_replacement_quality_check"`,
 		`"database_replacement_quality_check"`,
+		`"merge_consistency"`,
+		`"policy"`,
+		`"checks"`,
 	} {
 		assertSchemaContains(t, schema, want)
 	}
@@ -397,6 +400,10 @@ func fullDataset() model.Dataset {
 			ParseFB2:               true,
 			FB2Coverage:            "description",
 			ArchiveContentChecksum: model.DatasetChecksumOption{Enabled: true, Algorithm: "md5"},
+			MergeConsistency: &model.DatasetMergeConsistency{
+				Enabled: true, Policy: model.MergeConsistencyPolicyV1,
+				Checks: []string{"content_md5", "document_type", "content_size", "title", "authors", "language"},
+			},
 			FB2BodyFingerprints: &model.DatasetFB2BodyFingerprints{
 				Coverage:        "complete",
 				Model:           model.FB2BodyFingerprintModel,

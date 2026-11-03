@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/signal"
 	"runtime"
@@ -685,6 +686,10 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
+	consistency, err := newMergeConsistencyChecker(cfg.Processing.MergeConsistency, cfg.INPX.Language)
+	if err != nil {
+		return err
+	}
 	err = writeOutput(ctx, outputPrefix, compressionValue, env.Log, func(out *jsonl.Writer) error {
 		if err := out.WriteValue(dataset); err != nil {
 			return err
@@ -701,9 +706,8 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 				archivePlan,
 				dbIndex,
 				datasetArchiveSources(dataset),
-				!dataset.Processing.ParseFB2,
-				dataset.Processing.FB2ReplacementQualityCheck,
-				dataset.Processing.DatabaseReplacementQualityCheck,
+				dataset.Processing,
+				consistency,
 				out,
 				env.Log,
 			)
@@ -1308,15 +1312,18 @@ func mergeArchiveManifests(
 	archivePlan []library.ArchiveManifestDecision,
 	dbIndex databaseIndex,
 	archiveSources map[string]string,
-	fb2NotCollected bool,
-	fb2ReplacementQualityCheck bool,
-	databaseReplacementQualityCheck bool,
+	processing model.DatasetProcessing,
+	consistency *mergeConsistencyChecker,
 	out *jsonl.Writer,
 	log *zap.Logger,
 ) (int64, error) {
 	start := time.Now()
 	var records int64
 	var totalStats mergeMatchStats
+	var consistencyChecks []string
+	if consistency != nil {
+		consistencyChecks = consistency.checks
+	}
 	for _, decision := range archivePlan {
 		if err := ctx.Err(); err != nil {
 			return records, err
@@ -1328,6 +1335,7 @@ func mergeArchiveManifests(
 				rec.ID.Archive.Path = decision.ArchivePath
 			}
 			inferredBookID := rec.ID.BookID
+			physicalID := rec.ID
 			var databaseMatch *model.Match
 			var matchIssues []model.Issue
 			rec.Source.Database = model.DatabaseSource{}
@@ -1340,7 +1348,7 @@ func mergeArchiveManifests(
 						archiveStats.FilenameMatches++
 						if issue := catalogIDConflictIssue(inferredBookID, aliasBookID, candidate.input); issue != nil {
 							matchIssues = append(matchIssues, *issue)
-							archiveStats.ConflictingMatchEvidence++
+							archiveStats.DBIDFilenameConflictIssues++
 						}
 						if aliasSource.Book != nil {
 							rec.ID.BookID = aliasSource.Book.BookID
@@ -1352,7 +1360,7 @@ func mergeArchiveManifests(
 						matchedBookID := databaseSourceBookID(source, rec.ID.BookID)
 						if issue := conflictingFilenameIssue(rec, dbIndex, matchedBookID); issue != nil {
 							matchIssues = append(matchIssues, *issue)
-							archiveStats.ConflictingMatchEvidence++
+							archiveStats.DBIDFilenameConflictIssues++
 						}
 					}
 				}
@@ -1370,7 +1378,7 @@ func mergeArchiveManifests(
 						matchedBookID := databaseSourceBookID(source, 0)
 						if issue := catalogIDConflictIssue(inferredBookID, matchedBookID, candidate.input); issue != nil {
 							matchIssues = append(matchIssues, *issue)
-							archiveStats.ConflictingMatchEvidence++
+							archiveStats.DBIDFilenameConflictIssues++
 						}
 						if source.Book != nil {
 							rec.ID.BookID = source.Book.BookID
@@ -1392,16 +1400,21 @@ func mergeArchiveManifests(
 				archiveSources,
 				databaseMatch,
 				inferredBookID,
-				fb2NotCollected,
-				fb2ReplacementQualityCheck,
-				databaseReplacementQualityCheck,
+				!processing.ParseFB2,
+				processing.FB2ReplacementQualityCheck,
+				processing.DatabaseReplacementQualityCheck,
 				log,
 			)
 			if err != nil {
 				return err
 			}
 			converted.Issues = append(converted.Issues, matchIssues...)
-			return out.WriteValue(converted)
+			consistency.Apply(physicalID, &converted)
+			if err := out.WriteValue(converted); err != nil {
+				return err
+			}
+			archiveStats.CountConsistencyIssues(converted.Issues)
+			return nil
 		})
 		if err != nil {
 			return records, err
@@ -1409,41 +1422,30 @@ func mergeArchiveManifests(
 		records += count
 		totalStats.Add(archiveStats)
 		if log != nil {
-			log.Info(
-				"Archive manifest DB matches",
-				zap.String("archive", decision.ArchivePath),
-				zap.Int64("records", archiveStats.Records),
-				zap.Int64("db_present", archiveStats.DBPresent),
-				zap.Int64("db_absent", archiveStats.DBAbsent),
-				zap.Int64("numeric_matches", archiveStats.NumericMatches),
-				zap.Int64("filename_matches", archiveStats.FilenameMatches),
-				zap.Int64("conflicting_match_evidence", archiveStats.ConflictingMatchEvidence),
-			)
+			fields := append([]zap.Field{zap.String("archive", decision.ArchivePath)}, archiveStats.LogFields(consistencyChecks)...)
+			log.Info("Archive manifest merged", fields...)
 		}
 	}
 	if log != nil {
-		log.Info(
-			"Archive manifests merged",
+		fields := append([]zap.Field{
 			zap.Int("manifests", len(archivePlan)),
-			zap.Int64("records", records),
-			zap.Int64("db_present", totalStats.DBPresent),
-			zap.Int64("db_absent", totalStats.DBAbsent),
-			zap.Int64("numeric_matches", totalStats.NumericMatches),
-			zap.Int64("filename_matches", totalStats.FilenameMatches),
-			zap.Int64("conflicting_match_evidence", totalStats.ConflictingMatchEvidence),
 			zap.Duration("elapsed", time.Since(start)),
-		)
+		}, totalStats.LogFields(consistencyChecks)...)
+		log.Info("Archive manifests merged", fields...)
 	}
 	return records, nil
 }
 
 type mergeMatchStats struct {
-	Records                  int64
-	DBPresent                int64
-	DBAbsent                 int64
-	NumericMatches           int64
-	FilenameMatches          int64
-	ConflictingMatchEvidence int64
+	Records                    int64
+	DBPresent                  int64
+	DBAbsent                   int64
+	NumericMatches             int64
+	FilenameMatches            int64
+	DBIDFilenameConflictIssues int64
+	ConsistencyIssueRecords    int64
+	ConsistencyIssues          int64
+	ConsistencyIssuesByCode    map[string]int64
 }
 
 func (s *mergeMatchStats) Add(other mergeMatchStats) {
@@ -1452,7 +1454,56 @@ func (s *mergeMatchStats) Add(other mergeMatchStats) {
 	s.DBAbsent += other.DBAbsent
 	s.NumericMatches += other.NumericMatches
 	s.FilenameMatches += other.FilenameMatches
-	s.ConflictingMatchEvidence += other.ConflictingMatchEvidence
+	s.DBIDFilenameConflictIssues += other.DBIDFilenameConflictIssues
+	s.ConsistencyIssueRecords += other.ConsistencyIssueRecords
+	s.ConsistencyIssues += other.ConsistencyIssues
+	if len(other.ConsistencyIssuesByCode) > 0 && s.ConsistencyIssuesByCode == nil {
+		s.ConsistencyIssuesByCode = make(map[string]int64)
+	}
+	for code, count := range other.ConsistencyIssuesByCode {
+		s.ConsistencyIssuesByCode[code] += count
+	}
+}
+
+func (s *mergeMatchStats) CountConsistencyIssues(issues []model.Issue) {
+	before := s.ConsistencyIssues
+	for _, issue := range issues {
+		if issue.Stage != "consistency" {
+			continue
+		}
+		if s.ConsistencyIssuesByCode == nil {
+			s.ConsistencyIssuesByCode = make(map[string]int64)
+		}
+		s.ConsistencyIssues++
+		s.ConsistencyIssuesByCode[issue.Code]++
+	}
+	if s.ConsistencyIssues > before {
+		s.ConsistencyIssueRecords++
+	}
+}
+
+func (s mergeMatchStats) LogFields(consistencyChecks []string) []zap.Field {
+	fields := []zap.Field{
+		zap.Int64("records", s.Records),
+		zap.Int64("db_present", s.DBPresent),
+		zap.Int64("db_absent", s.DBAbsent),
+		zap.Int64("numeric_matches", s.NumericMatches),
+		zap.Int64("filename_matches", s.FilenameMatches),
+		zap.Int64("db_id_filename_conflict_issues", s.DBIDFilenameConflictIssues),
+		zap.Strings("consistency_checks", consistencyChecks),
+	}
+	if len(consistencyChecks) > 0 {
+		counts := maps.Clone(s.ConsistencyIssuesByCode)
+		if counts == nil {
+			counts = make(map[string]int64)
+		}
+		fields = append(fields,
+			zap.Int64("consistency_issue_records", s.ConsistencyIssueRecords),
+			zap.Int64("consistency_issues", s.ConsistencyIssues),
+			zap.Any("consistency_issues_by_code", counts),
+		)
+	}
+	return fields
 }
 
 func failIfReportsNotReady(reports []library.ManifestReport, allowStale bool) error {
