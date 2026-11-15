@@ -706,6 +706,7 @@ func runMerge(ctx context.Context, cmd *cli.Command) error {
 				archivePlan,
 				dbIndex,
 				datasetArchiveSources(dataset),
+				dataset.Database != nil,
 				dataset.Processing,
 				consistency,
 				out,
@@ -1287,7 +1288,7 @@ func writeDatabaseManifestRecords(
 ) (int64, error) {
 	start := time.Now()
 	records, err := library.ForEachManifestRecord(ctx, manifestPath, func(rec model.Record) error {
-		converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, databaseReplacementQualityCheck, log)
+		converted, err := datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, databaseReplacementQualityCheck, log)
 		if err != nil {
 			return err
 		}
@@ -1312,6 +1313,7 @@ func mergeArchiveManifests(
 	archivePlan []library.ArchiveManifestDecision,
 	dbIndex databaseIndex,
 	archiveSources map[string]string,
+	databaseDeclared bool,
 	processing model.DatasetProcessing,
 	consistency *mergeConsistencyChecker,
 	out *jsonl.Writer,
@@ -1395,9 +1397,10 @@ func mergeArchiveManifests(
 			} else {
 				archiveStats.DBAbsent++
 			}
-			converted, err := datasetRecordFromRecordWithMatch(
+			converted, err := datasetRecordFromRecord(
 				rec,
 				archiveSources,
+				databaseDeclared,
 				databaseMatch,
 				inferredBookID,
 				!processing.ParseFB2,

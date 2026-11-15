@@ -70,7 +70,7 @@ func TestDatasetRecordFromDatabaseRecordPopulatesClaims(t *testing.T) {
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, nil)
+	converted, err := datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, true, nil)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestDatasetRecordSelectsDatabaseAnnotationByTitleAndHighestNID(t *testing.T
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, nil)
+	converted, err := datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, true, nil)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -177,9 +177,9 @@ func TestDatasetRecordSelectsHighestNIDDatabaseAnnotationWithoutTitleMatch(t *te
 		}},
 	}
 
-	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, true, log)
+	converted, err := datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, true, log)
 	if err != nil {
-		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
 	annotations := converted.Claims.Bibliographic.Annotation
 	if len(annotations) != 1 || annotations[0].Value != "Second annotation." {
@@ -274,7 +274,9 @@ func TestDatasetRecordFromArchiveRecordPopulatesFB2Claims(t *testing.T) {
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -379,7 +381,9 @@ func TestDatasetRecordFromArchiveRecordSuppressesReplacementOnlyFB2Claims(t *tes
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -423,9 +427,10 @@ func TestDatasetRecordFromArchiveRecordKeepsReplacementOnlyFB2ClaimsWhenDisabled
 		}},
 	}
 
-	converted, err := datasetRecordFromRecordWithMatch(
+	converted, err := datasetRecordFromRecord(
 		rec,
 		map[string]string{"/archives/books.zip": "archive-0001"},
+		true,
 		nil,
 		rec.ID.BookID,
 		false,
@@ -434,7 +439,7 @@ func TestDatasetRecordFromArchiveRecordKeepsReplacementOnlyFB2ClaimsWhenDisabled
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
 	if got := converted.Claims.Bibliographic.Title[0].Value; got != corrupt {
 		t.Fatalf("title claim = %#v, want corrupted value preserved", got)
@@ -466,7 +471,7 @@ func TestDatasetRecordFromDatabaseRecordSuppressesReplacementOnlyClaims(t *testi
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, nil)
+	converted, err := datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, true, nil)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -515,9 +520,9 @@ func TestDatasetRecordFromDatabaseRecordKeepsReplacementOnlyClaimsWhenDisabled(t
 		}},
 	}
 
-	converted, err := datasetRecordFromRecordWithMatch(rec, nil, nil, rec.ID.BookID, false, true, false, nil)
+	converted, err := datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, false, nil)
 	if err != nil {
-		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
 	if got := converted.Claims.Bibliographic.Title[0].Value; got != corrupt {
 		t.Fatalf("title claim = %#v, want corrupted value preserved", got)
@@ -558,7 +563,9 @@ func TestDatasetRecordFromArchiveRecordPopulatesFBDSidecarClaims(t *testing.T) {
 		}}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/usr.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/usr.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -600,7 +607,9 @@ func TestDatasetRecordFromArchiveRecordUsesLogicalArtifactName(t *testing.T) {
 		},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/usr.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/usr.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -629,7 +638,9 @@ func TestDatasetRecordFromArchiveRecordUsesPhysicalNameForOpaqueContainer(t *tes
 		},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/usr.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/usr.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -651,7 +662,9 @@ func TestDatasetRecordFromArchiveRecordRecordsAbsentDatabase(t *testing.T) {
 		},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -696,9 +709,10 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 	}
 	match := &model.Match{Method: "numeric_entry_stem", Input: "42", Candidate: &bookID, BookID: &bookID}
 
-	converted, err := datasetRecordFromRecordWithMatch(
+	converted, err := datasetRecordFromRecord(
 		rec,
 		map[string]string{"/archives/books.zip": "archive-0001"},
+		true,
 		match,
 		bookID,
 		false,
@@ -707,7 +721,7 @@ func TestDatasetRecordFromArchiveRecordRecordsDatabaseMatch(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
 	if len(converted.Observations) < 2 || converted.Observations[1].Match == nil {
 		t.Fatalf("observations = %#v, want database match", converted.Observations)
@@ -732,7 +746,9 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2Error(t *testing.T) {
 		Errors: []string{"invalid FB2"},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -757,9 +773,10 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
 		},
 	}
 
-	converted, err := datasetRecordFromRecordWithMatch(
+	converted, err := datasetRecordFromRecord(
 		rec,
 		map[string]string{"/archives/books.zip": "archive-0001"},
+		true,
 		nil,
 		0,
 		true,
@@ -768,7 +785,7 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2NotCollected(t *testing.T) {
 		nil,
 	)
 	if err != nil {
-		t.Fatalf("datasetRecordFromRecordWithMatch() error = %v", err)
+		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
 	if len(converted.Observations) != 3 || converted.Observations[2].ID != "fb2" ||
 		converted.Observations[2].Status != "not_collected" {
@@ -787,7 +804,9 @@ func TestDatasetRecordFromArchiveRecordRecordsFB2Absent(t *testing.T) {
 		},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -812,7 +831,9 @@ func TestDatasetRecordFromArchiveRecordRecordsTitleInfoCoverage(t *testing.T) {
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}
@@ -845,7 +866,9 @@ func TestDatasetRecordFromArchiveRecordPreservesStructuredIssues(t *testing.T) {
 		}},
 	}
 
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"/archives/books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"/archives/books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatalf("datasetRecordFromRecord() error = %v", err)
 	}

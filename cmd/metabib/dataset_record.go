@@ -12,13 +12,10 @@ import (
 	"metabib/model"
 )
 
-func datasetRecordFromRecord(rec model.Record, archiveSources map[string]string) (model.DatasetRecord, error) {
-	return datasetRecordFromRecordWithMatch(rec, archiveSources, nil, rec.ID.BookID, false, true, true, nil)
-}
-
-func datasetRecordFromRecordWithMatch(
+func datasetRecordFromRecord(
 	rec model.Record,
 	archiveSources map[string]string,
+	databaseDeclared bool,
 	databaseMatch *model.Match,
 	inferredBookID int64,
 	fb2NotCollected bool,
@@ -82,7 +79,9 @@ func datasetRecordFromRecordWithMatch(
 			artifact.Fingerprints = rec.Source.FB2.Fingerprints
 		}
 		out.Artifacts = []model.Artifact{artifact}
-		appendDatabaseObservation(&out, rec, databaseMatch, databaseReplacementQualityCheck, log)
+		if databaseDeclared {
+			appendDatabaseObservation(&out, rec, databaseMatch, databaseReplacementQualityCheck, log)
+		}
 		appendInferredCatalogIdentity(&out, inferredBookID)
 		appendFB2Observation(&out, rec, source, &index, fb2NotCollected)
 		appendSidecarObservations(&out, rec, source, &index)

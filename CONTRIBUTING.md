@@ -16,7 +16,7 @@ An issue should explain the problem and intended outcome without requiring maint
 Include the metabib version, operating system and architecture, exact command, relevant configuration, and available error messages. Describe the expected behavior and actual result, and provide steps to reproduce the problem.
 
 - Use global `--verbose` to capture detailed progress when useful. For example, rerun the failing command as `metabib --verbose cache ...`, keeping its original arguments.
-- To capture the effective configuration, run `metabib --config metabib.yaml dumpconfig effective.yaml` with the configuration file used by the failing command. See [Configuration](README.md#configuration).
+- To capture the effective configuration, run `metabib --config metabib.yaml dumpconfig effective.yaml` with the configuration file used by the failing command. See [Configuration](docs/guide.md#configuration).
 - For database issues, include the MariaDB version, whether you use a managed instance or an existing service, and the relevant dump names and dates.
 - For archive, FB2, dataset, or INPX issues, provide a minimal sample when possible, identifying the affected archive entries or book IDs and the input/output formats involved.
 
@@ -24,7 +24,7 @@ Include the metabib version, operating system and architecture, exact command, r
 
 ## Suggesting features
 
-Describe the use case, the problem with the current behavior, and the result you would like to see. Include examples and alternatives where useful. Check the [project scope](README.md#metabib) first; opening an issue does not guarantee that a feature will be implemented.
+Describe the use case, the problem with the current behavior, and the result you would like to see. Include examples and alternatives where useful. Check the [project scope](README.md#project-scope) first; opening an issue does not guarantee that a feature will be implemented.
 
 ## Development and testing
 
@@ -47,7 +47,7 @@ The default build requires `pre-commit` and installs hooks. Tasks generate the i
 
 After version metadata exists, `go test -mod=mod ./...` also compiles and tests all packages. Keep `-mod=mod` when running Go commands directly, since a stale local `vendor/` directory may exist. Plain `go tool task test` only visits packages containing `*_test.go`; the `PACKAGES='./...'` override above includes every package.
 
-MariaDB integration tests are opt-in and require the [MariaDB binaries](README.md#mariadb-binaries). They start private temporary instances rather than using an existing database:
+MariaDB integration tests are opt-in and require the [MariaDB binaries](docs/guide.md#make-the-binaries-available). They start private temporary instances rather than using an existing database:
 
 ```sh
 METABIB_TEST_MARIADB=1 go test -mod=mod ./db

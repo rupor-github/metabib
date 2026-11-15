@@ -161,7 +161,9 @@ func TestMergeConsistencyChecks(t *testing.T) {
 			t.Parallel()
 			rec := consistencyTestRecord()
 			tt.change(&rec)
-			converted, err := datasetRecordFromRecord(rec, map[string]string{"books.zip": "archive-0001"})
+			converted, err := datasetRecordFromRecord(
+				rec, map[string]string{"books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,7 +215,9 @@ func TestMergeConsistencySidecar(t *testing.T) {
 		Present: true, Kind: "fbd", Format: "fbd", Entry: "893518.fbd", Description: rec.Source.FB2.Description,
 	}}
 	rec.Source.FB2 = model.FB2Source{}
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +241,9 @@ func TestMergeConsistencyPreservesExistingIssues(t *testing.T) {
 	rec := consistencyTestDisagreement()
 	existing := model.Issue{Observation: "db", Stage: "match", Code: "catalog_id_conflict", Message: "existing match evidence"}
 	rec.Issues = []model.Issue{existing}
-	converted, err := datasetRecordFromRecord(rec, map[string]string{"books.zip": "archive-0001"})
+	converted, err := datasetRecordFromRecord(
+		rec, map[string]string{"books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +257,7 @@ func TestMergeConsistencyPreservesExistingIssues(t *testing.T) {
 	}
 	// Database-only exports have nothing to compare.
 	rec.ID.Archive = nil
-	converted, err = datasetRecordFromRecord(rec, nil)
+	converted, err = datasetRecordFromRecord(rec, nil, true, nil, rec.ID.BookID, false, true, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,7 +281,9 @@ func TestMergeConsistencyConfiguration(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := consistencyTestDisagreement()
-			converted, err := datasetRecordFromRecord(rec, map[string]string{"books.zip": "archive-0001"})
+			converted, err := datasetRecordFromRecord(
+				rec, map[string]string{"books.zip": "archive-0001"}, true, nil, rec.ID.BookID, false, true, true, nil,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -325,6 +333,7 @@ func TestMergeConsistencyRegression893518(t *testing.T) {
 			[]library.ArchiveManifestDecision{{ArchivePath: archivePath, ManifestPath: manifestPath}},
 			databaseIndex{byID: map[int64]model.DatabaseSource{893518: database}},
 			map[string]string{archivePath: "archive-0001"},
+			true,
 			model.DatasetProcessing{ParseFB2: true, FB2ReplacementQualityCheck: true, DatabaseReplacementQualityCheck: true},
 			checker, out, zap.New(core),
 		)
@@ -455,7 +464,7 @@ func TestMergeConsistencyArchiveLogCounts(t *testing.T) {
 				t.Fatal(err)
 			}
 			core, logs := observer.New(zap.InfoLevel)
-			count, mergeErr := mergeArchiveManifests(context.Background(), plan, index, sources,
+			count, mergeErr := mergeArchiveManifests(context.Background(), plan, index, sources, true,
 				model.DatasetProcessing{ParseFB2: true}, checker, out, zap.New(core))
 			closeErr := out.Close()
 			if mergeErr != nil || closeErr != nil || count != 4 {
