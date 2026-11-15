@@ -31,6 +31,22 @@ Archive manifest version `2` adds `scope`, with values `fb2` or `usr`.
 Legacy `metabib.archive_manifest/1` headers are still accepted as FB2 manifests,
 so compatible existing caches do not need an expensive rebuild.
 
+## Identity names
+
+Database-derived identities retain historical `flibusta.*` scheme names for
+both Flibusta and Librusec:
+
+| Scheme | Meaning in the source library |
+| --- | --- |
+| `flibusta.book` | Catalog book ID; may also be inferred from a numeric archive entry name. |
+| `flibusta.person` | Database contributor ID. |
+| `flibusta.uid` | Contributor's user-account ID, when available. |
+| `flibusta.sequence` | Database series ID. |
+
+The prefix does not mean Librusec IDs are mapped to Flibusta IDs. Values belong
+to the source library; the same number in two libraries is not necessarily the
+same book, person, account, or series.
+
 ## Read and validate
 
 Merged output is one artifact: `.jsonl`, `.jsonl.zst`, `.jsonl.gz`, or

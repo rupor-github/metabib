@@ -235,7 +235,7 @@ actual ambiguous author maps for all, FB2-only, and USR-only scopes.
 | `--archives` | Archive source IDs, ordinals, entry counts, names, and path hints. |
 | `--validate` | Full-stream validation plus records read and issue totals by stage/code. |
 | `--issues` | Records containing issues, with locators and structured payloads. |
-| `--book-id ID` | First matching locator, Flibusta catalog identity, or database observation. |
+| `--book-id ID` | First record matching that library's book ID in a locator, catalog identity, or source observation. |
 | `--archive ID --index N` | Record at zero-based entry index `N` in that source. |
 | `--file NAME` | First artifact/occurrence filename match, case-insensitively. |
 | `--decode-fp` | Decode `fp` on a returned record into root-first sections with depth, leaf flag, and MD5 key. |
@@ -252,6 +252,11 @@ metabib inspect --input library --file 12345.fb2 --json
 Use only one mode at a time; `--validate` cannot be combined with lookup,
 archive-list, or issue modes. `--json` works with every mode.
 Record lookups include the optional raw `fp` payload in text and JSON output.
+
+Catalog identities currently use the historical scheme name `flibusta.book` for
+both Flibusta and Librusec datasets. The numeric value is the input library's
+book ID, not a cross-library mapping. See [identity names](schemas.md#identity-names)
+for the corresponding contributor and series schemes.
 
 A lookup with no match exits with status `4`; other failures use `1`.
 Archive source IDs are local to one dataset. Use names, path hints, and checksums

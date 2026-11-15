@@ -28,16 +28,19 @@ without repeating extraction.
 | FLibrary layout with multiple series links | `flib-inpx` | `fb2` | Supported |
 | Archive-backed filtering and splitting | `inpx` | `all` | Rejected |
 
+All three generators support datasets from either Flibusta or Librusec.
+`mhl-inpx` and `flib-inpx` name the target readers, not the source libraries.
+
 Every generator requires `--input` (`-i`) and `--output` (`-o`):
 
 ```sh
-metabib mhl-inpx --input library --output flibusta
+metabib mhl-inpx --input library --output my-library
 ```
 
 Input can be an exact dataset path or a prefix resolving to exactly one of
 `.jsonl`, `.jsonl.zst`, `.jsonl.gz`, or `.jsonl.zip`.
 The output prefix gets a date suffix: for example,
-`flibusta_20260603.inpx` when that is the dataset's dump date.
+`my-library_20260603.inpx` when that is the dataset's dump date.
 
 ### Content selection
 
@@ -53,7 +56,7 @@ Database-only records do use `file_type`.
 ## MyHomeLib: mhl-inpx
 
 ```sh
-metabib mhl-inpx --input library --output flibusta-mhl
+metabib mhl-inpx --input library --output my-library-mhl
 ```
 
 | Option | Values | Default |
@@ -76,7 +79,7 @@ contains archives, `online.inp` is not created and archive-less records are igno
 ## FLibrary: flib-inpx
 
 ```sh
-metabib flib-inpx --input library --output flibusta-flib --additional
+metabib flib-inpx --input library --output my-library-flib --additional
 ```
 
 | Option | Values / purpose | Default |
@@ -283,7 +286,9 @@ members.
 | `.ArchiveID`, `.ArchiveName` | Dataset source ID and archive filename. |
 
 Each `.Authors` item has `.FirstName`, `.MiddleName`, `.LastName`, `.NickName`,
-and `.ID`; the ID is the `flibusta.person` identity when present.
+and `.ID`. The ID is the source library's database contributor ID when present,
+stored under the historical `flibusta.person` identity scheme for both libraries.
+See [identity names](schemas.md#identity-names).
 
 Runs log loaded, written, filtered, skipped, and per-split counts so unintended
 lossy filtering is visible without debug logging.
@@ -298,7 +303,7 @@ lossy filtering is visible without debug logging.
 | `prefix-compilations.zip` | FB2 fingerprints exist and compilations are detected; contains compact `compilations.json`. |
 
 The prefix includes the date, for example
-`flibusta_20260603-annotations.zip`. Database-only `flib-inpx` input has no
+`my-library_20260603-annotations.zip`. Database-only `flib-inpx` input has no
 archive-derived additional data, so `--additional` is ignored with a warning.
 
 ### Annotation source
@@ -331,8 +336,9 @@ The database cache detects different contributor IDs with the same cleansed,
 non-truncated `LastName,FirstName,MiddleName`. The selected `--content` chooses
 FB2-only, USR-only, or all-book collision groups.
 
-A unique nickname is the preferred suffix; otherwise the Flibusta person ID is
-used. `author_disambiguation_field` chooses where it appears:
+A unique nickname is the preferred suffix; otherwise the source library's
+database contributor ID is used. This applies to both Flibusta and Librusec.
+`author_disambiguation_field` chooses where it appears:
 
 | Setting | Example |
 | --- | --- |

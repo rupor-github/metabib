@@ -28,6 +28,8 @@ mark, and decompresses `*.sql.gz` dumps into `--tosql`.
 ### Choose a profile
 
 Profiles live under `fetch.libraries` in the YAML configuration.
+They select download sources, not the dataset's
+[library name](guide.md#library-name).
 
 | Profile | Daily archive content | SQL dumps |
 | --- | --- | --- |

@@ -83,6 +83,7 @@ metabib merge --database-dumps /path/to/sql-dumps --archives /path/to/books --ou
 
 Current Flibusta and Librusec dump schemas are detected automatically.
 You can also select only `--database-dumps` for a database-only dataset.
+For Librusec labeling, see [Library name](#library-name).
 
 ## How the workflow fits together
 
@@ -250,6 +251,22 @@ metabib --config metabib.yaml dumpconfig effective.yaml
 Omit the destination to print YAML to stdout. `dumpconfig --default` always uses
 the embedded defaults, not a loaded config file. Runtime values such as paths,
 worker counts, and Windows ports are expanded when the configuration is generated.
+
+### Library name
+
+`database.name` also supplies the library label stored in datasets and used by
+INPX metadata. Its default is `flibusta`. To label a Librusec collection, set it
+before caching and merging:
+
+```yaml
+version: 1
+database:
+  name: librusec
+```
+
+Pass that configuration to `cache` and `merge` with `--config`.
+This setting also names the managed SQL database. Selecting `fetch --library librusec`
+or autodetecting a Librusec SQL schema does **not** change it.
 
 ## Keep a library up to date
 
